@@ -27,6 +27,8 @@ packages = [
 ]
 
 # clib & ext
+import nanobind
+
 libraries = []
 ext_modules = []
 
