@@ -1,6 +1,7 @@
 -r requirements.txt
 # dev
 black
+yapf
 flake8
 mypy
 isort

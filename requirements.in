@@ -2,3 +2,4 @@ pip-tools
 setuptools
 wheel
 nanobind
+conan
