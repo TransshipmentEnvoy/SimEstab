@@ -1,0 +1,20 @@
+[build-system]
+requires = [
+    "setuptools",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sim_estab"
+dynamic = [
+    "version",
+    "description",
+    "readme",
+    "requires-python",
+    "dependencies",
+    "optional-dependencies",
+    "authors",
+    "license",
+    "urls",
+]

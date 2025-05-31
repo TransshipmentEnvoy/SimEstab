@@ -1,0 +1,9 @@
+-c requirements.txt
+# dev
+black
+flake8
+mypy
+isort
+rope
+pytest
+pysocks
