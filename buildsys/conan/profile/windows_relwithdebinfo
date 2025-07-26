@@ -2,10 +2,10 @@
 os=Windows
 arch=x86_64
 compiler=msvc
-compiler.cppstd=23
+compiler.cppstd=26
 compiler.runtime=dynamic
 compiler.version=193
 build_type=Release
 # build current package with RelWithDebInfo
-&:compiler.cppstd=23
+&:compiler.cppstd=26
 &:build_type=RelWithDebInfo

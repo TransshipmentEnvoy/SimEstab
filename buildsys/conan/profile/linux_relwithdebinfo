@@ -2,8 +2,8 @@
 os=Linux
 arch=x86_64
 compiler=gcc
-compiler.cppstd=gnu23
-compiler.version=13
+compiler.cppstd=gnu26
+compiler.version=14
 compiler.libcxx=libstdc++11
 build_type=Release
 # build current package with RelWithDebInfo
