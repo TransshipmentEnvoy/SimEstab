@@ -1,6 +1,6 @@
 import os
 from conan import ConanFile
-from conan.tools.cmake import CMakeToolchain, CMake, cmake_layout
+from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake, cmake_layout
 from conan.tools import files
 
 import os
@@ -11,7 +11,6 @@ class RepoRecipe(ConanFile):
     version = "0.0.1"
 
     settings = "os", "compiler", "build_type", "arch"
-    generators = "CMakeToolchain", "CMakeDeps"
 
     def build_requirements(self):
         pass
@@ -31,16 +30,17 @@ class RepoRecipe(ConanFile):
 
         # config
         self.requires("nlohmann_json/3.11.3")
-        self.requires("yaml-cpp/0.8.0")
-        self.requires("tomlplusplus/3.4.0")
+        #self.requires("yaml-cpp/0.8.0")
+        #self.requires("tomlplusplus/3.4.0")
 
         # math
         self.requires("eigen/3.4.0")
 
         # unittest
+        self.requires("boost-ext-ut/2.1.0")
 
         # graphics
-        self.requires("sdl3/3.2.14")
+        self.requires("sdl/3.2.14")
 
         # ecs
         self.requires("flecs/4.0.4")
@@ -49,10 +49,15 @@ class RepoRecipe(ConanFile):
         self.options["boost"].shared = True
 
     def layout(self):
-        cmake_layout(self, src_folder=f"src/{self.name}")
+        cmake_layout(self) # TODO: override the layout for package dir
 
     def generate(self):
-        pass
+        tc = CMakeToolchain(self)
+        tc.user_presets_path = False
+        tc.generate()
+
+        deps = CMakeDeps(self)
+        deps.generate()
 
     def build(self):
         cmake = CMake(self)
