@@ -212,3 +212,10 @@ cython_debug/
 
 # vscode
 .vscode
+
+# tmp
+/tmp
+
+# conan
+/buildsys/conan_home/*
+!/buildsys/conan_home/profiles
