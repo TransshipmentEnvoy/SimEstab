@@ -13,14 +13,6 @@ import logging
 
 _logger_cmake_ext = logging.getLogger("setup_ext.CmakeExt")
 
-# Convert distutils Windows platform specifiers to CMake -A arguments
-PLAT_TO_CMAKE = {
-    "win32": "Win32",
-    "win-amd64": "x64",
-    "win-arm32": "ARM",
-    "win-arm64": "ARM64",
-}
-
 
 def _log_subprocess_output(pipe):
     for line in iter(pipe.readline, b""):  # b'\n'-separated lines
@@ -31,6 +23,7 @@ def _log_subprocess_output(pipe):
 # The name must be the _single_ output extension from the CMake build.
 # If you need multiple extensions, see scikit-build.
 class CMakeExtension(Extension):
+
     def __init__(
         self,
         name: str,
@@ -95,9 +88,10 @@ def build_extension(
     _logger_cmake_ext.info("> working dir: %s", build_temp)
 
     _logger_cmake_ext.info("> configure: %s", shlex.join(["cmake", ext.sourcedir] + cmake_arg))
-    configure_process = subprocess.Popen(
-        ["cmake", ext.sourcedir] + cmake_arg, cwd=build_temp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-    )
+    configure_process = subprocess.Popen(["cmake", ext.sourcedir] + cmake_arg,
+                                         cwd=build_temp,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT)
     with configure_process.stdout:
         _log_subprocess_output(configure_process.stdout)
     ret = configure_process.wait()
@@ -105,9 +99,10 @@ def build_extension(
         raise DistutilsSetupError(f"failed to configure ext!")
 
     _logger_cmake_ext.info("> build: %s", shlex.join(["cmake", "--build", "."] + build_arg))
-    build_process = subprocess.Popen(
-        ["cmake", "--build", "."] + build_arg, cwd=build_temp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-    )
+    build_process = subprocess.Popen(["cmake", "--build", "."] + build_arg,
+                                     cwd=build_temp,
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT)
     with build_process.stdout:
         _log_subprocess_output(build_process.stdout)
     ret = build_process.wait()
@@ -115,9 +110,10 @@ def build_extension(
         raise DistutilsSetupError(f"failed to build ext!")
 
     _logger_cmake_ext.info("> install: %s", shlex.join(["cmake", "--install", "."] + install_arg))
-    install_process = subprocess.Popen(
-        ["cmake", "--install", "."] + install_arg, cwd=build_temp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-    )
+    install_process = subprocess.Popen(["cmake", "--install", "."] + install_arg,
+                                       cwd=build_temp,
+                                       stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT)
     with install_process.stdout:
         _log_subprocess_output(install_process.stdout)
     ret = install_process.wait()
