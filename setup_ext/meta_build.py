@@ -4,20 +4,21 @@ from distutils.errors import DistutilsSetupError
 import os
 import logging
 from . import cmake_clib, cmake_extension, path_util
-
+from . import conan_clib
 
 _logger_clib = logging.getLogger("setup_ext.MetaBuildClib")
 
 
 # mata-build-clib
 class MetaBuildClib(build_clib):
+
     def check_library_list(self, libraries):
         if libraries is None:
             return
 
         libraries_ = []
         for lib_item in libraries:
-            if isinstance(lib_item, cmake_clib.CMakeClib):
+            if isinstance(lib_item, (cmake_clib.CMakeClib, conan_clib.ConanClib)):
                 pass
             else:
                 libraries_.append(lib_item)
@@ -34,15 +35,15 @@ class MetaBuildClib(build_clib):
         for lib_item in self.libraries:
             if isinstance(lib_item, cmake_clib.CMakeClib):
                 pass  # TODO: append source
+            elif isinstance(lib_item, conan_clib.ConanClib):
+                pass  # TODO: append source
             else:
                 (lib_name, build_info) = lib_item
                 sources = build_info.get("sources")
                 if sources is None or not isinstance(sources, (list, tuple)):
-                    raise DistutilsSetupError(
-                        "in 'libraries' option (library '%s'), "
-                        "'sources' must be present and must be "
-                        "a list of source filenames" % lib_name
-                    )
+                    raise DistutilsSetupError("in 'libraries' option (library '%s'), "
+                                              "'sources' must be present and must be "
+                                              "a list of source filenames" % lib_name)
 
                 filenames.extend(sources)
         return filenames
@@ -53,7 +54,7 @@ class MetaBuildClib(build_clib):
 
         lib_names = []
         for lib_item in self.libraries:
-            if isinstance(lib_item, cmake_clib.CMakeClib):
+            if isinstance(lib_item, (cmake_clib.CMakeClib, conan_clib.ConanClib)):
                 pass
             else:
                 (lib_name, build_info) = lib_item
@@ -76,6 +77,26 @@ class MetaBuildClib(build_clib):
                 _logger_clib.info("build cmake clib: %s at %s", lib_item.name, build_temp)
                 _logger_clib.info("build cmake clib: %s to %s", lib_item.name, lib_dir)
                 cmake_clib.build_clib(
+                    lib_item,
+                    lib_dir,
+                    build_temp=build_temp,
+                    compiler=self.compiler,
+                    debug=self.debug,
+                    plat_name=cmd_build_ext.plat_name,
+                    parallel=cmd_build_ext.parallel,
+                )
+            elif isinstance(lib_item, conan_clib.ConanClib):
+                _logger_clib.info("detect conan clib: %s at %s", lib_item.name, lib_item.sourcedir)
+
+                build_temp = self.path_essential.temp_dir
+                lib_dir = self.prefix_expand.expand_path(lib_item.targetdir)
+                lib_dir = self.prefix_expand.prefix_path(lib_dir)
+
+                # call if
+                cmd_build_ext = self.get_finalized_command("build_ext")
+                _logger_clib.info("build conan clib: %s at %s", lib_item.name, build_temp)
+                _logger_clib.info("build conan clib: %s to %s", lib_item.name, lib_dir)
+                conan_clib.build_clib(
                     lib_item,
                     lib_dir,
                     build_temp=build_temp,
@@ -124,6 +145,7 @@ class MetaBuildClib(build_clib):
 
 # extend cmdclasses
 class MetaBuildExt(build_ext):
+
     def build_extension(self, ext) -> None:
         if isinstance(ext, cmake_extension.CMakeExtension):
             # use setuptools provided extdir! this will auto do sep build in dev mode
