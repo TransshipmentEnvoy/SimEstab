@@ -270,7 +270,7 @@ def extract_conan_package_path(package_name: str,
     if ret != 0:
         _logger_conan_clib.warning("failed to extract conan package path for %s:%s", package_name, package_id)
         return None
-    
+
     # Decode stdout to get the package path
     try:
         package_path = _safe_decode_stdout(stdout).strip()
@@ -367,33 +367,33 @@ def build_clib(
 
     # copy files to targetdir
     _logger_conan_clib.info("  copying files to targetdir: %s", clibdir)
-    
+
     # Use the already expanded clibdir path
     target_dir = clibdir
     os.makedirs(target_dir, exist_ok=True)
     _logger_conan_clib.info("    target dir: %s", target_dir)
-    
+
     # Copy package contents to target directory
     try:
         # Look for common directories to copy from the package
         package_dirs_to_copy = ['lib', 'bin', 'include', 'share']
-        
+
         for dir_name in package_dirs_to_copy:
             src_dir = os.path.join(package_path, dir_name)
             if os.path.exists(src_dir) and os.path.isdir(src_dir):
                 dst_dir = os.path.join(target_dir, dir_name)
                 _logger_conan_clib.info("    copying %s -> %s", src_dir, dst_dir)
-                
+
                 # Remove destination if it exists to ensure clean copy
                 if os.path.exists(dst_dir):
                     shutil.rmtree(dst_dir)
-                
+
                 # Copy the directory tree
                 shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
                 _logger_conan_clib.info("    copied %s successfully", dir_name)
-        
+
         _logger_conan_clib.info("  file copying completed successfully")
-        
+
     except Exception as e:
         raise DistutilsSetupError(f"failed to copy package files from {package_path} to {target_dir}: {e}")
 
