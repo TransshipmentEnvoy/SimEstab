@@ -15,9 +15,42 @@ import logging
 _logger_conan_clib = logging.getLogger("setup_ext.ConanClib")
 
 
+def _safe_decode_stdout(stdout_bytes: bytes) -> str:
+    """
+    Safely decode stdout bytes with auto-detection of encoding.
+    Falls back to utf-8 with error handling if detection fails.
+    """
+    if not stdout_bytes:
+        return ""
+
+    try:
+        # Try to import chardet for encoding detection
+        import chardet
+        detected = chardet.detect(stdout_bytes)
+        if detected and detected.get('encoding') and detected.get('confidence', 0) > 0.5:
+            encoding = detected['encoding']
+            try:
+                return stdout_bytes.decode(encoding)
+            except (UnicodeDecodeError, LookupError):
+                pass
+    except ImportError:
+        # chardet not available, continue with fallback
+        pass
+
+    # Fallback to common encodings
+    for encoding in ['utf-8', 'cp1252', 'latin1']:
+        try:
+            return stdout_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    # Last resort: decode with utf-8 and replace errors
+    return stdout_bytes.decode('utf-8', errors='replace')
+
+
 def _log_subprocess_output(pipe):
     for line in iter(pipe.readline, b""):  # b'\n'-separated lines
-        _logger_conan_clib.info("\t%s", line.decode("utf-8").rstrip("\n"))
+        _logger_conan_clib.info("\t%s", _safe_decode_stdout(line).rstrip("\n"))
 
 
 class ConanClib:
@@ -83,7 +116,7 @@ def detect_conan_package(package_name: str, conan_home_dir: str = None) -> dict:
         raise DistutilsSetupError(f"failed to check conan package: {package_name}")
 
     try:
-        result = json.loads(stdout.decode('utf-8'))
+        result = json.loads(_safe_decode_stdout(stdout))
     except json.JSONDecodeError as e:
         raise DistutilsSetupError(f"failed to parse JSON output for conan package {package_name}: {e}")
 
@@ -154,6 +187,102 @@ def create_conan_package(package_name: str,
         raise DistutilsSetupError(f"conan package {package_name} not found after creation!")
 
 
+def extract_conan_package_id(recipe_path: str,
+                             conan_home_dir: Optional[str] = None,
+                             profile_path: Optional[str] = None) -> Optional[str]:
+    env = os.environ.copy()
+    env_new = {}
+    if conan_home_dir is not None:
+        env_new["CONAN_HOME"] = os.path.normpath(os.path.abspath(os.path.expanduser(conan_home_dir)))
+    env.update(**env_new)
+
+    recipe_path = os.path.normpath(os.path.abspath(os.path.expanduser(recipe_path)))
+    recipe_dir = os.path.normpath(os.path.dirname(os.path.abspath(recipe_path)))
+
+    extra_args = []
+    if profile_path is not None:
+        extra_args += ["-pr:a", os.path.normpath(os.path.abspath(os.path.expanduser(profile_path)))]
+
+    _logger_conan_clib.info(
+        "    exec conan cmd at %s: %s", recipe_dir,
+        shlex.join(["conan", "graph", "info", recipe_path] + ["-nr", "--format", "json"] + extra_args))
+    extract_process = subprocess.Popen(
+        ["conan", "graph", "info", recipe_path] + ["-nr", "--format", "json"] + extra_args,
+        cwd=recipe_dir,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    stdout, _ = extract_process.communicate()
+    ret = extract_process.returncode
+    if ret != 0:
+        _logger_conan_clib.warning("failed to extract conan package ID! recipe_path: %s", recipe_path)
+        return None
+
+    # decode stdout into json
+    try:
+        result = json.loads(_safe_decode_stdout(stdout))
+    except json.JSONDecodeError as e:
+        _logger_conan_clib.warning("failed to parse JSON output for conan package ID extraction: %s", e)
+        return None
+
+    # Extract package ID from the JSON result
+    # The consumer node (node "0") contains the package_id we need
+    try:
+        graph = result.get("graph", {})
+        nodes = graph.get("nodes", {})
+
+        # Look for the consumer node (usually node "0")
+        for node_id, node_data in nodes.items():
+            if node_data.get("recipe") == "Consumer":
+                package_id = node_data.get("package_id")
+                if package_id:
+                    return package_id
+
+        _logger_conan_clib.warning("Consumer node with package_id not found in conan graph info output")
+        return None
+
+    except (KeyError, AttributeError) as e:
+        _logger_conan_clib.warning("failed to extract package ID from JSON structure: %s", e)
+        return None
+
+
+def extract_conan_package_path(package_name: str,
+                               package_id: str,
+                               conan_home_dir: Optional[str] = None) -> Optional[str]:
+    env = os.environ.copy()
+    env_new = {}
+    if conan_home_dir is not None:
+        env_new["CONAN_HOME"] = os.path.normpath(os.path.abspath(os.path.expanduser(conan_home_dir)))
+    env.update(**env_new)
+
+    _logger_conan_clib.info("    exec conan cmd: %s",
+                            shlex.join(["conan", "cache", "path", f"{package_name}:{package_id}"]))
+    extract_process = subprocess.Popen(
+        ["conan", "cache", "path", f"{package_name}:{package_id}"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    stdout, _ = extract_process.communicate()
+    ret = extract_process.returncode
+    if ret != 0:
+        _logger_conan_clib.warning("failed to extract conan package path for %s:%s", package_name, package_id)
+        return None
+    
+    # Decode stdout to get the package path
+    try:
+        package_path = _safe_decode_stdout(stdout).strip()
+        if package_path:
+            return package_path
+        else:
+            _logger_conan_clib.warning("empty package path returned for %s:%s", package_name, package_id)
+            return None
+    except Exception as e:
+        _logger_conan_clib.warning("failed to decode package path output: %s", e)
+        return None
+
+
 def build_clib(
     clib: ConanClib,
     clibdir: str,
@@ -213,11 +342,26 @@ def build_clib(
         )
 
     # always create package
-    create_conan_package(package_name=clib.package_name,
-                         recipe_path=conan_if.find_recipe(clib.sourcedir),
-                         conan_home_dir=clib.conan_home_dir,
-                         profile_path=conan_profile_path,
-                         build_dir=os.path.join(build_temp, clib.package_name.replace('/', '++')))
-    
+    if detect_conan_package(clib.package_name, clib.conan_home_dir):
+        _logger_conan_clib.info("  conan package %s already exists, skipping creation.", clib.package_name)
+    else:
+        create_conan_package(package_name=clib.package_name,
+                             recipe_path=conan_if.find_recipe(clib.sourcedir),
+                             conan_home_dir=clib.conan_home_dir,
+                             profile_path=conan_profile_path,
+                             build_dir=os.path.join(build_temp, clib.package_name.replace('/', '++')))
+
     # get package_id and filepath
+    package_id = extract_conan_package_id(recipe_path=conan_if.find_recipe(clib.sourcedir),
+                                          conan_home_dir=clib.conan_home_dir,
+                                          profile_path=conan_profile_path)
+    if package_id is None:
+        raise DistutilsSetupError(f"failed to extract package ID for {clib.name}!")
+    _logger_conan_clib.info("  conan package ID: %s", package_id)
+
+    package_path = extract_conan_package_path(clib.package_name, package_id, conan_home_dir=clib.conan_home_dir)
+    if package_path is None:
+        raise DistutilsSetupError(f"failed to extract package path for {clib.name}!")
+    _logger_conan_clib.info("  conan package path: %s", package_path)
+
     assert False
