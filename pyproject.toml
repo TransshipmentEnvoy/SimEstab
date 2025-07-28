@@ -4,6 +4,7 @@ requires = [
     "wheel",
     "nanobind",
     "conan",
+    "chardet",
 ]
 build-backend = "setuptools.build_meta"
 

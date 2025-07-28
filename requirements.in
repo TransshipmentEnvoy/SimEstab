@@ -3,3 +3,4 @@ setuptools
 wheel
 nanobind
 conan
+chardet
