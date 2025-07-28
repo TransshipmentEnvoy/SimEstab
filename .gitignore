@@ -219,3 +219,9 @@ cython_debug/
 # conan
 /buildsys/conan_home/*
 !/buildsys/conan_home/profiles
+
+# editable install
+/src/sim_estab/lib
+/src/sim_estab/bin
+/src/sim_estab/include
+/src/sim_estab/share

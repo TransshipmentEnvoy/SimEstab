@@ -35,7 +35,7 @@ libraries = [
         name="sim_estab",
         version="0.0.1",
         sourcedir="src/libsim_estab",
-        targetdir=path_util.PathPrefixBuildLib("sim_estab/lib"),
+        targetdir=path_util.PathPrefixBuildLib("sim_estab"),
         build_type="Debug",  # TODO: use envvar
         conan_profile_path=str(here / "buildsys" / "conan" / "profile"),
         conan_local_dep={"xorg/system": {
@@ -46,7 +46,7 @@ ext_modules = []
 
 setuptools_wrap.setup(
     name="sim_estab",
-    version="0.0.0",
+    version="0.0.1",
     description="Simulated Establishment",
     long_description=long_description,
     long_description_content_type="text/markdown",
