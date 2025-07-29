@@ -42,7 +42,19 @@ libraries = [
             "package": str(here / "buildsys" / "conan" / "recipe" / "xorg"),
         }}),
 ]
-ext_modules = []
+
+ext_modules = [
+    cmake_extension.CMakeExtension(
+        "sim_estab._if",
+        sourcedir=str(here / "src" / "sim_estab_ext"),
+        cmake_configure_argdef={
+            "nanobind_ROOT": nanobind.cmake_dir(),
+            "libsim_estab_ROOT": path_util.PathPrefixBuildLib("sim_estab/lib/cmake"),
+            "DESIGNATED_RPATH": rpath_util.compute_rpath("sim_estab._if", "sim_estab/lib"),
+        },
+        extra_lib={},
+    )
+]
 
 setuptools_wrap.setup(
     name="sim_estab",

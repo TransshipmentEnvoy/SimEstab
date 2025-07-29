@@ -76,7 +76,7 @@ target_link_libraries(sim_estab PRIVATE
     tsl::robin_map)
 target_include_directories(sim_estab PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
-    $<INSTALL_INTERFACE:include/sim_estab>)
+    $<INSTALL_INTERFACE:include>)
 set_target_properties(sim_estab PROPERTIES
     INSTALL_RPATH "\$ORIGIN")
 # TODO: change symbol visibility in the future
