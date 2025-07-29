@@ -225,3 +225,9 @@ cython_debug/
 /src/sim_estab/bin
 /src/sim_estab/include
 /src/sim_estab/share
+
+# AI-assited coding
+/.cursor*
+/.cline*
+/.aider*
+/CLAUDE.md
