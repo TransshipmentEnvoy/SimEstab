@@ -32,7 +32,7 @@ message(STATUS "${PROJECT_NAME}: project path prefix: ${project_path_prefix}")
 message(STATUS "${PROJECT_NAME}: project path: ${project_path_current}")
 
 # dependency
-find_package(Boost REQUIRED COMPONENTS headers filesystem nowide)
+find_package(Boost REQUIRED COMPONENTS headers filesystem nowide log)
 message(STATUS "${PROJECT_NAME}: use boost: ${Boost_DIR}")
 
 find_package(fmt REQUIRED)
@@ -67,10 +67,18 @@ set_target_properties(sim_estab PROPERTIES CXX_STANDARD_REQUIRED ON)
 set_target_properties(sim_estab PROPERTIES CXX_STANDARD 23)
 set_target_properties(sim_estab PROPERTIES CXX_EXTENSION ON)
 target_sources(sim_estab PRIVATE
+    include/lib.h
+    include/log.h
     # impl
     src/lib.cpp
+    src/log.detail.hpp
+    src/log.cpp
 )
 target_link_libraries(sim_estab PRIVATE 
+    Boost::headers
+    Boost::filesystem
+    Boost::nowide
+    Boost::log
     range-v3::range-v3
     fmt::fmt
     tsl::robin_map)
