@@ -120,10 +120,11 @@ void log_init() {
     auto sink = logging::add_console_log(std::clog);
 
     sink->set_formatter(
-        expr::stream << "[" << expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
-                     << "] "
-                     << "[" << expr::attr<severity_level>("Severity") << "] "
-                     << "[" << expr::attr<std::string>("Channel") << "] " << expr::message);
+        expr::format("[%1%][%2%][%3%] %4%")
+            % expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
+            % expr::attr<severity_level>("Severity")
+            % expr::attr<std::string>("Channel")
+            % expr::smessage);
 
     sink->locked_backend()->auto_flush(true);
 

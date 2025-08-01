@@ -5,6 +5,8 @@
 #include <string_view>
 
 // Boost.Log includes for direct usage in macros
+#include <boost/log/attributes.hpp>
+#include <boost/log/keywords/channel.hpp>
 #include <boost/log/sources/record_ostream.hpp>
 #include <boost/log/sources/severity_channel_logger.hpp>
 
@@ -114,19 +116,18 @@ bool log_is_init() noexcept;
  * It provides direct channel-based logging using Boost.Log's streaming interface
  * without any stringstream overhead.
  *
- * @param channel Hierarchical channel name (e.g., "sim_estab.network.tcp")
- * @param level Severity level (trace, debug, info, warning, error, critical)
- * @param message Message content - supports stream operators for formatting
+ * @param ch Hierarchical channel name (e.g., "sim_estab.network.tcp")
+ * @param lvl Severity level (trace, debug, info, warning, error, critical)
+ * @param msg Message content - supports stream operators for formatting
  *
  * Usage:
  *   SIM_ESTAB_LOG("my.channel", debug, "Processing file " << filename << " with " << count << " items");
  */
-#define SIM_ESTAB_LOG(channel, level, message)                                                                         \
+#define SIM_ESTAB_LOG(ch, lvl, msg)                                                                                    \
     do {                                                                                                               \
         if (::sim_estab::core::log::log_is_init()) {                                                                   \
-            ::sim_estab::core::log::detail::channel_logger_mt logger;                                                  \
-            logger.channel(std::string{channel});                                                                      \
-            BOOST_LOG_SEV(logger, ::sim_estab::core::log::severity_level::level) << message;                           \
+            ::sim_estab::core::log::detail::channel_logger_mt logger(::boost::log::keywords::channel = (ch));          \
+            BOOST_LOG_SEV(logger, ::sim_estab::core::log::severity_level::lvl) << msg;                                 \
         }                                                                                                              \
     } while (0)
 
@@ -139,57 +140,57 @@ bool log_is_init() noexcept;
 
 /**
  * Log a trace-level message to the specified channel
- * @param channel Hierarchical channel name
- * @param message Message content (supports stream operators)
+ * @param ch Hierarchical channel name
+ * @param msg Message content (supports stream operators)
  *
  * Usage: SIM_ESTAB_LOG_TRACE("sim_estab.network", "Connection established to " << host);
  */
-#define SIM_ESTAB_LOG_TRACE(channel, message) SIM_ESTAB_LOG(channel, trace, message)
+#define SIM_ESTAB_LOG_TRACE(ch, msg) SIM_ESTAB_LOG(ch, trace, msg)
 
 /**
  * Log a debug-level message to the specified channel
- * @param channel Hierarchical channel name
- * @param message Message content (supports stream operators)
+ * @param ch Hierarchical channel name
+ * @param msg Message content (supports stream operators)
  *
  * Usage: SIM_ESTAB_LOG_DEBUG("sim_estab.physics", "Updating physics step " << step_count);
  */
-#define SIM_ESTAB_LOG_DEBUG(channel, message) SIM_ESTAB_LOG(channel, debug, message)
+#define SIM_ESTAB_LOG_DEBUG(ch, msg) SIM_ESTAB_LOG(ch, debug, msg)
 
 /**
  * Log an info-level message to the specified channel
- * @param channel Hierarchical channel name
- * @param message Message content (supports stream operators)
+ * @param ch Hierarchical channel name
+ * @param msg Message content (supports stream operators)
  *
  * Usage: SIM_ESTAB_LOG_INFO("sim_estab.app", "Application started successfully");
  */
-#define SIM_ESTAB_LOG_INFO(channel, message) SIM_ESTAB_LOG(channel, info, message)
+#define SIM_ESTAB_LOG_INFO(ch, msg) SIM_ESTAB_LOG(ch, info, msg)
 
 /**
  * Log a warning-level message to the specified channel
- * @param channel Hierarchical channel name
- * @param message Message content (supports stream operators)
+ * @param ch Hierarchical channel name
+ * @param msg Message content (supports stream operators)
  *
  * Usage: SIM_ESTAB_LOG_WARN("sim_estab.render", "Low memory warning: " << available_mb << " MB remaining");
  */
-#define SIM_ESTAB_LOG_WARN(channel, message) SIM_ESTAB_LOG(channel, warning, message)
+#define SIM_ESTAB_LOG_WARN(ch, msg) SIM_ESTAB_LOG(ch, warning, msg)
 
 /**
  * Log an error-level message to the specified channel
- * @param channel Hierarchical channel name
- * @param message Message content (supports stream operators)
+ * @param ch Hierarchical channel name
+ * @param msg Message content (supports stream operators)
  *
  * Usage: SIM_ESTAB_LOG_ERROR("sim_estab.io", "Failed to load file: " << filename << " - " << error_msg);
  */
-#define SIM_ESTAB_LOG_ERROR(channel, message) SIM_ESTAB_LOG(channel, error, message)
+#define SIM_ESTAB_LOG_ERROR(ch, msg) SIM_ESTAB_LOG(ch, error, msg)
 
 /**
  * Log a critical-level message to the specified channel
- * @param channel Hierarchical channel name
- * @param message Message content (supports stream operators)
+ * @param ch Hierarchical channel name
+ * @param msg Message content (supports stream operators)
  *
  * Usage: SIM_ESTAB_LOG_CRITICAL("sim_estab.core", "Fatal error: " << error_description);
  */
-#define SIM_ESTAB_LOG_CRITICAL(channel, message) SIM_ESTAB_LOG(channel, critical, message)
+#define SIM_ESTAB_LOG_CRITICAL(ch, msg) SIM_ESTAB_LOG(ch, critical, msg)
 
 /**
  * @brief Channel Naming Convention
