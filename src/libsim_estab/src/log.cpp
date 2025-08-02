@@ -116,8 +116,8 @@ void log_init() {
     // Add common attributes (timestamp, file, line, function)
     logging::add_common_attributes();
 
-    // Setup console logging with hierarchical formatting
-    auto sink = logging::add_console_log(std::clog);
+    // Setup colored console logging with hierarchical formatting
+    auto sink = detail::add_colored_console_log(std::clog);
 
     sink->set_formatter(
         expr::format("[%1%][%2%][%3%] %4%")

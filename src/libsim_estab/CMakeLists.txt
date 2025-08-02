@@ -38,8 +38,8 @@ message(STATUS "${PROJECT_NAME}: use boost: ${Boost_DIR}")
 find_package(fmt REQUIRED)
 message(STATUS "${PROJECT_NAME}: use fmt: ${fmt_DIR}")
 
-find_package(spdlog REQUIRED)
-message(STATUS "${PROJECT_NAME}: use spdlog: ${spdlog_DIR}")
+find_package(rang REQUIRED)
+message(STATUS "${PROJECT_NAME}: use rang: ${rang_DIR}")
 
 find_package(range-v3 REQUIRED)
 message(STATUS "${PROJECT_NAME}: use range-v3: ${range-v3_DIR}")
@@ -81,6 +81,7 @@ target_link_libraries(sim_estab PRIVATE
     Boost::log
     range-v3::range-v3
     fmt::fmt
+    rang::rang
     tsl::robin_map)
 target_include_directories(sim_estab PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>

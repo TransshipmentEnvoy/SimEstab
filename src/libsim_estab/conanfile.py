@@ -20,6 +20,8 @@ class RepoRecipe(ConanFile):
         self.requires("boost/1.88.0")
 
         self.requires("fmt/11.2.0")
+        self.requires("rang/3.2")
+        self.requires("indicators/2.3")
 
         self.requires("range-v3/0.12.0")
 
