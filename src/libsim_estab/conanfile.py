@@ -11,6 +11,13 @@ class RepoRecipe(ConanFile):
     version = "0.0.1"
 
     settings = "os", "compiler", "build_type", "arch"
+    
+    options = {
+        "BUILD_TESTS": [True, False]
+    }
+    default_options = {
+        "BUILD_TESTS": False
+    }
 
     def build_requirements(self):
         pass
@@ -56,6 +63,8 @@ class RepoRecipe(ConanFile):
     def generate(self):
         tc = CMakeToolchain(self)
         tc.user_presets_path = False
+        if self.options.BUILD_TESTS:
+            tc.cache_variables["BUILD_TESTS"] = True
         tc.generate()
 
         deps = CMakeDeps(self)

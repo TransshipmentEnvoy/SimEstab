@@ -42,6 +42,35 @@ enum class severity_level : int {
 };
 
 /**
+ * Stream output operator for severity levels
+ *
+ * Converts severity level enumeration values to human-readable string representations
+ * for use in log formatting and output streams.
+ *
+ * @param os Output stream to write to
+ * @param level Severity level to convert to string
+ * @return Reference to the output stream for chaining
+ */
+template <typename CharT> std::basic_ostream<CharT>& operator<<(std::basic_ostream<CharT>& os, severity_level level) {
+    switch (level) {
+    case severity_level::trace:
+        return os << "TRACE";
+    case severity_level::debug:
+        return os << "DEBUG";
+    case severity_level::info:
+        return os << "INFO";
+    case severity_level::warning:
+        return os << "WARNING";
+    case severity_level::error:
+        return os << "ERROR";
+    case severity_level::critical:
+        return os << "CRITICAL";
+    default:
+        return os << "UNKNOWN";
+    }
+}
+
+/**
  * Exception class for logging-related errors
  *
  * Thrown when logging operations fail, such as attempting to use

@@ -49,35 +49,6 @@ namespace expr    = boost::log::expressions;
 namespace attrs   = boost::log::attributes;
 } // namespace
 
-/**
- * Stream output operator for severity levels
- *
- * Converts severity level enumeration values to human-readable string representations
- * for use in log formatting and output streams.
- *
- * @param os Output stream to write to
- * @param level Severity level to convert to string
- * @return Reference to the output stream for chaining
- */
-std::ostream& operator<<(std::ostream& os, severity_level level) {
-    switch (level) {
-    case severity_level::trace:
-        return os << "TRACE";
-    case severity_level::debug:
-        return os << "DEBUG";
-    case severity_level::info:
-        return os << "INFO";
-    case severity_level::warning:
-        return os << "WARNING";
-    case severity_level::error:
-        return os << "ERROR";
-    case severity_level::critical:
-        return os << "CRITICAL";
-    default:
-        return os << "UNKNOWN";
-    }
-}
-
 namespace detail {
 
 /// Mutex protecting logging system initialization/deinitialization
@@ -119,12 +90,9 @@ void log_init() {
     // Setup colored console logging with hierarchical formatting
     auto sink = detail::add_colored_console_log(std::clog);
 
-    sink->set_formatter(
-        expr::format("[%1%][%2%][%3%] %4%")
-            % expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f")
-            % expr::attr<severity_level>("Severity")
-            % expr::attr<std::string>("Channel")
-            % expr::smessage);
+    sink->set_formatter(expr::format("[%1%][%2%][%3%] %4%") %
+                        expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f") %
+                        expr::attr<severity_level>("Severity") % expr::attr<std::string>("Channel") % expr::smessage);
 
     sink->locked_backend()->auto_flush(true);
 

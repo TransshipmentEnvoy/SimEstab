@@ -1,7 +1,9 @@
 #pragma once
 
 #include <boost/core/null_deleter.hpp>
+#include <boost/log/attributes/attribute_name.hpp>
 #include <boost/log/attributes/attribute_value.hpp>
+#include <boost/log/attributes/named_scope.hpp>
 #include <boost/log/core.hpp>
 #include <boost/log/core/record_view.hpp>
 #include <boost/log/expressions.hpp>
@@ -13,8 +15,8 @@
 #include <boost/log/utility/setup/common_attributes.hpp>
 #include <boost/log/utility/setup/console.hpp>
 
-#include <boost/smart_ptr/make_shared_object.hpp>
-#include <boost/smart_ptr/shared_ptr.hpp>
+#include <boost/shared_ptr.hpp>
+#include <boost/weak_ptr.hpp>
 
 #include <ostream>
 #include <sstream>
@@ -113,6 +115,26 @@ public:
     template <typename... ArgsT>
     explicit colored_text_ostream_backend(ArgsT&&...args) : base_type(std::forward<ArgsT>(args)...) {}
 
+    /*!
+     * The method adds a new stream to the sink.
+     *
+     * \param strm Pointer to the stream. Must not be NULL.
+     */
+    void add_stream(boost::shared_ptr<stream_type> const& strm) {
+        base_type::add_stream(strm);
+        this->stream_weakref = strm; // Store weak reference to the stream
+    }
+    /*!
+     * The method removes a stream from the sink. If the stream is not attached to the sink,
+     * the method has no effect.
+     *
+     * \param strm Pointer to the stream. Must not be NULL.
+     */
+    void remove_stream(boost::shared_ptr<stream_type> const& strm) {
+        base_type::remove_stream(strm);
+        this->stream_weakref.reset(); // Clear weak reference to the stream
+    }
+
     /**
      * The method writes the message to the sink with color coding
      *
@@ -131,26 +153,19 @@ public:
 
         if (severity_attr) {
             severity_level level = severity_attr.extract<severity_level>().get();
+            auto strm            = stream_weakref.lock();
 
-            // Build colored message string
-            std::basic_ostringstream<char_type> colored_stream;
-
-            // Apply colors
-            apply_severity_colors(colored_stream, level);
-
-            // Add the formatted message
-            colored_stream << formatted_message;
-
-            // Reset colors
-            reset_colors(colored_stream);
-
-            // Pass the colored message to base class
-            base_type::consume(rec, colored_stream.str());
+            apply_severity_colors(*strm, level);
+            base_type::consume(rec, formatted_message);
+            reset_colors(*strm);
         } else {
             // No severity attribute found, just pass through to base class
             base_type::consume(rec, formatted_message);
         }
     }
+
+private:
+    typename boost::weak_ptr<stream_type> stream_weakref;
 };
 
 /**

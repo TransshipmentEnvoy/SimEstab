@@ -24,10 +24,12 @@ include(warning)
 include(lto)
 
 # option
+option(BUILD_TESTS "Build C++ tests for libsim_estab" OFF)
 
 # common path
 cmake_path(GET CMAKE_CURRENT_LIST_FILE PARENT_PATH project_path_current)
 cmake_path(GET project_path_current PARENT_PATH project_path_prefix)
+cmake_path(GET project_path_prefix PARENT_PATH project_path_prefix)
 message(STATUS "${PROJECT_NAME}: project path prefix: ${project_path_prefix}")
 message(STATUS "${PROJECT_NAME}: project path: ${project_path_current}")
 
@@ -108,3 +110,8 @@ install(EXPORT libsim_estab
 # install(IMPORTED_RUNTIME_ARTIFACTS spdlog::spdlog
 #     RUNTIME DESTINATION .
 #     LIBRARY DESTINATION .)
+
+# build tests if enabled
+if(BUILD_TESTS)
+    add_subdirectory(${project_path_prefix}/test/libsim_estab test)
+endif()
