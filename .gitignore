@@ -230,4 +230,8 @@ cython_debug/
 /.cursor*
 /.cline*
 /.aider*
+/.roo*
+/.kilo*
+/.github/copilot-instructions.md
+/AGENTS.md
 /CLAUDE.md
