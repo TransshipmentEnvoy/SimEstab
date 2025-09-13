@@ -7,6 +7,8 @@
 #include <boost/log/core.hpp>
 #include <boost/log/core/record_view.hpp>
 #include <boost/log/expressions.hpp>
+#include <boost/log/sinks/auto_newline_mode.hpp>
+#include <boost/log/sinks/frontend_requirements.hpp>
 #include <boost/log/sinks/sync_frontend.hpp>
 #include <boost/log/sinks/text_ostream_backend.hpp>
 #include <boost/log/sources/severity_channel_logger.hpp>
@@ -89,31 +91,62 @@ template <typename StreamT> void reset_colors(StreamT& strm) { strm << rang::sty
  * - Compatible with existing Boost.Log infrastructure
  */
 template <typename CharT>
-class colored_text_ostream_backend : public boost::log::sinks::basic_text_ostream_backend<CharT> {
-public:
-    //! Base type
-    typedef boost::log::sinks::basic_text_ostream_backend<CharT> base_type;
+class colored_text_ostream_backend
+    : public boost::log::sinks::basic_formatted_sink_backend<
+          CharT, boost::log::sinks::combine_requirements<boost::log::sinks::synchronized_feeding,
+                                                         boost::log::sinks::flushing>::type> {
 
+    // Local using declarations for commonly used boost::log types
+    using auto_newline_mode = boost::log::sinks::auto_newline_mode;
+    using record_view       = boost::log::record_view;
+
+    //! Base type
+    typedef typename boost::log::sinks::basic_formatted_sink_backend<
+        CharT, boost::log::sinks::combine_requirements<boost::log::sinks::synchronized_feeding,
+                                                       boost::log::sinks::flushing>::type>
+        base_type;
+
+public:
     //! Character type
     typedef typename base_type::char_type char_type;
-
-    //! String type
+    //! String type to be used as a message text holder
     typedef typename base_type::string_type string_type;
+    //! Output stream type
+    typedef std::basic_ostream<char_type> stream_type;
 
-    //! Stream type
-    typedef typename base_type::stream_type stream_type;
+private:
+    //! Type of the container that holds all aggregated streams
+    typedef std::vector<boost::shared_ptr<stream_type>> ostream_sequence;
 
-    /**
-     * Default constructor
+    //! Output stream list
+    ostream_sequence m_streams;
+    //! Indicates whether to append a trailing newline after every log record
+    auto_newline_mode m_auto_newline_mode;
+    //! Auto-flush flag
+    bool m_auto_flush;
+
+public:
+    /*!
+     * Constructor. No streams attached to the constructed backend, auto flush feature disabled.
      */
-    colored_text_ostream_backend() : base_type() {}
+    colored_text_ostream_backend() : m_auto_newline_mode(auto_newline_mode::insert_if_missing), m_auto_flush(false) {}
 
-    /**
-     * Constructor with parameters
-     * Forwards all arguments to the base class constructor
+    /*!
+     * Constructor. Creates a sink backend with the specified named parameters.
+     * The following named parameters are supported:
+     *
+     * \li \c auto_flush - Specifies a flag, whether or not to automatically flush the attached streams after each
+     *                     written log record. By default, is \c false.
+     * \li \c auto_newline_mode - Specifies automatic trailing newline insertion mode. Must be a value of
+     *                            the \c auto_newline_mode enum. By default, is
+     * <tt>auto_newline_mode::insert_if_missing</tt>.
      */
-    template <typename... ArgsT>
-    explicit colored_text_ostream_backend(ArgsT&&...args) : base_type(std::forward<ArgsT>(args)...) {}
+    BOOST_LOG_PARAMETRIZED_CONSTRUCTORS_CALL(colored_text_ostream_backend, construct)
+
+    /*!
+     * Destructor
+     */
+    ~colored_text_ostream_backend() = default;
 
     /*!
      * The method adds a new stream to the sink.
@@ -121,9 +154,12 @@ public:
      * \param strm Pointer to the stream. Must not be NULL.
      */
     void add_stream(boost::shared_ptr<stream_type> const& strm) {
-        base_type::add_stream(strm);
-        this->stream_weakref = strm; // Store weak reference to the stream
+        auto it = std::find(m_streams.begin(), m_streams.end(), strm);
+        if (it == m_streams.end()) {
+            m_streams.push_back(strm);
+        }
     }
+
     /*!
      * The method removes a stream from the sink. If the stream is not attached to the sink,
      * the method has no effect.
@@ -131,41 +167,92 @@ public:
      * \param strm Pointer to the stream. Must not be NULL.
      */
     void remove_stream(boost::shared_ptr<stream_type> const& strm) {
-        base_type::remove_stream(strm);
-        this->stream_weakref.reset(); // Clear weak reference to the stream
+        auto it = std::find(m_streams.begin(), m_streams.end(), strm);
+        if (it != m_streams.end())
+            m_streams.erase(it);
     }
 
-    /**
-     * The method writes the message to the sink with color coding
+    /*!
+     * Sets the flag to automatically flush buffers of all attached streams after each log record.
      *
-     * This method:
-     * 1. Extracts the severity level from the log record
-     * 2. Applies appropriate colors based on severity (except for INFO)
-     * 3. Calls the base implementation to write the formatted message
-     * 4. Resets colors to default state
-     *
-     * @param rec Log record view containing all log attributes
-     * @param formatted_message The pre-formatted message string
+     * \param enable The flag indicates whether the automatic buffer flush should be performed.
      */
-    void consume(boost::log::record_view const& rec, string_type const& formatted_message) {
-        // Extract severity level from the record using attribute name
-        boost::log::attribute_value severity_attr = rec["Severity"];
+    void auto_flush(bool enable = true) { m_auto_flush = enable; }
+
+    /*!
+     * Selects whether a trailing newline should be automatically inserted after every log record. See
+     * \c auto_newline_mode description for the possible modes of operation.
+     *
+     * \param mode The trailing newline insertion mode.
+     */
+    void set_auto_newline_mode(auto_newline_mode mode) { m_auto_newline_mode = mode; }
+
+    /*!
+     * The method writes the message to the sink.
+     */
+    void consume(record_view const& rec, string_type const& formatted_message) {
+        // Extract severity level from the record for color application
+        auto severity_attr   = rec[boost::log::aux::default_attribute_names::severity()];
+        severity_level level = severity_level::info; // default fallback
 
         if (severity_attr) {
-            severity_level level = severity_attr.extract<severity_level>().get();
-            auto strm            = stream_weakref.lock();
+            level = severity_attr.extract<severity_level>().get();
+        }
 
-            apply_severity_colors(*strm, level);
-            base_type::consume(rec, formatted_message);
-            reset_colors(*strm);
-        } else {
-            // No severity attribute found, just pass through to base class
-            base_type::consume(rec, formatted_message);
+        typename string_type::const_pointer const p = formatted_message.data();
+        typename string_type::size_type const s     = formatted_message.size();
+
+        bool need_trailing_newline = false;
+        if (m_auto_newline_mode != auto_newline_mode::disabled_auto_newline) {
+            need_trailing_newline = (m_auto_newline_mode == auto_newline_mode::always_insert || s == 0u ||
+                                     p[s - 1u] != static_cast<char_type>('\n'));
+        }
+
+        for (auto const& stream_ptr : m_streams) {
+            stream_type *const strm = stream_ptr.get();
+            if (strm->good()) [[likely]] {
+                // Apply severity-based colors
+                apply_severity_colors(*strm, level);
+
+                // Write the formatted message
+                strm->write(p, static_cast<std::streamsize>(s));
+
+                // Reset colors
+                reset_colors(*strm);
+
+                if (need_trailing_newline)
+                    strm->put(static_cast<char_type>('\n'));
+
+                if (m_auto_flush)
+                    strm->flush();
+            }
+        }
+    }
+
+    /*!
+     * The method flushes all attached streams.
+     */
+    void flush() {
+        for (auto const& stream_ptr : m_streams) {
+            stream_type *const strm = stream_ptr.get();
+            if (strm->good()) [[likely]]
+                strm->flush();
         }
     }
 
 private:
-    typename boost::weak_ptr<stream_type> stream_weakref;
+    //! Constructor implementation
+    template <typename ArgsT> void construct(ArgsT const& args) {
+        construct(
+            args[boost::log::keywords::auto_newline_mode | boost::log::sinks::auto_newline_mode::insert_if_missing],
+            args[boost::log::keywords::auto_flush | false]);
+    }
+
+    //! Constructor implementation
+    void construct(auto_newline_mode auto_newline, bool auto_flush) {
+        m_auto_newline_mode = auto_newline;
+        m_auto_flush        = auto_flush;
+    }
 };
 
 /**
