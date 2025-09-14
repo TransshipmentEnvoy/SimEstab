@@ -7,6 +7,7 @@ from typing import Optional, MutableMapping, Any
 
 from .cmake_if import parse_config
 from . import path_util
+from .subprocess_util import safe_decode_stdout
 from distutils.errors import DistutilsSetupError
 
 import logging
@@ -16,7 +17,7 @@ _logger_cmake_clib = logging.getLogger("setup_ext.CmakeClib")
 
 def _log_subprocess_output(pipe):
     for line in iter(pipe.readline, b""):  # b'\n'-separated lines
-        _logger_cmake_clib.info("\t%s", line.decode("utf-8").rstrip("\n"))
+        _logger_cmake_clib.info("\t%s", safe_decode_stdout(line).rstrip("\n"))
 
 
 class CMakeClib:

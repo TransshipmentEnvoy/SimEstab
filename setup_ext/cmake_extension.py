@@ -7,6 +7,7 @@ from typing import Optional, MutableMapping, Any
 from setuptools import Extension
 
 from .cmake_if import parse_config
+from .subprocess_util import safe_decode_stdout
 from distutils.errors import DistutilsSetupError
 
 import logging
@@ -16,7 +17,7 @@ _logger_cmake_ext = logging.getLogger("setup_ext.CmakeExt")
 
 def _log_subprocess_output(pipe):
     for line in iter(pipe.readline, b""):  # b'\n'-separated lines
-        _logger_cmake_ext.info("\t%s", line.decode("utf-8").rstrip("\n"))
+        _logger_cmake_ext.info("\t%s", safe_decode_stdout(line).rstrip("\n"))
 
 
 # A CMakeExtension needs a sourcedir instead of a file list.

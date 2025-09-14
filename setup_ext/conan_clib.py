@@ -9,6 +9,7 @@ from typing import Optional, MutableMapping, Any
 
 from . import conan_if
 from . import path_util
+from .subprocess_util import safe_decode_stdout
 from distutils.errors import DistutilsSetupError
 
 import logging
@@ -16,42 +17,9 @@ import logging
 _logger_conan_clib = logging.getLogger("setup_ext.ConanClib")
 
 
-def _safe_decode_stdout(stdout_bytes: bytes) -> str:
-    """
-    Safely decode stdout bytes with auto-detection of encoding.
-    Falls back to utf-8 with error handling if detection fails.
-    """
-    if not stdout_bytes:
-        return ""
-
-    try:
-        # Try to import chardet for encoding detection
-        import chardet
-        detected = chardet.detect(stdout_bytes)
-        if detected and detected.get('encoding') and detected.get('confidence', 0) > 0.5:
-            encoding = detected['encoding']
-            try:
-                return stdout_bytes.decode(encoding)
-            except (UnicodeDecodeError, LookupError):
-                pass
-    except ImportError:
-        # chardet not available, continue with fallback
-        pass
-
-    # Fallback to common encodings
-    for encoding in ['utf-8', 'cp1252', 'latin1']:
-        try:
-            return stdout_bytes.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-
-    # Last resort: decode with utf-8 and replace errors
-    return stdout_bytes.decode('utf-8', errors='replace')
-
-
 def _log_subprocess_output(pipe):
     for line in iter(pipe.readline, b""):  # b'\n'-separated lines
-        _logger_conan_clib.info("\t%s", _safe_decode_stdout(line).rstrip("\n"))
+        _logger_conan_clib.info("\t%s", safe_decode_stdout(line).rstrip("\n"))
 
 
 class ConanClib:
@@ -117,7 +85,7 @@ def detect_conan_package(package_name: str, conan_home_dir: str = None) -> dict:
         raise DistutilsSetupError(f"failed to check conan package: {package_name}")
 
     try:
-        result = json.loads(_safe_decode_stdout(stdout))
+        result = json.loads(safe_decode_stdout(stdout))
     except json.JSONDecodeError as e:
         raise DistutilsSetupError(f"failed to parse JSON output for conan package {package_name}: {e}")
 
@@ -222,7 +190,7 @@ def extract_conan_package_id(recipe_path: str,
 
     # decode stdout into json
     try:
-        result = json.loads(_safe_decode_stdout(stdout))
+        result = json.loads(safe_decode_stdout(stdout))
     except json.JSONDecodeError as e:
         _logger_conan_clib.warning("failed to parse JSON output for conan package ID extraction: %s", e)
         return None
@@ -273,7 +241,7 @@ def extract_conan_package_path(package_name: str,
 
     # Decode stdout to get the package path
     try:
-        package_path = _safe_decode_stdout(stdout).strip()
+        package_path = safe_decode_stdout(stdout).strip()
         if package_path:
             return package_path
         else:
