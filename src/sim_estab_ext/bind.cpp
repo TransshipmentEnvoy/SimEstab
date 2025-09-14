@@ -1,4 +1,5 @@
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
 
 #include <sim_estab/lib.h>
 #include <sim_estab/log.h>
@@ -22,23 +23,31 @@ NB_MODULE(_if, m) {
     static nb::exception<sim_estab::core::log::log_error> log_error_exc(log_module, "log_error", PyExc_RuntimeError);
 
     // Bind logging functions
-    log_module.def("log_init", &sim_estab::core::log::log_init,
-                   "Initialize the logging system");
-    log_module.def("log_deinit", &sim_estab::core::log::log_deinit,
-                   "Deinitialize the logging system");
-    log_module.def("log_is_init", &sim_estab::core::log::log_is_init,
-                   "Check if the logging system is initialized");
-    log_module.def("enable_console", &sim_estab::core::log::enable_console,
-                   "Enable console logging output");
-    log_module.def("disable_console", &sim_estab::core::log::disable_console,
-                   "Disable console logging output");
+    log_module.def("log_init", &sim_estab::core::log::log_init, "Initialize the logging system");
+    log_module.def("log_deinit", &sim_estab::core::log::log_deinit, "Deinitialize the logging system");
+    log_module.def("log_is_init", &sim_estab::core::log::log_is_init, "Check if the logging system is initialized");
+    log_module.def("enable_console", &sim_estab::core::log::enable_console, "Enable console logging output");
+    log_module.def("disable_console", &sim_estab::core::log::disable_console, "Disable console logging output");
+
+    // Add SIM_ESTAB_LOG binding for direct logging from Python
+    log_module.def(
+        "log",
+        [](const std::string& channel, sim_estab::core::log::severity_level level, const std::string& message) {
+            SIM_ESTAB_LOG_SEV(channel, level, message);
+        },
+        nb::arg("channel"), nb::arg("level"), nb::arg("message"),
+        "Log a message to the SimEstab logging system.\n\n"
+        "Args:\n"
+        "    channel (str): Hierarchical channel name (e.g., \"sim_estab.network.tcp\")\n"
+        "    level (severity_level): Log level (trace, debug, info, warning, error, critical)\n"
+        "    message (str): Message content to log");
 
     // Keep existing bindings
-    m.def("run", [](){});
+    m.def("run", []() {});
 
     // init fn
-    m.def("init", [](){});
+    m.def("init", []() {});
 
     // deinit fn
-    m.def("deinit", [](){});
+    m.def("deinit", []() {});
 }

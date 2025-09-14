@@ -189,6 +189,28 @@ void disable_console() noexcept;
     } while (0)
 
 /**
+ * Core logging macro with explicit channel and serverity
+ *
+ * This is the fundamental logging macro that all other logging macros build upon.
+ * It provides direct channel-based logging using Boost.Log's streaming interface
+ * without any stringstream overhead.
+ *
+ * @param ch Hierarchical channel name (e.g., "sim_estab.network.tcp")
+ * @param sev Severity level (enum value)
+ * @param msg Message content - supports stream operators for formatting
+ *
+ * Usage:
+ *   SIM_ESTAB_LOG("my.channel", debug, "Processing file " << filename << " with " << count << " items");
+ */
+#define SIM_ESTAB_LOG_SEV(ch, sev, msg)                                                                                \
+    do {                                                                                                               \
+        if (::sim_estab::core::log::log_is_init()) {                                                                   \
+            ::sim_estab::core::log::detail::channel_logger_mt logger(::boost::log::keywords::channel = (ch));          \
+            BOOST_LOG_SEV(logger, sev) << msg;                                                                         \
+        }                                                                                                              \
+    } while (0)
+
+/**
  * Convenience macros for direct channel-based logging
  *
  * These macros provide a simplified interface for logging messages at specific
