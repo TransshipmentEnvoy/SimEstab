@@ -33,8 +33,9 @@ class CMakeExtension(Extension):
         cmake_configure_argdef: Optional[MutableMapping[str, str]] = None,
         cmake_build_argdef: Optional[MutableMapping[str, str]] = None,
         extra_lib: Optional[dict[str, str]] = None,
+        py_limited_api: bool = False,
     ):
-        Extension.__init__(self, name, sources=[])
+        Extension.__init__(self, name, sources=[], py_limited_api=py_limited_api)
 
         self.sourcedir = os.path.abspath(sourcedir)
 
