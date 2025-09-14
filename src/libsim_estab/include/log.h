@@ -25,6 +25,7 @@
  * 1. Initialize the logging system: log_init()
  * 2. Use logging macros: SIM_ESTAB_LOG("channel", info, "Message content")
  * 3. Or use convenience macros: SIM_ESTAB_LOG_INFO("channel", "Message content")
+ * 4. Control console output: enable_console() / disable_console()
  */
 namespace sim_estab::core::log {
 
@@ -135,6 +136,33 @@ void log_deinit() noexcept;
  * @return true if logging system is initialized and ready to use, false otherwise
  */
 bool log_is_init() noexcept;
+
+/**
+ * Enable console logging output
+ *
+ * This function adds a console sink to the logging system if one doesn't already exist.
+ * The console sink will output colored log messages to std::clog with automatic flushing.
+ *
+ * This function is thread-safe and idempotent - multiple calls are safe
+ * and subsequent calls after the first will be ignored.
+ *
+ * @note The logging system must be initialized before calling this function
+ * @throws May throw boost::log exceptions if system resources are insufficient
+ */
+void enable_console();
+
+/**
+ * Disable console logging output
+ *
+ * This function removes the console sink from the logging system if it exists.
+ * All pending log records will be flushed before removal.
+ *
+ * This function is thread-safe and idempotent - multiple calls are safe
+ * and subsequent calls after the first will be ignored.
+ *
+ * @note The logging system must be initialized before calling this function
+ */
+void disable_console() noexcept;
 
 } // namespace sim_estab::core::log
 
