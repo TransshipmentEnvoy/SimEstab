@@ -5,6 +5,7 @@ import os
 import logging
 from . import cmake_clib, cmake_extension, path_util
 from . import conan_clib
+from . import conan_cmake_extension
 
 _logger_clib = logging.getLogger("setup_ext.MetaBuildClib")
 
@@ -146,6 +147,10 @@ class MetaBuildClib(build_clib):
 # extend cmdclasses
 class MetaBuildExt(build_ext):
 
+    def get_source_files(self) -> list[str]:
+        # TODO
+        return super().get_source_files()
+
     def build_extension(self, ext) -> None:
         if isinstance(ext, cmake_extension.CMakeExtension):
             # use setuptools provided extdir! this will auto do sep build in dev mode
@@ -153,6 +158,20 @@ class MetaBuildExt(build_ext):
 
             self.prefix_expand.expand_prefix_argdef(ext.cmake_configure_argdef)
             cmake_extension.build_extension(
+                ext=ext,
+                extdir=extdir,
+                build_temp=self.build_temp,
+                compiler=self.compiler,
+                debug=self.debug,
+                plat_name=self.plat_name,
+                parallel=self.parallel,
+            )
+        elif isinstance(ext, conan_cmake_extension.ConanCMakeExtension):
+            # use setuptools provided extdir! this will auto do sep build in dev mode
+            extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
+
+            self.prefix_expand.expand_prefix_argdef(ext.cmake_configure_argdef)
+            conan_cmake_extension.build_extension(
                 ext=ext,
                 extdir=extdir,
                 build_temp=self.build_temp,
@@ -171,6 +190,17 @@ class MetaBuildExt(build_ext):
         build_py = self.get_finalized_command("build_py")
         for ext in self.extensions:
             if isinstance(ext, cmake_extension.CMakeExtension):
+                inplace_file, regular_file = self._get_inplace_equivalent(build_py, ext)
+                inplace_dir = os.path.dirname(inplace_file)
+                regular_dir = os.path.dirname(regular_file)
+
+                # scan extra_lib under regular_dir, copy them together
+                for lib_file, lib_offset in ext.extra_lib.items():
+                    regular_lib_file = os.path.join(regular_dir, lib_offset, lib_file)
+                    inplace_lib_file = os.path.join(inplace_dir, lib_offset, lib_file)
+                    if os.path.exists(regular_lib_file):
+                        self.copy_file(regular_lib_file, inplace_lib_file, level=self.verbose)
+            elif isinstance(ext, conan_cmake_extension.ConanCMakeExtension):
                 inplace_file, regular_file = self._get_inplace_equivalent(build_py, ext)
                 inplace_dir = os.path.dirname(inplace_file)
                 regular_dir = os.path.dirname(regular_file)

@@ -17,6 +17,7 @@ import setup_ext
 from setup_ext import setuptools_wrap, meta_build
 from setup_ext import cmake_clib, cmake_extension, cmake_if
 from setup_ext import conan_clib
+from setup_ext import conan_cmake_extension
 from setup_ext import develop_warp
 from setup_ext import path_util, rpath_util
 
@@ -44,15 +45,20 @@ libraries = [
 ]
 
 ext_modules = [
-    cmake_extension.CMakeExtension(
+    conan_cmake_extension.ConanCMakeExtension(
         "sim_estab._if",
         sourcedir=str(here / "src" / "sim_estab_ext"),
+        build_type="Debug",  # TODO: use envvar
+        conan_name="sim_estab_ext",
+        conan_version="0.0.1",
+        conan_profile_path=str(here / "buildsys" / "conan" / "profile"),
         cmake_configure_argdef={
             "nanobind_ROOT": nanobind.cmake_dir(),
             "libsim_estab_ROOT": path_util.PathPrefixBuildLib("sim_estab/lib/cmake"),
             "DESIGNATED_RPATH": rpath_util.compute_rpath("sim_estab._if", "sim_estab/lib"),
         },
         extra_lib={},
+        py_limited_api=True,
     )
 ]
 

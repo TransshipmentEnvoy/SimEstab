@@ -61,7 +61,7 @@ class ConanClib:
             os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "buildsys", "conan_home")))
 
         # check conan local dep, bundled conanfiles for customization
-        self.conan_local_dep = conan_local_dep if conan_local_dep is not None else []
+        self.conan_local_dep = conan_local_dep if conan_local_dep is not None else {}
 
 
 def detect_conan_package(package_name: str, conan_home_dir: str = None) -> dict:
@@ -91,6 +91,40 @@ def detect_conan_package(package_name: str, conan_home_dir: str = None) -> dict:
 
     status = package_name in result.get("Local Cache", {})
     return status
+
+
+def install_conan_dependency(package_name: str,
+                             recipe_path: str,
+                             conan_home_dir: str = None,
+                             profile_path: str = None,
+                             build_dir: str = None):
+    env = os.environ.copy()
+    env_new = {}
+    if conan_home_dir is not None:
+        env_new["CONAN_HOME"] = os.path.normpath(os.path.abspath(os.path.expanduser(conan_home_dir)))
+    env.update(**env_new)
+
+    recipe_dir = os.path.dirname(os.path.abspath(recipe_path))
+    recipe_dir = os.path.normpath(recipe_dir)
+
+    extra_args = []
+    if profile_path is not None:
+        extra_args += ["-pr:a", os.path.normpath(os.path.abspath(os.path.expanduser(profile_path)))]
+    if build_dir is not None:
+        extra_args += ["-of", os.path.normpath(os.path.abspath(os.path.expanduser(build_dir)))]
+
+    _logger_conan_clib.info("    exec conan cmd at %s: %s", recipe_dir,
+                            shlex.join(["conan", "install", "."] + ["--build", "missing"] + extra_args))
+    install_process = subprocess.Popen(
+        ["conan", "install", "."] + ["--build", "missing"] + extra_args,
+        cwd=recipe_dir,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    ret = install_process.wait()
+    if ret != 0:
+        raise DistutilsSetupError(f"failed to install conan package! recipe_path: {recipe_path}")
 
 
 def create_conan_package(package_name: str,

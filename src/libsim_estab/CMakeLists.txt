@@ -76,7 +76,7 @@ target_sources(sim_estab PRIVATE
     src/log.detail.hpp
     src/log.cpp
 )
-target_link_libraries(sim_estab PRIVATE 
+target_link_libraries(sim_estab PUBLIC 
     Boost::headers
     Boost::filesystem
     Boost::nowide
