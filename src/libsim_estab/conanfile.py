@@ -11,13 +11,9 @@ class RepoRecipe(ConanFile):
     version = "0.0.1"
 
     settings = "os", "compiler", "build_type", "arch"
-    
-    options = {
-        "BUILD_TESTS": [True, False]
-    }
-    default_options = {
-        "BUILD_TESTS": False
-    }
+
+    options = {"BUILD_TESTS": [True, False]}
+    default_options = {"BUILD_TESTS": False}
 
     def build_requirements(self):
         pass
@@ -58,7 +54,7 @@ class RepoRecipe(ConanFile):
         self.options["boost"].shared = True
 
     def layout(self):
-        cmake_layout(self) # TODO: override the layout for package dir
+        cmake_layout(self)  # TODO: override the layout for package dir
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -78,6 +74,23 @@ class RepoRecipe(ConanFile):
     def package(self):
         cmake = CMake(self)
         cmake.install()
+
+        # copy the boost shared libraries
+        boost_dep = self.dependencies["boost"]
+        boost_cpp_info = boost_dep.cpp_info
+        # copy from lib directories
+        for lib_dir in boost_cpp_info.libdirs:
+            lib_path = os.path.join(boost_dep.package_folder, lib_dir)
+            if os.path.exists(lib_path):
+                if self.settings.os == "Windows":
+                    # On Windows, DLLs might be in bin directory
+                    bin_path = os.path.join(boost_dep.package_folder, "bin")
+                    if os.path.exists(bin_path):
+                        files.copy(self, "*.dll", src=bin_path, dst=os.path.join(self.package_folder, "bin"))
+                else:
+                    # On Linux/macOS
+                    files.copy(self, "libboost_*.so*", src=lib_path, dst=os.path.join(self.package_folder, "lib"))
+                    files.copy(self, "libboost_*.dylib*", src=lib_path, dst=os.path.join(self.package_folder, "lib"))
 
     def package_info(self):
         print(self.env_info)
