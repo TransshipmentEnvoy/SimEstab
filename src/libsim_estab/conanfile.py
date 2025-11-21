@@ -59,6 +59,8 @@ class RepoRecipe(ConanFile):
     def generate(self):
         tc = CMakeToolchain(self)
         tc.user_presets_path = False
+        # Force Ninja generator for C++20 module support
+        tc.generator = "Ninja"
         if self.options.BUILD_TESTS:
             tc.cache_variables["BUILD_TESTS"] = True
         tc.generate()

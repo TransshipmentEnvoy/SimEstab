@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.21)
+cmake_minimum_required (VERSION 3.28)
 
 # sanity check
 if(CMAKE_BINARY_DIR STREQUAL CMAKE_SOURCE_DIR)
@@ -69,12 +69,21 @@ set_target_properties(sim_estab PROPERTIES CXX_STANDARD_REQUIRED ON)
 set_target_properties(sim_estab PROPERTIES CXX_STANDARD 23)
 set_target_properties(sim_estab PROPERTIES CXX_EXTENSION ON)
 target_sources(sim_estab PRIVATE
-    include/lib.h
-    include/log.h
-    # impl
-    src/lib.cpp
-    src/log.detail.hpp
+    # include/lib.old.h
+    # include/log.old.h
+    # impl detail headers
+    # src/log.detail.hpp
+    # module-based implementation (imports module, not a module unit itself)
     src/log.cpp
+    # legacy cpp files (kept for reference, not compiled)
+    # src/lib.cpp
+    # src/log.old.cpp
+)
+# C++20 module sources
+target_sources(sim_estab PUBLIC
+    FILE_SET CXX_MODULES FILES
+    module/sim_estab.cppm
+    module/sim_estab--log.cppm
 )
 target_link_libraries(sim_estab PUBLIC 
     Boost::headers
@@ -95,14 +104,15 @@ set_target_properties(sim_estab PROPERTIES
     WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
 
 # install
-install(DIRECTORY include/ DESTINATION include/sim_estab)
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/sim_estab)
 install(TARGETS sim_estab
     EXPORT libsim_estab
-    RUNTIME DESTINATION lib
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib)
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    FILE_SET CXX_MODULES DESTINATION ${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME}/module)
 install(EXPORT libsim_estab
-    DESTINATION lib/cmake/libsim_estab
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libsim_estab
     NAMESPACE libsim_estab::
     FILE libsim_estab-config.cmake)
 
