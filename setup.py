@@ -53,12 +53,12 @@ ext_modules = [
         conan_version="0.0.1",
         conan_profile_path=str(here / "buildsys" / "conan" / "profile"),
         cmake_configure_argdef={
-            "nanobind_ROOT": nanobind.cmake_dir(),
-            "libsim_estab_ROOT": path_util.PathPrefixBuildLib("sim_estab/lib/cmake"),
+            "nanobind_DIR": nanobind.cmake_dir(),
+            "libsim_estab_DIR": path_util.PathPrefixBuildLib("sim_estab/lib/cmake/libsim_estab"),
             "DESIGNATED_RPATH": rpath_util.compute_rpath("sim_estab._if", "sim_estab/lib"),
         },
         extra_lib={},
-        py_limited_api=True,
+        py_limited_api=False,  # True
     )
 ]
 

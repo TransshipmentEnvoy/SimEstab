@@ -1,8 +1,24 @@
+// Standard library headers
+#include <functional>
+#include <ostream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+// Boost
+#include <boost/log/core.hpp>
+#include <boost/log/keywords/channel.hpp>
+#include <boost/log/keywords/severity.hpp>
+#include <boost/log/sources/record_ostream.hpp>
+#include <boost/log/sources/severity_channel_logger.hpp>
+#include <boost/log/utility/formatting_ostream.hpp>
+
+import sim_estab;
+// #include <sim_estab/macro.h>
+
+// nanobind
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
-
-#include <sim_estab/lib.h>
-#include <sim_estab/log.h>
 
 namespace nb = nanobind;
 
@@ -33,7 +49,7 @@ NB_MODULE(_if, m) {
     log_module.def(
         "log",
         [](const std::string& channel, sim_estab::core::log::severity_level level, const std::string& message) {
-            SIM_ESTAB_LOG_SEV(channel, level, message);
+            sim_estab::core::log::sim_estab_log(channel, level, message);
         },
         nb::arg("channel"), nb::arg("level"), nb::arg("message"),
         "Log a message to the SimEstab logging system.\n\n"

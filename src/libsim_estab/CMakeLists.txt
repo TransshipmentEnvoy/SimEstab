@@ -68,6 +68,7 @@ add_library(libsim_estab::sim_estab ALIAS sim_estab)
 set_target_properties(sim_estab PROPERTIES CXX_STANDARD_REQUIRED ON)
 set_target_properties(sim_estab PROPERTIES CXX_STANDARD 23)
 set_target_properties(sim_estab PROPERTIES CXX_EXTENSION ON)
+target_compile_features(sim_estab PUBLIC cxx_std_23)
 target_sources(sim_estab PRIVATE
     # include/lib.old.h
     # include/log.old.h
@@ -110,7 +111,7 @@ install(TARGETS sim_estab
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    FILE_SET CXX_MODULES DESTINATION ${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME}/module)
+    FILE_SET CXX_MODULES DESTINATION ${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME})
 install(EXPORT libsim_estab
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libsim_estab
     NAMESPACE libsim_estab::

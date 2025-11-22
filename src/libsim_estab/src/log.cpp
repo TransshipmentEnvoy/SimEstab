@@ -552,13 +552,13 @@ void disable_console() noexcept {
 
 // log interface implementation
 namespace detail {
-void sim_estab_log_impl(std::string_view channel, severity_level lvl,
+void sim_estab_log_impl(const std::string& channel, severity_level lvl,
                         std::function<void(logging::record_ostream&)> msg_fn) {
     if (!log_is_init()) {
         return;
     }
 
-    detail::channel_logger_mt logger(keywords::channel = std::string{channel});
+    detail::channel_logger_mt logger(keywords::channel = channel);
 
     // Use the Boost.Log macro inside the module
     auto rec = logger.open_record(keywords::severity = lvl);
