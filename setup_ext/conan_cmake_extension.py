@@ -112,9 +112,9 @@ def build_extension(
     # conan
     # select profile
     if not os.path.isdir(ext.conan_profile_path):
-        conan_profile_path = ext.conan_profile_path
+        conan_profile_path, actual_build_type = ext.conan_profile_path, ext.build_type
     else:
-        conan_profile_path = conan_if.parse_profile(
+        conan_profile_path, actual_build_type = conan_if.parse_profile(
             conan_profile_path=ext.conan_profile_path,
             build_type=ext.build_type,
             compiler=compiler,
@@ -122,6 +122,7 @@ def build_extension(
             plat_name=plat_name,
         )
     _logger_conan_cmake_ext.info("  conan profile: %s", conan_profile_path)
+    _logger_conan_cmake_ext.info("  build type: %s", actual_build_type)
 
     # select home
     conan_home_dir = ext.conan_home_dir
@@ -155,7 +156,8 @@ def build_extension(
 
     # cmake extra
     toolchain_argdef = {
-        "CMAKE_TOOLCHAIN_FILE": os.path.join(build_temp, "build", ext.build_type, "generators", "conan_toolchain.cmake")
+        "CMAKE_TOOLCHAIN_FILE": os.path.join(build_temp, "build", actual_build_type, "generators", "conan_toolchain.cmake"),
+        "CMAKE_BUILD_TYPE": actual_build_type,
     }
     cmake_configure_argdef = {**toolchain_argdef, **ext.cmake_configure_argdef}
     cmake_arg, build_arg, install_arg = parse_config(

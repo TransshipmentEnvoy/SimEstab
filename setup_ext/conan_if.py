@@ -38,13 +38,13 @@ def parse_profile(
 ) -> Optional[str]:
     platform_category = plat_util.get_platform_category(plat_name)
     compiler_type = compiler.compiler_type
-    build_type = build_type.lower()
-    if debug and build_type == "debug":
-        build_type = "debug"
-    elif debug and build_type == "release":
-        build_type = "relwithdebinfo"
+    build_type_query = build_type.lower()
+    if debug and build_type_query == "debug":
+        build_type, build_type_query = "Debug", "debug"
+    elif debug and build_type_query == "release":
+        build_type, build_type_query = "RelWithDebInfo", "relwithdebinfo"
 
-    profile_filename = PROFILE_MAPPING[(platform_category, build_type)]
+    profile_filename = PROFILE_MAPPING[(platform_category, build_type_query)]
     if conan_profile_path is not None:
         profile_path = os.path.join(conan_profile_path, profile_filename)
     else:
@@ -52,4 +52,4 @@ def parse_profile(
     if not os.path.exists(profile_path):
         profile_path = None
 
-    return profile_path
+    return profile_path, build_type

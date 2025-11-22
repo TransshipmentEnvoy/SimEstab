@@ -312,9 +312,9 @@ def build_clib(
 
     # select profile
     if not os.path.isdir(clib.conan_profile_path):
-        conan_profile_path = clib.conan_profile_path
+        conan_profile_path, actual_build_type = clib.conan_profile_path, clib.build_type
     else:
-        conan_profile_path = conan_if.parse_profile(
+        conan_profile_path, actual_build_type = conan_if.parse_profile(
             conan_profile_path=clib.conan_profile_path,
             build_type=clib.build_type,
             compiler=compiler,
@@ -322,6 +322,7 @@ def build_clib(
             plat_name=plat_name,
         )
     _logger_conan_clib.info("  conan profile: %s", conan_profile_path)
+    _logger_conan_clib.info("  build type: %s", actual_build_type)
 
     # select home
     conan_home_dir = clib.conan_home_dir
