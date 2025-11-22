@@ -61,10 +61,8 @@ class RepoRecipe(ConanFile):
         cmake_layout(self)  # TODO: override the layout for package dir
 
     def generate(self):
-        tc = CMakeToolchain(self)
+        tc = CMakeToolchain(self, generator="Ninja")
         tc.user_presets_path = False
-        # Force Ninja generator for C++20 module support
-        tc.generator = "Ninja"
         if self.options.BUILD_TESTS:
             tc.cache_variables["BUILD_TESTS"] = True
         tc.generate()
