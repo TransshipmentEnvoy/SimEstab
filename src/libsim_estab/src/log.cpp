@@ -19,6 +19,7 @@ module;
 #include <iostream>
 #include <mutex>
 // #include <shared_mutex>
+#include <functional>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
@@ -47,17 +48,29 @@ module;
 // Module declaration - this is the sim_estab implementation unit for the log partition
 module sim_estab;
 
-// Import the log interface partition to gain access to its declarations
-import :log;
-
 namespace sim_estab::core::log {
 
 namespace {
-namespace logging = boost::log;
-namespace sinks   = boost::log::sinks;
-namespace expr    = boost::log::expressions;
-namespace attrs   = boost::log::attributes;
+namespace logging  = boost::log;
+namespace sinks    = boost::log::sinks;
+namespace expr     = boost::log::expressions;
+namespace attrs    = boost::log::attributes;
+namespace keywords = boost::log::keywords;
 } // namespace
+
+// typedef
+namespace detail {
+/**
+ * Type aliases for Boost.Log channel loggers
+ *
+ * channel_logger: Single-threaded logger for non-concurrent usage
+ * channel_logger_mt: Multi-threaded logger for concurrent access
+ *
+ * These typedefs provide semantic clarity and future-proof the API
+ */
+using channel_logger    = boost::log::sources::severity_channel_logger<severity_level, std::string>;
+using channel_logger_mt = boost::log::sources::severity_channel_logger_mt<severity_level, std::string>;
+} // namespace detail
 
 // color sink related
 namespace detail {
@@ -536,5 +549,31 @@ void disable_console() noexcept {
     // Remove from the map
     detail::sink_map.erase(it);
 }
+
+// log interface implementation
+namespace detail {
+void sim_estab_log_impl(std::string_view channel, severity_level lvl,
+                        std::function<void(logging::record_ostream&)> msg_fn) {
+    if (!log_is_init()) {
+        return;
+    }
+
+    detail::channel_logger_mt logger(keywords::channel = std::string{channel});
+
+    // Use the Boost.Log macro inside the module
+    auto rec = logger.open_record(keywords::severity = lvl);
+    if (!rec)
+        return;
+
+    logging::record_ostream rec_stream(rec);
+
+    // Call the message function to write to the stream
+    msg_fn(rec_stream);
+
+    rec_stream.flush();
+    logger.push_record(boost::move(rec));
+}
+
+} // namespace detail
 
 } // namespace sim_estab::core::log

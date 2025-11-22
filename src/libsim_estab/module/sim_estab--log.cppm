@@ -16,9 +16,18 @@
 module;
 
 // Standard library headers
+#include <functional>
 #include <ostream>
 #include <stdexcept>
 #include <string>
+
+// Boost
+#include <boost/log/core.hpp>
+#include <boost/log/keywords/channel.hpp>
+#include <boost/log/keywords/severity.hpp>
+#include <boost/log/sources/record_ostream.hpp>
+#include <boost/log/sources/severity_channel_logger.hpp>
+#include <boost/log/utility/formatting_ostream.hpp>
 
 // Module declaration
 export module sim_estab:log;
@@ -43,13 +52,13 @@ export module sim_estab:log;
  * 3. Initialize the logging system: log_init()
  * 4. Use logging macros: SIM_ESTAB_LOG("channel", info, "Message content")
  */
-export namespace sim_estab::core::log {
+namespace sim_estab::core::log {
 
 /**
  * Severity levels for logging
  * Ordered from lowest (trace) to highest (critical) severity
  */
-enum class severity_level : int {
+export enum class severity_level : int {
     trace    = 0,  ///< Fine-grained tracing messages (lowest)
     debug    = 10, ///< Debug information for development
     info     = 20, ///< General operational information
@@ -68,7 +77,8 @@ enum class severity_level : int {
  * @param level Severity level to convert to string
  * @return Reference to the output stream for chaining
  */
-template <typename CharT> std::basic_ostream<CharT>& operator<<(std::basic_ostream<CharT>& os, severity_level level) {
+export template <typename CharT>
+std::basic_ostream<CharT>& operator<<(std::basic_ostream<CharT>& os, severity_level level) {
     switch (level) {
     case severity_level::trace:
         return os << "TRACE";
@@ -94,13 +104,10 @@ template <typename CharT> std::basic_ostream<CharT>& operator<<(std::basic_ostre
  * the logging system before initialization or when internal logging
  * errors occur.
  */
-class log_error : public std::runtime_error {
+export class log_error : public std::runtime_error {
 public:
     explicit log_error(const std::string& what) : std::runtime_error(what) {}
 };
-
-// Note: detail::channel_logger types are not exported from the module
-// They are implementation details used internally and in macros (via headers)
 
 /**
  * Initialize the hierarchical logging system
@@ -119,7 +126,7 @@ public:
  * @note Must be called before any logging operations
  * @throws May throw boost::log exceptions if system resources are insufficient
  */
-void log_init();
+export void log_init();
 
 /**
  * Deinitialize the logging system
@@ -135,13 +142,13 @@ void log_init();
  * @note After calling this function, log_init() must be called again
  *       before any logging operations can be performed.
  */
-void log_deinit() noexcept;
+export void log_deinit() noexcept;
 
 /**
  * Check if the logging system is initialized
  * @return true if logging system is initialized and ready to use, false otherwise
  */
-bool log_is_init() noexcept;
+export bool log_is_init() noexcept;
 
 /**
  * Enable console logging output
@@ -155,7 +162,7 @@ bool log_is_init() noexcept;
  * @note The logging system must be initialized before calling this function
  * @throws May throw boost::log exceptions if system resources are insufficient
  */
-void enable_console();
+export void enable_console();
 
 /**
  * Disable console logging output
@@ -168,7 +175,57 @@ void enable_console();
  *
  * @note The logging system must be initialized before calling this function
  */
-void disable_console() noexcept;
+export void disable_console() noexcept;
+
+// concept: "printable to std::ostream"
+template <class T>
+concept OStreamable = requires(std::ostream& os, T&& value) {
+    { os << std::forward<T>(value) } -> std::same_as<std::ostream&>;
+};
+
+// Forward declare implementation. Note: not exported.
+namespace detail {
+void sim_estab_log_impl(std::string_view channel, severity_level lvl,
+                        std::function<void(boost::log::record_ostream&)> msg_fn);
+} // namespace detail
+
+// abbreviated function template
+//
+// - `auto`/`OStreamable auto` are placeholder types (abbreviated templates)
+// - export makes it usable from other translation units via `import sim_estab.log;`
+export void sim_estab_log(auto&& ch,               // channel (string, string_view, etc.)
+                          auto&& sev,              // severity type (your enum, etc.)
+                          OStreamable auto&&...msg // parts of the message, all OStreamable
+) {
+    if (!log_is_init()) {
+        return;
+    }
+
+    /*
+    detail::channel_logger_mt logger(boost::log::keywords::channel = std::forward<decltype(ch)>(ch));
+
+    // Use the Boost.Log macro inside the module
+    using keyword::severity;
+    auto& rec = logger.open_record(severity = std::forward<decltype(sev)>(sev));
+    if (!rec)
+        return;
+
+    boost::log::record_ostream rec_stream(rec);
+
+    // Fold-expression over the variadic message parts:
+    // rec_stream << part1 << part2 << ...
+    (rec_stream << ... << std::forward<decltype(msg)>(msg));
+
+    rec_stream.flush();
+    logger.push_record(boost::move(rec));
+    */
+
+    // workaround
+    auto msg_fn = [... msg_pack = std::forward<decltype(msg)>(msg)](boost::log::record_ostream& rec_stream) mutable {
+        (rec_stream << ... << std::forward<decltype(msg_pack)>(msg_pack));
+    };
+    detail::sim_estab_log_impl(std::forward<decltype(ch)>(ch), std::forward<decltype(sev)>(sev), std::move(msg_fn));
+}
 
 } // namespace sim_estab::core::log
 

@@ -15,13 +15,8 @@
  * Usage:
  *   SIM_ESTAB_LOG("my.channel", debug, "Processing file " << filename << " with " << count << " items");
  */
-#define SIM_ESTAB_LOG_SEV(ch, sev, msg)                                                                                \
-    do {                                                                                                               \
-        if (::sim_estab::core::log::log_is_init()) {                                                                   \
-            ::sim_estab::core::log::detail::channel_logger_mt logger(::boost::log::keywords::channel = (ch));          \
-            BOOST_LOG_SEV(logger, sev) << msg;                                                                         \
-        }                                                                                                              \
-    } while (0)
+#define SIM_ESTAB_LOG(ch, sev, ...)                                                                                    \
+    ::sim_estab::core::log::sim_estab_log(ch, ::sim_estab::core::log::severity_level::sev, __VA_ARGS__)
 
 /**
  * Convenience macros for direct channel-based logging
@@ -37,7 +32,7 @@
  *
  * Usage: SIM_ESTAB_LOG_TRACE("sim_estab.network", "Connection established to " << host);
  */
-#define SIM_ESTAB_LOG_TRACE(ch, msg) SIM_ESTAB_LOG(ch, trace, msg)
+#define SIM_ESTAB_LOG_TRACE(ch, ...) SIM_ESTAB_LOG(ch, trace, __VA_ARGS__)
 
 /**
  * Log a debug-level message to the specified channel
@@ -46,7 +41,7 @@
  *
  * Usage: SIM_ESTAB_LOG_DEBUG("sim_estab.physics", "Updating physics step " << step_count);
  */
-#define SIM_ESTAB_LOG_DEBUG(ch, msg) SIM_ESTAB_LOG(ch, debug, msg)
+#define SIM_ESTAB_LOG_DEBUG(ch, ...) SIM_ESTAB_LOG(ch, debug, __VA_ARGS__)
 
 /**
  * Log an info-level message to the specified channel
@@ -55,7 +50,7 @@
  *
  * Usage: SIM_ESTAB_LOG_INFO("sim_estab.app", "Application started successfully");
  */
-#define SIM_ESTAB_LOG_INFO(ch, msg) SIM_ESTAB_LOG(ch, info, msg)
+#define SIM_ESTAB_LOG_INFO(ch, ...) SIM_ESTAB_LOG(ch, info, __VA_ARGS__)
 
 /**
  * Log a warning-level message to the specified channel
@@ -64,7 +59,7 @@
  *
  * Usage: SIM_ESTAB_LOG_WARN("sim_estab.render", "Low memory warning: " << available_mb << " MB remaining");
  */
-#define SIM_ESTAB_LOG_WARN(ch, msg) SIM_ESTAB_LOG(ch, warning, msg)
+#define SIM_ESTAB_LOG_WARN(ch, ...) SIM_ESTAB_LOG(ch, warning, __VA_ARGS__)
 
 /**
  * Log an error-level message to the specified channel
@@ -73,7 +68,7 @@
  *
  * Usage: SIM_ESTAB_LOG_ERROR("sim_estab.io", "Failed to load file: " << filename << " - " << error_msg);
  */
-#define SIM_ESTAB_LOG_ERROR(ch, msg) SIM_ESTAB_LOG(ch, error, msg)
+#define SIM_ESTAB_LOG_ERROR(ch, ...) SIM_ESTAB_LOG(ch, error, __VA_ARGS__)
 
 /**
  * Log a critical-level message to the specified channel
@@ -82,6 +77,6 @@
  *
  * Usage: SIM_ESTAB_LOG_CRITICAL("sim_estab.core", "Fatal error: " << error_description);
  */
-#define SIM_ESTAB_LOG_CRITICAL(ch, msg) SIM_ESTAB_LOG(ch, critical, msg)
+#define SIM_ESTAB_LOG_CRITICAL(ch, ...) SIM_ESTAB_LOG(ch, critical, __VA_ARGS__)
 
 #endif // LIBSIM_ESTAB__MACRO_H

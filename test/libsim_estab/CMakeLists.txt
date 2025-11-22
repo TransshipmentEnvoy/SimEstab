@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.28)
 
 # Enable CTest support
 enable_testing()
@@ -18,6 +18,11 @@ add_executable(libsim_estab_tests
     test_main.cpp
     test_log.cpp
 )
+
+# Enable C++20 modules if supported by compiler
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    target_compile_options(libsim_estab_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fmodules-ts>)
+endif()
 
 # Link with the main library
 target_link_libraries(libsim_estab_tests PRIVATE

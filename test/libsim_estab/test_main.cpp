@@ -10,6 +10,12 @@
 
 #include <boost/test/unit_test.hpp>
 
+// Import the main SimEstab module if needed
+import sim_estab;
+
+// If macros are needed, include macro.h
+#include <macro.h>
+
 /**
  * @brief Global test suite initialization
  *
