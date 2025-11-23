@@ -194,8 +194,8 @@ void sim_estab_log_impl(const std::string& channel, severity_level lvl,
 //
 // - `auto`/`OStreamable auto` are placeholder types (abbreviated templates)
 // - export makes it usable from other translation units via `import sim_estab.log;`
-export void sim_estab_log(const std::string& ch,               // channel (string, string_view, etc.)
-                          severity_level sev,              // severity type (your enum, etc.)
+export void sim_estab_log(const std::string& ch,   // channel (string, string_view, etc.)
+                          severity_level sev,      // severity type (your enum, etc.)
                           OStreamable auto&&...msg // parts of the message, all OStreamable
 ) {
     if (!log_is_init()) {

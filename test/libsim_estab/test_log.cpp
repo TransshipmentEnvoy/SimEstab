@@ -22,18 +22,12 @@
 #include <thread>
 #include <vector>
 
-// Boost
-#include <boost/log/core.hpp>
-#include <boost/log/keywords/channel.hpp>
-#include <boost/log/keywords/severity.hpp>
-#include <boost/log/sources/record_ostream.hpp>
-#include <boost/log/sources/severity_channel_logger.hpp>
-#include <boost/log/utility/formatting_ostream.hpp>
-
 // import
+#include <compat.h>
+
 import sim_estab; // :log
 
-// If macros are needed, include macro.h (since log.h is missing)
+// If macros are needed, include macro.h
 #include <macro.h>
 
 using namespace sim_estab::core::log;

@@ -5,14 +5,7 @@
 #include <string>
 #include <string_view>
 
-// Boost
-#include <boost/log/core.hpp>
-#include <boost/log/keywords/channel.hpp>
-#include <boost/log/keywords/severity.hpp>
-#include <boost/log/sources/record_ostream.hpp>
-#include <boost/log/sources/severity_channel_logger.hpp>
-#include <boost/log/utility/formatting_ostream.hpp>
-
+#include <sim_estab/compat.h>
 import sim_estab;
 // #include <sim_estab/macro.h>
 
