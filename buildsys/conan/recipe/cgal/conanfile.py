@@ -54,13 +54,10 @@ class CgalConan(ConanFile):
         cmake_layout(self, src_folder=src_folder)
 
     def requirements(self):
-        self.requires("boost/[>=1.89.0]")
+        self.requires("boost/[>=1.89.0]", options={"shared": True})
         self.requires("eigen/[>=5.0.0]")
         self.requires("mpfr/[>=4.2.0]")
         self.requires("gmp/[>=6.3.0]")
-
-    def configure(self):
-        self.options["boost"].shared = True  # keep it consistent with the main package
 
     def package_id(self):
         self.info.clear()
