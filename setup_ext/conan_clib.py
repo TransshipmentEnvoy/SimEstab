@@ -16,6 +16,8 @@ import logging
 
 _logger_conan_clib = logging.getLogger("setup_ext.ConanClib")
 
+CONAN_SOURCE_FOLDER_ENVVAR_BASE = "SETUP_EXT__CONAN_SOURCE_FOLDER"
+
 
 def _log_subprocess_output(pipe):
     for line in iter(pipe.readline, b""):  # b'\n'-separated lines
@@ -38,6 +40,8 @@ class ConanClib:
         conan_profile_path: str = None,
         conan_home_dir: str = None,
         conan_local_dep: dict[str, dict[str, str]] = None,
+        conan_obtain_source: bool = False,
+        conan_feed_version: bool = False,
     ) -> None:
         self.name = name
         self.version = version
@@ -62,6 +66,10 @@ class ConanClib:
 
         # check conan local dep, bundled conanfiles for customization
         self.conan_local_dep = conan_local_dep if conan_local_dep is not None else {}
+
+        # conan build misc config
+        self.conan_obtain_source = conan_obtain_source
+        self.conan_feed_version = conan_feed_version
 
 
 def detect_conan_package(package_name: str, conan_home_dir: str = None) -> dict:
@@ -131,7 +139,9 @@ def create_conan_package(package_name: str,
                          recipe_path: str,
                          conan_home_dir: str = None,
                          profile_path: str = None,
-                         build_dir: str = None):
+                         build_dir: str = None,
+                         obtain_source: bool = False,
+                         feed_version: bool = False):
     env = os.environ.copy()
     env_new = {}
     if conan_home_dir is not None:
@@ -141,7 +151,42 @@ def create_conan_package(package_name: str,
     recipe_dir = os.path.dirname(os.path.abspath(recipe_path))
     recipe_dir = os.path.normpath(recipe_dir)
 
+    name, version = package_name.split("/")
+
+    if obtain_source:
+        env_src = env.copy()
+        env_srcdir_name = f"{CONAN_SOURCE_FOLDER_ENVVAR_BASE}__{package_name.split('/')[0]}"
+        if env_srcdir_name not in env_src and build_dir is not None:
+            env_src[env_srcdir_name] = os.path.join(os.path.normpath(os.path.abspath(os.path.expanduser(build_dir))),
+                                                    "src")
+        source_cmd_extra_arg = []
+        if feed_version:
+            source_cmd_extra_arg += ["--name", name]
+            source_cmd_extra_arg += ["--version", version]
+        _logger_conan_clib.info("    exec conan cmd at %s: %s", recipe_dir,
+                                shlex.join(["conan", "source", "."] + source_cmd_extra_arg))
+        source_process = subprocess.Popen(
+            ["conan", "source", "."] + source_cmd_extra_arg,
+            cwd=recipe_dir,
+            env=env_src,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        source_stdout, _ = source_process.communicate()
+        ret = source_process.returncode
+        if ret != 0:
+            _pout = safe_decode_stdout(source_stdout)
+            _logger_conan_clib.error(_pout)
+            raise DistutilsSetupError(f"failed to obtain source for conan package! recipe_path: {recipe_path}")
+
+        # also set for global env
+        if env_srcdir_name not in env and env_srcdir_name in env_src:
+            env[env_srcdir_name] = env_src[env_srcdir_name]
+
     extra_args = []
+    if feed_version:
+        extra_args += ["--name", name]
+        extra_args += ["--version", version]
     if profile_path is not None:
         extra_args += ["-pr:a", os.path.normpath(os.path.abspath(os.path.expanduser(profile_path)))]
     if build_dir is not None:
@@ -156,8 +201,11 @@ def create_conan_package(package_name: str,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    ret = install_process.wait()
+    install_stdout, _ = install_process.communicate()
+    ret = install_process.returncode
     if ret != 0:
+        _pout = safe_decode_stdout(install_stdout)
+        _logger_conan_clib.error(_pout)
         raise DistutilsSetupError(f"failed to install conan package! recipe_path: {recipe_path}")
 
     _logger_conan_clib.info("    exec conan cmd at %s: %s", recipe_dir,
@@ -169,8 +217,11 @@ def create_conan_package(package_name: str,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    ret = build_process.wait()
+    build_stdout, _ = build_process.communicate()
+    ret = build_process.returncode
     if ret != 0:
+        _pout = safe_decode_stdout(build_stdout)
+        _logger_conan_clib.error(_pout)
         raise DistutilsSetupError(f"failed to create conan package! recipe_path: {recipe_path}")
 
     _logger_conan_clib.info("    exec conan cmd at %s: %s", recipe_dir,
@@ -182,8 +233,11 @@ def create_conan_package(package_name: str,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    ret = export_process.wait()
+    export_stdout, _ = export_process.communicate()
+    ret = export_process.returncode
     if ret != 0:
+        _pout = safe_decode_stdout(export_stdout)
+        _logger_conan_clib.error(_pout)
         raise DistutilsSetupError(f"failed to create conan package! recipe_path: {recipe_path}")
 
     if not detect_conan_package(package_name, conan_home_dir):
@@ -343,6 +397,8 @@ def build_clib(
             conan_home_dir=clib.conan_home_dir,
             profile_path=package_info.get("profile", None),
             build_dir=os.path.join(build_temp, "local_dep", package_name.replace('/', '++')),
+            obtain_source=package_info.get("obtain_source", False),
+            feed_version=package_info.get("feed_version", False),
         )
 
     # always create package
@@ -353,7 +409,9 @@ def build_clib(
                              recipe_path=conan_if.find_recipe(clib.sourcedir),
                              conan_home_dir=clib.conan_home_dir,
                              profile_path=conan_profile_path,
-                             build_dir=os.path.join(build_temp, clib.package_name.replace('/', '++')))
+                             build_dir=os.path.join(build_temp, clib.package_name.replace('/', '++')),
+                             obtain_source=clib.conan_obtain_source,
+                             feed_version=clib.conan_feed_version)
 
     # get package_id and filepath
     package_id = extract_conan_package_id(recipe_path=conan_if.find_recipe(clib.sourcedir),

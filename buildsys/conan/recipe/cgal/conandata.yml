@@ -1,0 +1,4 @@
+sources:
+    "6.1":
+      sha256: ef4861f1a55417d1e884306c9408ff64fdf39362a38443f17885c55f7f19278a
+      url: https://github.com/CGAL/cgal/releases/download/v6.1/CGAL-6.1-library.tar.xz

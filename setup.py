@@ -39,9 +39,16 @@ libraries = [
         targetdir=path_util.PathPrefixBuildLib("sim_estab"),
         build_type="Debug",  # TODO: use envvar
         conan_profile_path=str(here / "buildsys" / "conan" / "profile"),
-        conan_local_dep={"xorg/system": {
-            "package": str(here / "buildsys" / "conan" / "recipe" / "xorg"),
-        }}),
+        conan_local_dep={
+            "xorg/system": {
+                "package": str(here / "buildsys" / "conan" / "recipe" / "xorg"),
+            },
+            "cgal/6.1": {
+                "package": str(here / "buildsys" / "conan" / "recipe" / "cgal"),
+                "obtain_source": True,
+                "feed_version": True,
+            }
+        }),
 ]
 
 ext_modules = [
