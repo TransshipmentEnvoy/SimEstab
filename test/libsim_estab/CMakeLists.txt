@@ -38,6 +38,15 @@ set_target_properties(libsim_estab_tests PROPERTIES
     CXX_EXTENSIONS ON
 )
 
+# sanitizers
+if(LIBSIM_ESTAB__SANITIZE_ADDRESS)
+    target_enable_asan(libsim_estab_tests)
+endif()
+
+if(LIBSIM_ESTAB__SANITIZE_UNDEFINED)
+    target_enable_ubsan(libsim_estab_tests)
+endif()
+
 # Add test to CTest
 add_test(NAME libsim_estab_tests COMMAND libsim_estab_tests)
 

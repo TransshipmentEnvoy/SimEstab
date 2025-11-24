@@ -22,9 +22,12 @@ include(dep)
 include(cpp_standard)
 include(warning)
 include(lto)
+include(sanitizer)
 
 # option
 option(BUILD_TESTS "Build C++ tests for libsim_estab" OFF)
+option(LIBSIM_ESTAB__SANITIZE_ADDRESS "Enable address sanitizer for libsim_estab" OFF)
+option(LIBSIM_ESTAB__SANITIZE_UNDEFINED "Enable undefined behavior sanitizer for libsim_estab" OFF)
 
 # common path
 cmake_path(GET CMAKE_CURRENT_LIST_FILE PARENT_PATH project_path_current)
@@ -106,6 +109,14 @@ set_target_properties(sim_estab PROPERTIES
 # TODO: change symbol visibility in the future
 set_target_properties(sim_estab PROPERTIES
     WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+# sanitizers
+if(LIBSIM_ESTAB__SANITIZE_ADDRESS)
+    target_enable_asan(sim_estab)
+endif()
+
+if(LIBSIM_ESTAB__SANITIZE_UNDEFINED)
+    target_enable_ubsan(sim_estab)
+endif()
 
 # install
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/sim_estab)
