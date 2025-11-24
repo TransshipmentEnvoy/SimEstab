@@ -48,7 +48,7 @@ class RepoRecipe(ConanFile):
         self.requires("sdl/3.2.20")
 
         # geometry
-        # self.requires("cgal/6.0.2") # TODO: replace with custom recipe
+        self.requires("cgal/6.1")
         # self.requires("opencascade/7.9.1")  # TODO: replace with custom recipe
 
         # ecs

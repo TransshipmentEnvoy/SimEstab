@@ -39,6 +39,9 @@ message(STATUS "${PROJECT_NAME}: use range-v3: ${range-v3_DIR}")
 find_package(tsl-robin-map REQUIRED)
 message(STATUS "${PROJECT_NAME}: use tsl-robin-map: ${tsl-robin-map_DIR}")
 
+find_package(CGAL REQUIRED)
+message(STATUS "${PROJECT_NAME}: use CGAL: ${CGAL_DIR}")
+
 # nanobind extension
 nanobind_add_module(
     _if

@@ -49,8 +49,11 @@ message(STATUS "${PROJECT_NAME}: use range-v3: ${range-v3_DIR}")
 find_package(tsl-robin-map REQUIRED)
 message(STATUS "${PROJECT_NAME}: use tsl-robin-map: ${tsl-robin-map_DIR}")
 
-find_package (Eigen3 3.3 REQUIRED NO_MODULE)
+find_package(Eigen3 5 REQUIRED NO_MODULE)
 message(STATUS "${PROJECT_NAME}: use Eigen3: ${Eigen3_DIR}")
+
+find_package(CGAL REQUIRED)
+message(STATUS "${PROJECT_NAME}: use CGAL: ${CGAL_DIR}")
 
 ## dep: config
 find_package(nlohmann_json 3.11.0 REQUIRED)
@@ -84,8 +87,7 @@ target_sources(sim_estab PRIVATE
 target_sources(sim_estab PUBLIC
     FILE_SET CXX_MODULES FILES
     module/sim_estab.cppm
-    module/sim_estab--log.cppm
-)
+    module/sim_estab--log.cppm)
 target_link_libraries(sim_estab PUBLIC 
     Boost::headers
     Boost::filesystem
@@ -94,7 +96,8 @@ target_link_libraries(sim_estab PUBLIC
     range-v3::range-v3
     fmt::fmt
     rang::rang
-    tsl::robin_map)
+    tsl::robin_map
+    CGAL::CGAL)
 target_include_directories(sim_estab PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
     $<INSTALL_INTERFACE:include>)
