@@ -56,13 +56,14 @@ class RepoRecipe(ConanFile):
                 "sndio": False,
             },
         )
+        # vulkan backend & shader tools
+        self.requires("vulkan-loader/1.4.313.0")
+        self.requires("glslang/1.4.313.0")
+        self.requires("spirv-cross/1.4.313.0")
 
         # geometry
         self.requires("cgal/6.1")
         # self.requires("opencascade/7.9.1")  # TODO: replace with custom recipe
-
-        # vulkan backend
-        self.requires("vulkan-loader/1.4.313.0")
 
         # ecs
         self.requires("flecs/4.1.1")
