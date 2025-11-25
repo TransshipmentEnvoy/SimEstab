@@ -19,29 +19,6 @@ message(STATUS "use Python: ${Python_EXECUTABLE} ${Python_VERSION_STRING}")
 find_package(nanobind REQUIRED)
 message(STATUS "use nanobind: ${nanobind_DIR}")
 
-# dependency
-find_package(Boost REQUIRED COMPONENTS headers filesystem nowide log)
-message(STATUS "${PROJECT_NAME}: use boost: ${Boost_DIR}")
-# get_target_property(boost_headers_incs Boost::headers INTERFACE_INCLUDE_DIRECTORIES)
-# message(STATUS "Boost::headers INTERFACE_INCLUDE_DIRECTORIES = ${boost_headers_incs}")
-# get_target_property(boost_log_incs Boost::log INTERFACE_INCLUDE_DIRECTORIES)
-# message(STATUS "Boost::log INTERFACE_INCLUDE_DIRECTORIES = ${boost_log_incs}")
-
-find_package(fmt REQUIRED)
-message(STATUS "${PROJECT_NAME}: use fmt: ${fmt_DIR}")
-
-find_package(rang REQUIRED)
-message(STATUS "${PROJECT_NAME}: use rang: ${rang_DIR}")
-
-find_package(range-v3 REQUIRED)
-message(STATUS "${PROJECT_NAME}: use range-v3: ${range-v3_DIR}")
-
-find_package(tsl-robin-map REQUIRED)
-message(STATUS "${PROJECT_NAME}: use tsl-robin-map: ${tsl-robin-map_DIR}")
-
-find_package(CGAL REQUIRED)
-message(STATUS "${PROJECT_NAME}: use CGAL: ${CGAL_DIR}")
-
 # nanobind extension
 nanobind_add_module(
     _if

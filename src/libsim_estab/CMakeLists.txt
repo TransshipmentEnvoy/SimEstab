@@ -8,14 +8,16 @@ endif()
 # import early cmake module
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
-# project 
+# project
 project(libsim_estab)
+set(PROJECT_VERSION "0.0.1")
 
 # import cmake module
 enable_language(CXX)
 
 include(GNUInstallDirs)
 include(CMakePrintHelpers)
+include(CMakePackageConfigHelpers)
 
 include(util/expr_util)
 include(dep)
@@ -55,8 +57,17 @@ message(STATUS "${PROJECT_NAME}: use tsl-robin-map: ${tsl-robin-map_DIR}")
 find_package(Eigen3 5 REQUIRED NO_MODULE)
 message(STATUS "${PROJECT_NAME}: use Eigen3: ${Eigen3_DIR}")
 
+# geometry
 find_package(CGAL REQUIRED)
 message(STATUS "${PROJECT_NAME}: use CGAL: ${CGAL_DIR}")
+
+## dep: graphics
+find_package(SDL3 3.2 REQUIRED CONFIG COMPONENTS GPU)
+message(STATUS "${PROJECT_NAME}: using SDL3 from ${SDL3_DIR}")
+
+## dep: vulkan
+find_package(Vulkan REQUIRED)
+message(STATUS "${PROJECT_NAME}: using Vulkan version ${Vulkan_VERSION}")
 
 ## dep: config
 find_package(nlohmann_json 3.11.0 REQUIRED)
@@ -76,22 +87,17 @@ set_target_properties(sim_estab PROPERTIES CXX_STANDARD 23)
 set_target_properties(sim_estab PROPERTIES CXX_EXTENSION ON)
 target_compile_features(sim_estab PUBLIC cxx_std_23)
 target_sources(sim_estab PRIVATE
-    # include/lib.old.h
-    # include/log.old.h
-    # impl detail headers
-    # src/log.detail.hpp
     # module-based implementation (imports module, not a module unit itself)
     src/log.cpp
-    # legacy cpp files (kept for reference, not compiled)
-    # src/lib.cpp
-    # src/log.old.cpp
+    src/sim_estab.viz/viz.cpp
 )
 # C++20 module sources
 target_sources(sim_estab PUBLIC
     FILE_SET CXX_MODULES FILES
     module/sim_estab.cppm
-    module/sim_estab--log.cppm)
-target_link_libraries(sim_estab PUBLIC 
+    module/sim_estab--log.cppm
+    module/sim_estab.viz/viz.cppm)
+target_link_libraries(sim_estab PUBLIC
     Boost::headers
     Boost::filesystem
     Boost::nowide
@@ -100,7 +106,11 @@ target_link_libraries(sim_estab PUBLIC
     fmt::fmt
     rang::rang
     tsl::robin_map
+    Eigen3::Eigen
     CGAL::CGAL)
+target_link_libraries(sim_estab PRIVATE
+    SDL3::SDL3
+    Vulkan::Vulkan)
 target_include_directories(sim_estab PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
     $<INSTALL_INTERFACE:include>)
@@ -126,10 +136,31 @@ install(TARGETS sim_estab
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     FILE_SET CXX_MODULES DESTINATION ${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME})
+# Generate config file from template
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/libsim_estab-config.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/libsim_estab-config.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libsim_estab
+)
+# Generate version file
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/libsim_estab-config-version.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+# Install targets export (generates libsim_estab-targets.cmake)
 install(EXPORT libsim_estab
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libsim_estab
     NAMESPACE libsim_estab::
-    FILE libsim_estab-config.cmake)
+    FILE libsim_estab-targets.cmake
+)
+
+# Install config files
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/libsim_estab-config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/libsim_estab-config-version.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libsim_estab
+)
 
 # install dep
 # install(IMPORTED_RUNTIME_ARTIFACTS spdlog::spdlog

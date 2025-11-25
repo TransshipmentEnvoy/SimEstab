@@ -47,6 +47,11 @@ libraries = [
                 "package": str(here / "buildsys" / "conan" / "recipe" / "cgal"),
                 "obtain_source": True,
                 "feed_version": True,
+            },
+            "sdl/3.2.26": {
+                "package": str(here / "buildsys" / "conan" / "recipe" / "sdl"),
+                "obtain_source": True,
+                "feed_version": True,
             }
         }),
 ]

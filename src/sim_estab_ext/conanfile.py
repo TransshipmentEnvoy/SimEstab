@@ -42,7 +42,17 @@ class RepoRecipe(ConanFile):
         self.requires("boost-ext-ut/2.3.1")
 
         # graphics
-        self.requires("sdl/3.2.20")
+        self.requires(
+            "sdl/3.2.26",
+            options={
+                "shared": True,
+                "gpu": True,
+                # "pipewire": True, # TODO: currently not supported in conan-center-index
+                # some unwanted components
+                "opengles": False,
+                "sndio": False,
+            },
+        )
 
         # geometry
         self.requires("cgal/6.1")

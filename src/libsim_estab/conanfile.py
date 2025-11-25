@@ -20,7 +20,7 @@ class RepoRecipe(ConanFile):
 
     def requirements(self):
         # util
-        self.requires("boost/1.89.0")
+        self.requires("boost/1.89.0", options={"shared": True})
 
         self.requires("fmt/12.1.0")
         self.requires("rang/3.2")
@@ -45,17 +45,30 @@ class RepoRecipe(ConanFile):
         self.requires("boost-ext-ut/2.3.1")
 
         # graphics
-        self.requires("sdl/3.2.20")
+        self.requires(
+            "sdl/3.2.26",
+            options={
+                "shared": True,
+                "gpu": True,
+                # "pipewire": True, # TODO: currently not supported in conan-center-index
+                # some unwanted components
+                "opengles": False,
+                "sndio": False,
+            },
+        )
 
         # geometry
         self.requires("cgal/6.1")
         # self.requires("opencascade/7.9.1")  # TODO: replace with custom recipe
 
+        # vulkan backend
+        self.requires("vulkan-loader/1.4.313.0")
+
         # ecs
         self.requires("flecs/4.1.1")
 
     def configure(self):
-        self.options["boost"].shared = True
+        pass
 
     def layout(self):
         cmake_layout(self)  # TODO: override the layout for package dir
