@@ -46,7 +46,7 @@ class RepoRecipe(ConanFile):
 
         # graphics
         self.requires(
-            "sdl/3.2.26",
+            "sdl/3.3.2",
             options={
                 "shared": True,
                 "gpu": True,
@@ -54,6 +54,7 @@ class RepoRecipe(ConanFile):
                 # some unwanted components
                 "opengles": False,
                 "sndio": False,
+                "pulseaudio": False,
             },
         )
         # vulkan backend & shader tools

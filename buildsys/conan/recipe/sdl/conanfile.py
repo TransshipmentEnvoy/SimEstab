@@ -80,11 +80,11 @@ class SDLConan(ConanFile):
             ## Audio
             # Linux only
             "alsa": True,
-            "pulseaudio": True,
-            "sndio": True,
+            "pulseaudio": False,  # True,
+            "sndio": False,  # True,
             ## Video
             "opengl": True,
-            "opengles": True,
+            "opengles": False,  # True,
             "x11": True,
             "xcursor": True,
             "xdbe": True,
