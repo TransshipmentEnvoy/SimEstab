@@ -3,7 +3,7 @@ os=Linux
 arch=x86_64
 compiler=gcc
 compiler.cppstd=gnu23
-compiler.version=14
+compiler.version=15
 compiler.libcxx=libstdc++11
 build_type=Release
 
