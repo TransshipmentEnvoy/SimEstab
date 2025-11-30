@@ -107,9 +107,23 @@ class RepoRecipe(ConanFile):
                     if os.path.exists(bin_path):
                         files.copy(self, "*.dll", src=bin_path, dst=os.path.join(self.package_folder, "bin"))
                 else:
-                    # On Linux/macOS
-                    files.copy(self, "libboost_*.so*", src=lib_path, dst=os.path.join(self.package_folder, "lib"))
-                    files.copy(self, "libboost_*.dylib*", src=lib_path, dst=os.path.join(self.package_folder, "lib"))
+                    # On Linux
+                    files.copy(self, "libboost_*.so.*", src=lib_path, dst=os.path.join(self.package_folder, "lib"))
+                    # files.copy(self, "libboost_*.dylib*", src=lib_path, dst=os.path.join(self.package_folder, "lib"))
+
+        # copy the sdl shared libraries
+        sdl_dep = self.dependencies["sdl"]
+        sdl_cpp_info = sdl_dep.cpp_info
+        for lib_dir in sdl_cpp_info.libdirs:
+            lib_path = os.path.join(sdl_dep.package_folder, lib_dir)
+            if os.path.exists(lib_path):
+                if self.settings.os == "Windows":
+                    bin_path = os.path.join(sdl_dep.package_folder, "bin")
+                    if os.path.exists(bin_path):
+                        files.copy(self, "SDL3.dll", src=bin_path, dst=os.path.join(self.package_folder, "bin"))
+                else:
+                    files.copy(self, "libSDL3.so.0", src=lib_path, dst=os.path.join(self.package_folder, "lib"))
+                    # files.copy(self, "libSDL3.dylib*", src=lib_path, dst=os.path.join(self.package_folder, "lib"))
 
     def package_info(self):
         print(self.env_info)
