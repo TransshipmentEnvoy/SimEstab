@@ -218,7 +218,8 @@ cython_debug/
 
 # conan
 /buildsys/conan_home/*
-!/buildsys/conan_home/profiles
+#!/buildsys/conan_home/profiles
+!/buildsys/conan_home/.gitkeep
 
 # editable install
 /src/sim_estab/lib
