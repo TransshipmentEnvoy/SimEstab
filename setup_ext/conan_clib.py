@@ -40,6 +40,7 @@ class ConanClib:
         conan_profile_path: str = None,
         conan_home_dir: str = None,
         conan_local_dep: dict[str, dict[str, str]] = None,
+        conan_option: dict[str, str] = None,
         conan_obtain_source: bool = False,
         conan_feed_version: bool = False,
     ) -> None:
@@ -66,6 +67,9 @@ class ConanClib:
 
         # check conan local dep, bundled conanfiles for customization
         self.conan_local_dep = conan_local_dep if conan_local_dep is not None else {}
+
+        # conan option for recipe
+        self.conan_option = conan_option if conan_option is not None else {}
 
         # conan build misc config
         self.conan_obtain_source = conan_obtain_source
@@ -140,6 +144,7 @@ def create_conan_package(package_name: str,
                          conan_home_dir: str = None,
                          profile_path: str = None,
                          build_dir: str = None,
+                         conan_option: dict[str, str] = None,
                          obtain_source: bool = False,
                          feed_version: bool = False):
     env = os.environ.copy()
@@ -191,6 +196,9 @@ def create_conan_package(package_name: str,
         extra_args += ["-pr:a", os.path.normpath(os.path.abspath(os.path.expanduser(profile_path)))]
     if build_dir is not None:
         extra_args += ["-of", os.path.normpath(os.path.abspath(os.path.expanduser(build_dir)))]
+    if conan_option:
+        for key, value in conan_option.items():
+            extra_args += ["-o", f"{key}={value}"]
 
     _logger_conan_clib.info("    exec conan cmd at %s: %s", recipe_dir,
                             shlex.join(["conan", "install", "."] + ["--build", "missing"] + extra_args))
@@ -399,6 +407,7 @@ def build_clib(
             build_dir=os.path.join(build_temp, "local_dep", package_name.replace('/', '++')),
             obtain_source=package_info.get("obtain_source", False),
             feed_version=package_info.get("feed_version", False),
+            conan_option=package_info.get("conan_option", None),
         )
 
     # always create package
@@ -411,7 +420,8 @@ def build_clib(
                              profile_path=conan_profile_path,
                              build_dir=os.path.join(build_temp, clib.package_name.replace('/', '++')),
                              obtain_source=clib.conan_obtain_source,
-                             feed_version=clib.conan_feed_version)
+                             feed_version=clib.conan_feed_version,
+                             conan_option=clib.conan_option)
 
     # get package_id and filepath
     package_id = extract_conan_package_id(recipe_path=conan_if.find_recipe(clib.sourcedir),
