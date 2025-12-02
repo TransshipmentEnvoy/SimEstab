@@ -129,11 +129,14 @@ set_target_properties(sim_estab PROPERTIES
 # TODO: change symbol visibility in the future
 set_target_properties(sim_estab PROPERTIES
     WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+# LTO - enable if supported (required for cross-module inlining)
+if(LTO_SUPPORTED)
+    target_enable_lto(sim_estab)
+endif()
 # sanitizers
 if(LIBSIM_ESTAB__SANITIZE_ADDRESS)
     target_enable_asan(sim_estab)
 endif()
-
 if(LIBSIM_ESTAB__SANITIZE_UNDEFINED)
     target_enable_ubsan(sim_estab)
 endif()
