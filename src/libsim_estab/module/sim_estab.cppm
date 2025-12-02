@@ -17,6 +17,7 @@ export module sim_estab;
 
 // Re-export all submodules
 export import :log;
+export import :gpu;
 
 /**
  * @namespace sim_estab
@@ -27,9 +28,11 @@ export import :log;
  * - Python bindings via nanobind
  * - Modular architecture with C++20 modules
  * - Comprehensive logging system
+ * - GPU compute capabilities
  * - Cross-platform support
  *
  * The library is organized into the following namespaces:
  * - sim_estab::core::log - Hierarchical logging system
+ * - sim_estab::core::gpu - Headless GPU compute context
  * - (Additional subsystems to be added as modules are migrated)
  */
