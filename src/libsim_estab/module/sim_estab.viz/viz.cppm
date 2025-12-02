@@ -8,7 +8,6 @@
 // Global module fragment
 module;
 
-#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -89,12 +88,23 @@ public:
 
     // GPU queries
     GPUDeviceInfo get_gpu_info() const;
-    bool has_gpu_device() const;
+
+    [[nodiscard]] inline bool has_gpu_device() const noexcept;
 
 private:
-    // Opaque pointer to implementation details (SDL_Window*, SDL_GPUDevice*)
+    // Fast Pimpl implementation using Small Buffer Optimization (SBO)
+    // Avoids heap allocation for the Impl struct
     struct Impl;
-    Impl *impl_;
+    static constexpr size_t ImplSize  = 256; // Sufficient for SDL pointers + metadata
+    static constexpr size_t ImplAlign = alignof(void *);
+
+    alignas(ImplAlign) unsigned char impl_buffer_[ImplSize];
+    // Cached pointer to Impl - avoids repeated std::launder calls
+    // nullptr indicates Impl is not constructed
+    Impl *impl_ = nullptr;
+
+    // Check impl_ is valid, aborts on null (always checked, even in release)
+    void check_impl() const noexcept;
 };
 
 } // namespace sim_estab::viz

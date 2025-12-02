@@ -7,6 +7,7 @@ module;
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 
+#include <cstdlib>
 #include <memory>
 #include <utility>
 
@@ -18,6 +19,15 @@ using namespace sim_estab::core::log;
 
 namespace sim_estab::viz {
 
+// Debug check function implementation
+void VizContext::check_impl() const noexcept {
+    if (impl_ == nullptr) [[unlikely]] {
+        sim_estab_log("sim_estab.viz", severity_level::critical,
+                      "FATAL: Accessing uninitialized VizContext - this is a programming error");
+        std::abort();
+    }
+}
+
 // Implementation struct holding SDL resources
 struct VizContext::Impl {
     SDL_Window *window        = nullptr;
@@ -28,6 +38,12 @@ struct VizContext::Impl {
     bool sdl_initialized = false;
 
     Impl() = default;
+
+    // Non-copyable, non-movable (managed by VizContext)
+    Impl(const Impl&)            = delete;
+    Impl& operator=(const Impl&) = delete;
+    Impl(Impl&&)                 = delete;
+    Impl& operator=(Impl&&)      = delete;
 
     ~Impl() { cleanup(); }
 
@@ -54,7 +70,14 @@ struct VizContext::Impl {
 };
 
 // Constructor
-VizContext::VizContext(int width, int height, std::string_view title, bool resizable) : impl_(new Impl()) {
+VizContext::VizContext(int width, int height, std::string_view title, bool resizable) {
+    // Ensure our buffer is large enough
+    static_assert(sizeof(Impl) <= ImplSize, "Impl size exceeds SBO buffer size");
+    static_assert(alignof(Impl) <= ImplAlign, "Impl alignment exceeds SBO buffer alignment");
+
+    // Construct Impl in-place using placement new and cache the pointer
+    impl_ = new (impl_buffer_) Impl();
+
     sim_estab_log("sim_estab.viz", severity_level::info, "Initializing VizContext (", width, "x", height, ", \"", title,
                   "\")");
 
@@ -62,8 +85,8 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         const char *error = SDL_GetError();
         sim_estab_log("sim_estab.viz", severity_level::error, "SDL_Init failed: ", error);
-        delete impl_;
-        impl_ = nullptr;
+        impl_->~Impl();  // Explicitly destroy on error
+        impl_ = nullptr; // Mark as destroyed
         throw viz_error(std::string("SDL initialization failed: ") + error);
     }
     impl_->sdl_initialized = true;
@@ -127,21 +150,76 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
 // Destructor
 VizContext::~VizContext() noexcept {
     if (impl_) {
-        delete impl_;
+        // Explicitly call destructor for placement new object
+        impl_->~Impl();
         impl_ = nullptr;
     }
 }
 
 // Move constructor
-VizContext::VizContext(VizContext&& other) noexcept : impl_(other.impl_) { other.impl_ = nullptr; }
+VizContext::VizContext(VizContext&& other) noexcept
+    : impl_(nullptr) // Initialize before constructing
+{
+    // Check if other is initialized
+    if (!other.impl_) {
+        // Other is not initialized, so we also remain uninitialized
+        return;
+    }
+
+    // Construct new Impl in our buffer and cache the pointer
+    impl_ = new (impl_buffer_) Impl();
+
+    // Transfer ownership (shallow copy of pointers)
+    impl_->window          = other.impl_->window;
+    impl_->gpu_device      = other.impl_->gpu_device;
+    impl_->width           = other.impl_->width;
+    impl_->height          = other.impl_->height;
+    impl_->title           = std::move(other.impl_->title);
+    impl_->sdl_initialized = other.impl_->sdl_initialized;
+
+    // Null out the source to prevent double-free
+    other.impl_->window          = nullptr;
+    other.impl_->gpu_device      = nullptr;
+    other.impl_->sdl_initialized = false;
+
+    // Destroy source Impl and mark as destroyed
+    other.impl_->~Impl();
+    other.impl_ = nullptr;
+}
 
 // Move assignment
 VizContext& VizContext::operator=(VizContext&& other) noexcept {
     if (this != &other) {
+        // Destroy current impl if it exists
         if (impl_) {
-            delete impl_;
+            impl_->~Impl();
+            impl_ = nullptr;
         }
-        impl_       = other.impl_;
+
+        // Check if other is initialized
+        if (!other.impl_) {
+            // Other is not initialized, so we also remain uninitialized
+            return *this;
+        }
+
+        // Construct new Impl in our buffer and cache the pointer
+        impl_ = new (impl_buffer_) Impl();
+
+        // Transfer ownership
+        impl_->window          = other.impl_->window;
+        impl_->gpu_device      = other.impl_->gpu_device;
+        impl_->width           = other.impl_->width;
+        impl_->height          = other.impl_->height;
+        impl_->title           = std::move(other.impl_->title);
+        impl_->sdl_initialized = other.impl_->sdl_initialized;
+
+        // Null out the source
+        other.impl_->window          = nullptr;
+        other.impl_->gpu_device      = nullptr;
+        other.impl_->sdl_initialized = false;
+
+        // Destroy source Impl and mark as destroyed
+        other.impl_->~Impl();
         other.impl_ = nullptr;
     }
     return *this;
@@ -149,52 +227,60 @@ VizContext& VizContext::operator=(VizContext&& other) noexcept {
 
 // Window state control
 void VizContext::show() {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         SDL_ShowWindow(impl_->window);
     }
 }
 
 void VizContext::hide() {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         SDL_HideWindow(impl_->window);
     }
 }
 
 void VizContext::minimize() {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         SDL_MinimizeWindow(impl_->window);
     }
 }
 
 void VizContext::maximize() {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         SDL_MaximizeWindow(impl_->window);
     }
 }
 
 void VizContext::restore() {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         SDL_RestoreWindow(impl_->window);
     }
 }
 
 // Window state queries
 bool VizContext::is_visible() const {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_HIDDEN) == 0;
     }
     return false;
 }
 
 bool VizContext::is_minimized() const {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_MINIMIZED) != 0;
     }
     return false;
 }
 
 bool VizContext::is_maximized() const {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_MAXIMIZED) != 0;
     }
     return false;
@@ -202,46 +288,49 @@ bool VizContext::is_maximized() const {
 
 // Window property queries
 int VizContext::get_width() const {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         int w, h;
         SDL_GetWindowSize(impl_->window, &w, &h);
         return w;
     }
-    return impl_ ? impl_->width : 0;
+    return impl_->width;
 }
 
 int VizContext::get_height() const {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         int w, h;
         SDL_GetWindowSize(impl_->window, &w, &h);
         return h;
     }
-    return impl_ ? impl_->height : 0;
+    return impl_->height;
 }
 
 std::string VizContext::get_title() const {
-    if (impl_ && impl_->window) {
+    check_impl();
+    if (impl_->window) {
         const char *title = SDL_GetWindowTitle(impl_->window);
         return title ? std::string(title) : std::string();
     }
-    return impl_ ? impl_->title : std::string();
+    return impl_->title;
 }
 
 void VizContext::set_title(std::string_view title) {
-    if (impl_) {
-        impl_->title = title;
-        if (impl_->window) {
-            SDL_SetWindowTitle(impl_->window, impl_->title.c_str());
-        }
+    check_impl();
+    impl_->title = title;
+    if (impl_->window) {
+        SDL_SetWindowTitle(impl_->window, impl_->title.c_str());
     }
 }
 
 // GPU queries
 GPUDeviceInfo VizContext::get_gpu_info() const {
+    check_impl();
     GPUDeviceInfo info{};
     info.backend = GPUBackend::Unknown;
 
-    if (impl_ && impl_->gpu_device) {
+    if (impl_->gpu_device) {
         // Get the backend driver name from SDL
         const char *driver_name = SDL_GetGPUDeviceDriver(impl_->gpu_device);
         if (driver_name) {
@@ -260,6 +349,10 @@ GPUDeviceInfo VizContext::get_gpu_info() const {
     return info;
 }
 
-bool VizContext::has_gpu_device() const { return impl_ && impl_->gpu_device != nullptr; }
+// Inline implementation for has_gpu_device
+bool VizContext::has_gpu_device() const noexcept {
+    check_impl();
+    return impl_->gpu_device != nullptr;
+}
 
 } // namespace sim_estab::viz
