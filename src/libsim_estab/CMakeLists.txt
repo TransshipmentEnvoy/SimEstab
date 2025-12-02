@@ -25,6 +25,7 @@ include(cpp_standard)
 include(warning)
 include(lto)
 include(sanitizer)
+include(shader_tools)
 
 # option
 option(BUILD_TESTS "Build C++ tests for libsim_estab" OFF)
@@ -68,6 +69,13 @@ message(STATUS "${PROJECT_NAME}: using SDL3 from ${SDL3_DIR}")
 ## dep: vulkan
 find_package(Vulkan REQUIRED)
 message(STATUS "${PROJECT_NAME}: using Vulkan version ${Vulkan_VERSION}")
+
+## dep: shader tools
+find_package(glslang REQUIRED)
+message(STATUS "${PROJECT_NAME}: use glslang: ${glslang_DIR}")
+find_package(spirv-cross REQUIRED)
+message(STATUS "${PROJECT_NAME}: use spirv-cross: ${spirv-cross_DIR}")
+find_shader_tools()
 
 ## dep: config
 find_package(nlohmann_json 3.11.0 REQUIRED)
