@@ -89,13 +89,15 @@ target_compile_features(sim_estab PUBLIC cxx_std_23)
 target_sources(sim_estab PRIVATE
     # module-based implementation (imports module, not a module unit itself)
     src/log.cpp
-    src/sim_estab.viz/viz.cpp
+    src/gpu.cpp
+    src/viz/viz.cpp
 )
 # C++20 module sources
 target_sources(sim_estab PUBLIC
     FILE_SET CXX_MODULES FILES
     module/sim_estab.cppm
     module/sim_estab--log.cppm
+    module/sim_estab--gpu.cppm
     module/sim_estab.viz/viz.cppm)
 target_link_libraries(sim_estab PUBLIC
     Boost::headers
