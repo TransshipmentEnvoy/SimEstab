@@ -89,7 +89,7 @@ public:
     // GPU queries
     GPUDeviceInfo get_gpu_info() const;
 
-    [[nodiscard]] inline bool has_gpu_device() const noexcept;
+    [[nodiscard]] bool has_gpu_device() const noexcept;
 
 private:
     // Fast Pimpl implementation using Small Buffer Optimization (SBO)
