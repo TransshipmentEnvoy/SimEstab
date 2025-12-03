@@ -8,8 +8,10 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <chrono>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <utility>
 
 // compat headers
@@ -75,6 +77,10 @@ BOOST_AUTO_TEST_CASE(test_viz_context_creation,
     BOOST_TEST(ctx.has_gpu_device());
     BOOST_TEST(ctx.get_width() == 1280);
     BOOST_TEST(ctx.get_height() == 720);
+
+    // Show window for visual verification
+    ctx.show();
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 }
 
 /**
@@ -97,8 +103,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_custom_params,
  * @brief Test VizContext window visibility
  */
 BOOST_AUTO_TEST_CASE(test_viz_context_visibility,
-                     *utf::precondition(requires_display) *
-                         utf::description("Test VizContext show/hide operations")) {
+                     *utf::precondition(requires_display) * utf::description("Test VizContext show/hide operations")) {
     VizContext ctx(640, 480, "Visibility Test");
 
     // Initially hidden (created with SDL_WINDOW_HIDDEN)
@@ -114,9 +119,8 @@ BOOST_AUTO_TEST_CASE(test_viz_context_visibility,
 /**
  * @brief Test VizContext move semantics
  */
-BOOST_AUTO_TEST_CASE(test_viz_context_move,
-                     *utf::precondition(requires_display) *
-                         utf::description("Test VizContext move constructor and assignment")) {
+BOOST_AUTO_TEST_CASE(test_viz_context_move, *utf::precondition(requires_display) *
+                                                utf::description("Test VizContext move constructor and assignment")) {
     VizContext ctx1(800, 600, "Original");
     BOOST_TEST(ctx1.has_gpu_device());
 
@@ -136,8 +140,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_move,
  * @brief Test VizContext GPU info retrieval
  */
 BOOST_AUTO_TEST_CASE(test_viz_context_gpu_info,
-                     *utf::precondition(requires_display) *
-                         utf::description("Test VizContext GPU device info")) {
+                     *utf::precondition(requires_display) * utf::description("Test VizContext GPU device info")) {
     VizContext ctx;
 
     auto info = ctx.get_gpu_info();
@@ -151,8 +154,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_gpu_info,
  * @brief Test VizContext title modification
  */
 BOOST_AUTO_TEST_CASE(test_viz_context_set_title,
-                     *utf::precondition(requires_display) *
-                         utf::description("Test VizContext title modification")) {
+                     *utf::precondition(requires_display) * utf::description("Test VizContext title modification")) {
     VizContext ctx(640, 480, "Initial Title");
 
     BOOST_TEST(ctx.get_title() == "Initial Title");
