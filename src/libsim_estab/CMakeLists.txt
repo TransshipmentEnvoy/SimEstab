@@ -130,8 +130,9 @@ set_target_properties(sim_estab PROPERTIES
 set_target_properties(sim_estab PROPERTIES
     WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
 # LTO - enable if supported (required for cross-module inlining)
+# Only enable LTO for Release-related builds, not for Debug
 if(LTO_SUPPORTED)
-    target_enable_lto(sim_estab)
+    target_enable_lto_release_only(sim_estab)
 endif()
 # sanitizers
 if(LIBSIM_ESTAB__SANITIZE_ADDRESS)
