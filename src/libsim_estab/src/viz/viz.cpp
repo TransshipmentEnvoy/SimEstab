@@ -114,9 +114,15 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
     sim_estab_log("sim_estab.viz", severity_level::debug, "Window created successfully");
 
     // Create GPU device (prefer Vulkan)
-    impl_->gpu_device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL,
-                                            true, // debug mode
-                                            nullptr);
+    // Note: debug_mode enables Vulkan validation layers which can cause issues
+    // with Wayland + NVIDIA drivers. Disable for stability if needed.
+#ifdef NDEBUG
+    constexpr bool gpu_debug_mode = false;
+#else
+    constexpr bool gpu_debug_mode = true;
+#endif
+    impl_->gpu_device =
+        SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL, gpu_debug_mode, nullptr);
 
     if (!impl_->gpu_device) {
         const char *error = SDL_GetError();
