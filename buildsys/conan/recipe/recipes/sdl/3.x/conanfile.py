@@ -194,7 +194,31 @@ class SDLConan(ConanFile):
         cmake_layout(self, src_folder=src_folder)
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version], strip_root=True)
+        # Determine local source directory
+        base_source_tar_dir = os.environ.get("SETUP_EXT__CONAN_DOWNLOADED_SOURCE__sdl", None)
+        if base_source_tar_dir is None:
+            # Default: buildsys/source_tar/sdl relative to recipe location
+            recipe_dir = os.path.dirname(os.path.abspath(__file__))
+            base_source_tar_dir = os.path.join(recipe_dir, "..", "..", "..", "..", "source_tar", "sdl")
+
+        base_source_tar_dir = os.path.normpath(os.path.abspath(os.path.expanduser(base_source_tar_dir)))
+
+        # Extract filename from URL in conandata
+        source_info = self.conan_data["sources"][self.version]
+        url = source_info["url"]
+        filename = url.split("/")[-1]  # Get filename from URL
+
+        local_tar_path = os.path.join(base_source_tar_dir, filename)
+
+        # Check if local tar exists
+        if os.path.isfile(local_tar_path):
+            self.output.info(f"Using local source archive: {local_tar_path}")
+            # Use local file with SHA256 verification
+            get(self, url=f"file://{local_tar_path}", sha256=source_info["sha256"], strip_root=True)
+        else:
+            # Fall back to remote download
+            self.output.info(f"Local source not found at {local_tar_path}, downloading from remote")
+            get(self, **source_info, strip_root=True)
 
         # Prevent inspecting target properties for libusb to derive the name of the .so/.dll
         # instead, just link the library normally, see

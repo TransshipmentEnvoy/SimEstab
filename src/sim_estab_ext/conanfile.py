@@ -43,7 +43,7 @@ class RepoRecipe(ConanFile):
 
         # graphics
         self.requires(
-            "sdl/3.3.2",
+            "sdl/3.3.6",
             options={
                 "shared": True,
                 "gpu": True,
