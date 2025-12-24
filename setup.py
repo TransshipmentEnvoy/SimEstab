@@ -40,19 +40,20 @@ libraries = [
         build_type="Debug",  # TODO: use envvar
         conan_profile_path=str(here / "buildsys" / "conan" / "profile"),
         conan_local_dep={
-            "xorg/system": {
-                "package": str(here / "buildsys" / "conan" / "recipe" / "xorg"),
-            },
-            "cgal/6.1": {
-                "package": str(here / "buildsys" / "conan" / "recipe" / "cgal"),
-                "obtain_source": True,
-                "feed_version": True,
-            },
-            "sdl/3.3.2": {
-                "package": str(here / "buildsys" / "conan" / "recipe" / "sdl"),
-                "obtain_source": True,
-                "feed_version": True,
-            }
+            # * NOTE: conan_local_dep mechanism disabled, now using bundled-recipe-repo remote for automatic resolution
+            # "xorg/system": {
+            #     "package": str(here / "buildsys" / "conan" / "recipe" / "xorg"),
+            # },
+            # "cgal/6.1": {
+            #     "package": str(here / "buildsys" / "conan" / "recipe" / "cgal"),
+            #     "obtain_source": True,
+            #     "feed_version": True,
+            # },
+            # "sdl/3.3.6": {
+            #     "package": str(here / "buildsys" / "conan" / "recipe" / "sdl"),
+            #     "obtain_source": True,
+            #     "feed_version": True,
+            # }
         }),
 ]
 

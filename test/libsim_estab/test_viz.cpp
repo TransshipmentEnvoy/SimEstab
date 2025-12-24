@@ -80,6 +80,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_creation,
 
     // Show window for visual verification
     ctx.show();
+    ctx.clear();
     std::this_thread::sleep_for(std::chrono::seconds(2));
 }
 
