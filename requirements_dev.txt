@@ -6,14 +6,14 @@
 #
 --index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
-black==25.11.0
+black==25.12.0
 build==1.3.0
 certifi==2025.11.12
 chardet==5.2.0
 charset-normalizer==3.4.4
 click==8.3.1
 colorama==0.4.6
-conan==2.23.0
+conan==2.24.0
 distro==1.9.0
 fasteners==0.20
 flake8==7.3.0
@@ -21,25 +21,25 @@ idna==3.11
 iniconfig==2.3.0
 isort==7.0.0
 jinja2==3.1.6
-librt==0.6.3
+librt==0.7.6
 markupsafe==3.0.3
 mccabe==0.7.0
-mypy==1.19.0
+mypy==1.19.1
 mypy-extensions==1.1.0
-nanobind==2.9.2
+nanobind==2.10.2
 ninja==1.13.0
 packaging==25.0
 patch-ng==1.18.1
 pathspec==0.12.1
 pip-tools==7.5.2
-platformdirs==4.5.0
+platformdirs==4.5.1
 pluggy==1.6.0
 pycodestyle==2.14.0
 pyflakes==3.4.0
 pygments==2.19.2
 pyproject-hooks==1.2.0
 pysocks==1.7.1
-pytest==9.0.1
+pytest==9.0.2
 python-dateutil==2.9.0.post0
 pytokens==0.3.0
 pytoolconfig[global]==1.3.1
@@ -48,7 +48,7 @@ requests==2.32.5
 rope==1.14.0
 six==1.17.0
 typing-extensions==4.15.0
-urllib3==2.5.0
+urllib3==2.6.2
 wheel==0.45.1
 yapf==0.43.0
 
