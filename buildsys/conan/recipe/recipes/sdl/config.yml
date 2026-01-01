@@ -5,3 +5,5 @@ versions:
     folder: 3.x
   "3.3.6":
     folder: 3.x
+  "3.4.0":
+    folder: 3.x

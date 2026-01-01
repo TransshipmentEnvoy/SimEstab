@@ -45,6 +45,7 @@ class SDLConan(ConanFile):
         **{
             "alsa": [True, False],
             "pulseaudio": [True, False],
+            "pipewire": [True, False],
             "sndio": [True, False],
             "opengl": [True, False],
             "opengles": [True, False],
@@ -79,8 +80,9 @@ class SDLConan(ConanFile):
         **{
             ## Audio
             # Linux only
-            "alsa": True,
+            "alsa": False,
             "pulseaudio": False,  # True,
+            "pipewire": True,
             "sndio": False,  # True,
             ## Video
             "opengl": True,
@@ -113,6 +115,7 @@ class SDLConan(ConanFile):
 
         if not self._is_unix_sys:
             del self.options.pulseaudio
+            del self.options.pipewire
             del self.options.alsa
             del self.options.sndio
             del self.options.libudev
@@ -145,6 +148,7 @@ class SDLConan(ConanFile):
         if not self.options.get_safe("audio"):
             self.options.rm_safe("alsa")
             self.options.rm_safe("pulseaudio")
+            self.options.rm_safe("pipewire")
             self.options.rm_safe("sndio")
 
         if not self.options.get_safe("video"):
@@ -261,9 +265,11 @@ class SDLConan(ConanFile):
             self.requires("libalsa/[>=1.2 <1.3]")
         if self.options.get_safe("sndio"):
             self.requires("libsndio/1.9.0")
+        if self.options.get_safe("pipewire"):
+            self.requires("pipewire/system")
         if self.options.get_safe("wayland"):
-            self.requires("wayland/1.22.0")
-            self.requires("xkbcommon/1.6.0")
+            self.requires("wayland/system")
+            self.requires("xkbcommon/system")
             self.requires("egl/system")
         if self.options.get_safe("x11"):
             self.requires("xorg/system")
@@ -272,8 +278,6 @@ class SDLConan(ConanFile):
         self.tool_requires("cmake/[>=3.24 <4]")
         if self._is_unix_sys and not self.conf.get("tools.gnu:pkg_config", check_type=str):
             self.tool_requires("pkgconf/[>=2.2 <3]")
-        if self.options.get_safe("wayland"):
-            self.tool_requires("wayland/<host_version>")  # Provides wayland-scanner
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -318,6 +322,9 @@ class SDLConan(ConanFile):
         if self.options.get_safe("sndio"):
             tc.cache_variables["SDL_SNDIO"] = True
             tc.cache_variables["SDL_SNDIO_SHARED"] = True  # sndio is always shared
+        if self.options.get_safe("pipewire"):
+            tc.cache_variables["SDL_PIPEWIRE"] = True
+            tc.cache_variables["SDL_PIPEWIRE_SHARED"] = True  # system pipewire is shared
         tc.cache_variables["SDL_LIBUDEV"] = self.options.get_safe("libudev", False)
 
         # X11 and wayland configuration
@@ -339,7 +346,7 @@ class SDLConan(ConanFile):
         with_wayland = self.options.get_safe("wayland", False)
         tc.cache_variables["SDL_WAYLAND"] = with_wayland
         if with_wayland:
-            tc.cache_variables["SDL_WAYLAND_SHARED"] = self.dependencies["wayland"].options.shared
+            tc.cache_variables["SDL_WAYLAND_SHARED"] = True  # system wayland is shared
         if not with_x11 and not with_wayland:
             # Disable windowing support:
             # https://github.com/libsdl-org/SDL/blob/main/docs/README-cmake.md#cmake-fails-to-build-without-x11-or-wayland-support
@@ -429,6 +436,8 @@ class SDLConan(ConanFile):
                 self.cpp_info.components["sdl3"].requires.append("libalsa::libalsa")
             if self.options.get_safe("pulseaudio"):
                 self.cpp_info.components["sdl3"].requires.append("pulseaudio::pulseaudio")
+            if self.options.get_safe("pipewire"):
+                self.cpp_info.components["sdl3"].requires.append("pipewire::pipewire")
             if self.options.get_safe("sndio"):
                 self.cpp_info.components["sdl3"].requires.append("libsndio::libsndio")
 
