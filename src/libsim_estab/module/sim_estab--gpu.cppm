@@ -85,6 +85,47 @@ export constexpr bool has_flag(BufferUsage value, BufferUsage flag) noexcept {
 export using ComputeBufferHandle   = void *;
 export using ComputePipelineHandle = void *;
 
+// =============================================================================
+// SDL Context Management
+// =============================================================================
+// These functions manage global SDL initialization with reference counting.
+// Multiple contexts (VizContext, ComputeContext) can share the same SDL instance.
+// Subsystems are only initialized, never shut down until the last reference is released.
+
+
+/**
+ * Forward declaration of SDL type
+ */
+export using SDL_InitFlags = uint32_t;
+
+/**
+ * Acquire SDL context with optional subsystem initialization
+ *
+ * Increments the global SDL reference count. On first call, initializes SDL.
+ * Additional subsystems can be requested and will be initialized via SDL_InitSubSystem.
+ * Subsystems are accumulated - once initialized, they remain active until SDL_ctx_release
+ * decrements the reference count to zero.
+ *
+ * @param subsystems SDL subsystem flags to initialize (e.g., SDL_INIT_VIDEO | SDL_INIT_EVENTS)
+ * @throws gpu_error if SDL initialization fails
+ */
+export void SDL_ctx_acquire(SDL_InitFlags subsystems = 0);
+
+/**
+ * Release SDL context
+ *
+ * Decrements the global SDL reference count. When count reaches zero, calls SDL_Quit.
+ * Safe to call even if SDL was never initialized (no-op in that case).
+ */
+export void SDL_ctx_release() noexcept;
+
+/**
+ * Check if SDL context is currently initialized
+ *
+ * @return true if SDL is initialized (reference count > 0)
+ */
+export [[nodiscard]] bool SDL_ctx_is_initialized() noexcept;
+
 /**
  * ComputeContext manages headless GPU compute resources
  *
@@ -109,13 +150,11 @@ public:
      */
     ~ComputeContext() noexcept;
 
-    // Non-copyable
+    // Non-copyable, non-movable (SDL resources cannot be safely moved)
     ComputeContext(const ComputeContext&)            = delete;
     ComputeContext& operator=(const ComputeContext&) = delete;
-
-    // Movable
-    ComputeContext(ComputeContext&& other) noexcept;
-    ComputeContext& operator=(ComputeContext&& other) noexcept;
+    ComputeContext(ComputeContext&&)                 = delete;
+    ComputeContext& operator=(ComputeContext&&)      = delete;
 
     // Device queries
     /**

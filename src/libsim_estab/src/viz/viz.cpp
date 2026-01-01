@@ -35,7 +35,6 @@ struct VizContext::Impl {
     int width                 = 0;
     int height                = 0;
     std::string title;
-    bool sdl_initialized = false;
 
     Impl() = default;
 
@@ -61,11 +60,8 @@ struct VizContext::Impl {
             window = nullptr;
         }
 
-        if (sdl_initialized) {
-            sim_estab_log("sim_estab.viz", severity_level::debug, "Quitting SDL subsystems");
-            SDL_Quit();
-            sdl_initialized = false;
-        }
+        // Release SDL context reference
+        sim_estab::core::gpu::SDL_ctx_release();
     }
 };
 
@@ -81,16 +77,15 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
     sim_estab_log("sim_estab.viz", severity_level::info, "Initializing VizContext (", width, "x", height, ", \"", title,
                   "\")");
 
-    // Initialize SDL
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
-        const char *error = SDL_GetError();
-        sim_estab_log("sim_estab.viz", severity_level::error, "SDL_Init failed: ", error);
+    // Acquire SDL context with video and events subsystems
+    try {
+        sim_estab::core::gpu::SDL_ctx_acquire(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+    } catch (const sim_estab::core::gpu::gpu_error& e) {
         impl_->~Impl();  // Explicitly destroy on error
         impl_ = nullptr; // Mark as destroyed
-        throw viz_error(std::string("SDL initialization failed: ") + error);
+        throw viz_error(std::string("SDL initialization failed: ") + e.what());
     }
-    impl_->sdl_initialized = true;
-    sim_estab_log("sim_estab.viz", severity_level::debug, "SDL initialized successfully");
+    sim_estab_log("sim_estab.viz", severity_level::debug, "SDL context acquired successfully");
 
     // Create window flags
     SDL_WindowFlags flags = SDL_WINDOW_HIDDEN;
@@ -162,75 +157,6 @@ VizContext::~VizContext() noexcept {
     }
 }
 
-// Move constructor
-VizContext::VizContext(VizContext&& other) noexcept
-    : impl_(nullptr) // Initialize before constructing
-{
-    // Check if other is initialized
-    if (!other.impl_) {
-        // Other is not initialized, so we also remain uninitialized
-        return;
-    }
-
-    // Construct new Impl in our buffer and cache the pointer
-    impl_ = new (impl_buffer_) Impl();
-
-    // Transfer ownership (shallow copy of pointers)
-    impl_->window          = other.impl_->window;
-    impl_->gpu_device      = other.impl_->gpu_device;
-    impl_->width           = other.impl_->width;
-    impl_->height          = other.impl_->height;
-    impl_->title           = std::move(other.impl_->title);
-    impl_->sdl_initialized = other.impl_->sdl_initialized;
-
-    // Null out the source to prevent double-free
-    other.impl_->window          = nullptr;
-    other.impl_->gpu_device      = nullptr;
-    other.impl_->sdl_initialized = false;
-
-    // Destroy source Impl and mark as destroyed
-    other.impl_->~Impl();
-    other.impl_ = nullptr;
-}
-
-// Move assignment
-VizContext& VizContext::operator=(VizContext&& other) noexcept {
-    if (this != &other) {
-        // Destroy current impl if it exists
-        if (impl_) {
-            impl_->~Impl();
-            impl_ = nullptr;
-        }
-
-        // Check if other is initialized
-        if (!other.impl_) {
-            // Other is not initialized, so we also remain uninitialized
-            return *this;
-        }
-
-        // Construct new Impl in our buffer and cache the pointer
-        impl_ = new (impl_buffer_) Impl();
-
-        // Transfer ownership
-        impl_->window          = other.impl_->window;
-        impl_->gpu_device      = other.impl_->gpu_device;
-        impl_->width           = other.impl_->width;
-        impl_->height          = other.impl_->height;
-        impl_->title           = std::move(other.impl_->title);
-        impl_->sdl_initialized = other.impl_->sdl_initialized;
-
-        // Null out the source
-        other.impl_->window          = nullptr;
-        other.impl_->gpu_device      = nullptr;
-        other.impl_->sdl_initialized = false;
-
-        // Destroy source Impl and mark as destroyed
-        other.impl_->~Impl();
-        other.impl_ = nullptr;
-    }
-    return *this;
-}
-
 // Window state control
 void VizContext::show() {
     check_impl();
@@ -289,7 +215,8 @@ void VizContext::clear(float r, float g, float b) {
     // Acquire swapchain texture
     SDL_GPUTexture *swapchain_texture = nullptr;
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, impl_->window, &swapchain_texture, nullptr, nullptr)) {
-        sim_estab_log("sim_estab.viz", severity_level::warning, "Failed to acquire swapchain texture: ", SDL_GetError());
+        sim_estab_log("sim_estab.viz", severity_level::warning,
+                      "Failed to acquire swapchain texture: ", SDL_GetError());
         SDL_CancelGPUCommandBuffer(cmd);
         return;
     }
@@ -313,34 +240,33 @@ void VizContext::clear(float r, float g, float b) {
     SDL_SubmitGPUCommandBuffer(cmd);
 }
 
-// Window state queries
+// Window state queries - return defaults if impl_ is null
 bool VizContext::is_visible() const {
-    check_impl();
-    if (impl_->window) {
-        return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_HIDDEN) == 0;
+    if (!impl_ || !impl_->window) {
+        return false;
     }
-    return false;
+    return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_HIDDEN) == 0;
 }
 
 bool VizContext::is_minimized() const {
-    check_impl();
-    if (impl_->window) {
-        return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_MINIMIZED) != 0;
+    if (!impl_ || !impl_->window) {
+        return false;
     }
-    return false;
+    return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_MINIMIZED) != 0;
 }
 
 bool VizContext::is_maximized() const {
-    check_impl();
-    if (impl_->window) {
-        return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_MAXIMIZED) != 0;
+    if (!impl_ || !impl_->window) {
+        return false;
     }
-    return false;
+    return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_MAXIMIZED) != 0;
 }
 
-// Window property queries
+// Window property queries - return defaults if impl_ is null
 int VizContext::get_width() const {
-    check_impl();
+    if (!impl_) {
+        return 0;
+    }
     if (impl_->window) {
         int w, h;
         SDL_GetWindowSize(impl_->window, &w, &h);
@@ -350,7 +276,9 @@ int VizContext::get_width() const {
 }
 
 int VizContext::get_height() const {
-    check_impl();
+    if (!impl_) {
+        return 0;
+    }
     if (impl_->window) {
         int w, h;
         SDL_GetWindowSize(impl_->window, &w, &h);
@@ -360,7 +288,9 @@ int VizContext::get_height() const {
 }
 
 std::string VizContext::get_title() const {
-    check_impl();
+    if (!impl_) {
+        return {};
+    }
     if (impl_->window) {
         const char *title = SDL_GetWindowTitle(impl_->window);
         return title ? std::string(title) : std::string();
@@ -376,34 +306,36 @@ void VizContext::set_title(std::string_view title) {
     }
 }
 
-// GPU queries
+// GPU queries - return defaults if impl_ is null
 GPUDeviceInfo VizContext::get_gpu_info() const {
-    check_impl();
     GPUDeviceInfo info{};
     info.backend = GPUBackend::Unknown;
 
-    if (impl_->gpu_device) {
-        // Get the backend driver name from SDL
-        const char *driver_name = SDL_GetGPUDeviceDriver(impl_->gpu_device);
-        if (driver_name) {
-            // Map driver name to backend enum
-            std::string driver_str(driver_name);
-            if (driver_str == "vulkan") {
-                info.backend = GPUBackend::Vulkan;
-            } else if (driver_str == "direct3d12" || driver_str == "d3d12") {
-                info.backend = GPUBackend::D3D12;
-            } else {
-                info.backend = GPUBackend::Unknown;
-            }
+    if (!impl_ || !impl_->gpu_device) {
+        return info;
+    }
+
+    // Get the backend driver name from SDL
+    const char *driver_name = SDL_GetGPUDeviceDriver(impl_->gpu_device);
+    if (driver_name) {
+        // Map driver name to backend enum
+        std::string driver_str(driver_name);
+        if (driver_str == "vulkan") {
+            info.backend = GPUBackend::Vulkan;
+        } else if (driver_str == "direct3d12" || driver_str == "d3d12") {
+            info.backend = GPUBackend::D3D12;
+        } else {
+            info.backend = GPUBackend::Unknown;
         }
     }
 
     return info;
 }
 
-// Inline implementation for has_gpu_device
 bool VizContext::has_gpu_device() const noexcept {
-    check_impl();
+    if (!impl_) {
+        return false;
+    }
     return impl_->gpu_device != nullptr;
 }
 

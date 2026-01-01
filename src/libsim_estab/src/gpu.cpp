@@ -8,6 +8,7 @@ module;
 
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <utility>
 
@@ -16,6 +17,77 @@ module sim_estab;
 using namespace sim_estab::core::log;
 
 namespace sim_estab::core::gpu {
+
+// =============================================================================
+// SDL Context Management Implementation
+// =============================================================================
+
+namespace detail {
+static std::mutex SDL_ctx_mutex;
+static int SDL_ctx_ref_count                        = 0;
+static SDL_InitFlags SDL_ctx_initialized_subsystems = 0;
+} // namespace detail
+
+void SDL_ctx_acquire(SDL_InitFlags subsystems) {
+    std::lock_guard<std::mutex> lock(detail::SDL_ctx_mutex);
+
+    if (detail::SDL_ctx_ref_count == 0) {
+        // First acquisition - initialize SDL
+        sim_estab_log("sim_estab.gpu", severity_level::info, "Initializing SDL (subsystems=", subsystems, ")");
+        if (!SDL_Init(static_cast<SDL_InitFlags>(subsystems))) {
+            const char *error = SDL_GetError();
+            sim_estab_log("sim_estab.gpu", severity_level::error, "SDL_Init failed: ", error);
+            throw gpu_error(std::string("SDL initialization failed: ") + error);
+        }
+        detail::SDL_ctx_initialized_subsystems = static_cast<SDL_InitFlags>(subsystems);
+        sim_estab_log("sim_estab.gpu", severity_level::debug, "SDL initialized successfully");
+    } else {
+        // Already initialized - check if new subsystems are requested
+        auto new_subsystems = static_cast<SDL_InitFlags>(subsystems) & ~detail::SDL_ctx_initialized_subsystems;
+        if (new_subsystems != 0) {
+            sim_estab_log("sim_estab.gpu", severity_level::debug,
+                          "Initializing additional SDL subsystems: ", new_subsystems);
+            if (!SDL_InitSubSystem(new_subsystems)) {
+                const char *error = SDL_GetError();
+                sim_estab_log("sim_estab.gpu", severity_level::error, "SDL_InitSubSystem failed: ", error);
+                throw gpu_error(std::string("SDL subsystem initialization failed: ") + error);
+            }
+            detail::SDL_ctx_initialized_subsystems |= new_subsystems;
+        }
+    }
+
+    ++detail::SDL_ctx_ref_count;
+    sim_estab_log("sim_estab.gpu", severity_level::debug, "SDL context acquired (ref_count=", detail::SDL_ctx_ref_count,
+                  ")");
+}
+
+void SDL_ctx_release() noexcept {
+    std::lock_guard<std::mutex> lock(detail::SDL_ctx_mutex);
+
+    if (detail::SDL_ctx_ref_count <= 0) {
+        // Nothing to release
+        return;
+    }
+
+    --detail::SDL_ctx_ref_count;
+    sim_estab_log("sim_estab.gpu", severity_level::debug, "SDL context released (ref_count=", detail::SDL_ctx_ref_count,
+                  ")");
+
+    if (detail::SDL_ctx_ref_count == 0) {
+        sim_estab_log("sim_estab.gpu", severity_level::info, "Shutting down SDL");
+        SDL_Quit();
+        detail::SDL_ctx_initialized_subsystems = 0;
+    }
+}
+
+bool SDL_ctx_is_initialized() noexcept {
+    std::lock_guard<std::mutex> lock(detail::SDL_ctx_mutex);
+    return detail::SDL_ctx_ref_count > 0;
+}
+
+// =============================================================================
+// ComputeContext Implementation
+// =============================================================================
 
 // Debug check function implementation
 void ComputeContext::check_impl() const noexcept {
@@ -29,7 +101,6 @@ void ComputeContext::check_impl() const noexcept {
 // Implementation struct holding SDL GPU resources
 struct ComputeContext::Impl {
     SDL_GPUDevice *gpu_device = nullptr;
-    bool sdl_initialized      = false;
     bool prefer_discrete      = true;
 
     Impl() = default;
@@ -50,11 +121,8 @@ struct ComputeContext::Impl {
             gpu_device = nullptr;
         }
 
-        if (sdl_initialized) {
-            sim_estab_log("sim_estab.gpu", severity_level::debug, "Quitting SDL subsystems");
-            SDL_Quit();
-            sdl_initialized = false;
-        }
+        // Release SDL context reference
+        SDL_ctx_release();
     }
 };
 
@@ -71,16 +139,14 @@ ComputeContext::ComputeContext(bool prefer_discrete) {
     sim_estab_log("sim_estab.gpu", severity_level::info,
                   "Initializing ComputeContext (headless, prefer_discrete=", prefer_discrete ? "true" : "false", ")");
 
-    // Initialize SDL (minimal - no video required for compute-only)
-    if (!SDL_Init(0)) {
-        const char *error = SDL_GetError();
-        sim_estab_log("sim_estab.gpu", severity_level::error, "SDL_Init failed: ", error);
+    // Acquire SDL context (minimal - no video required for compute-only)
+    try {
+        SDL_ctx_acquire(0);
+    } catch (const gpu_error& e) {
         impl_->~Impl();
         impl_ = nullptr;
-        throw gpu_error(std::string("SDL initialization failed: ") + error);
+        throw;
     }
-    impl_->sdl_initialized = true;
-    sim_estab_log("sim_estab.gpu", severity_level::debug, "SDL initialized successfully");
 
     // Create GPU device (headless - no window required)
     // Support both SPIR-V (Vulkan) and DXIL (D3D12)
@@ -117,63 +183,6 @@ ComputeContext::~ComputeContext() noexcept {
         impl_->~Impl();
         impl_ = nullptr;
     }
-}
-
-// Move constructor
-ComputeContext::ComputeContext(ComputeContext&& other) noexcept : impl_(nullptr) {
-    // Check if other is initialized
-    if (!other.impl_) {
-        return;
-    }
-
-    // Construct new Impl in our buffer and cache the pointer
-    impl_ = new (impl_buffer_) Impl();
-
-    // Transfer ownership (shallow copy of pointers)
-    impl_->gpu_device      = other.impl_->gpu_device;
-    impl_->sdl_initialized = other.impl_->sdl_initialized;
-    impl_->prefer_discrete = other.impl_->prefer_discrete;
-
-    // Null out the source to prevent double-free
-    other.impl_->gpu_device      = nullptr;
-    other.impl_->sdl_initialized = false;
-
-    // Destroy source Impl and mark as destroyed
-    other.impl_->~Impl();
-    other.impl_ = nullptr;
-}
-
-// Move assignment
-ComputeContext& ComputeContext::operator=(ComputeContext&& other) noexcept {
-    if (this != &other) {
-        // Destroy current impl if it exists
-        if (impl_) {
-            impl_->~Impl();
-            impl_ = nullptr;
-        }
-
-        // Check if other is initialized
-        if (!other.impl_) {
-            return *this;
-        }
-
-        // Construct new Impl in our buffer and cache the pointer
-        impl_ = new (impl_buffer_) Impl();
-
-        // Transfer ownership
-        impl_->gpu_device      = other.impl_->gpu_device;
-        impl_->sdl_initialized = other.impl_->sdl_initialized;
-        impl_->prefer_discrete = other.impl_->prefer_discrete;
-
-        // Null out the source
-        other.impl_->gpu_device      = nullptr;
-        other.impl_->sdl_initialized = false;
-
-        // Destroy source Impl and mark as destroyed
-        other.impl_->~Impl();
-        other.impl_ = nullptr;
-    }
-    return *this;
 }
 
 // Device queries

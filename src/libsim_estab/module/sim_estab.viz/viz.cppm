@@ -60,13 +60,11 @@ public:
      */
     ~VizContext() noexcept;
 
-    // Non-copyable
+    // Non-copyable, non-movable (SDL resources have complex internal state)
     VizContext(const VizContext&)            = delete;
     VizContext& operator=(const VizContext&) = delete;
-
-    // Movable
-    VizContext(VizContext&& other) noexcept;
-    VizContext& operator=(VizContext&& other) noexcept;
+    VizContext(VizContext&&)                 = delete;
+    VizContext& operator=(VizContext&&)      = delete;
 
     // Window state control
     void show();
