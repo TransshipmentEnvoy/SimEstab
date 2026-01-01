@@ -267,6 +267,52 @@ void VizContext::restore() {
     }
 }
 
+// Event handling
+void VizContext::poll_events() {
+    check_impl();
+    SDL_PumpEvents();
+}
+
+void VizContext::clear(float r, float g, float b) {
+    check_impl();
+    if (!impl_->gpu_device || !impl_->window) {
+        return;
+    }
+
+    // Acquire command buffer
+    SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(impl_->gpu_device);
+    if (!cmd) {
+        sim_estab_log("sim_estab.viz", severity_level::warning, "Failed to acquire command buffer: ", SDL_GetError());
+        return;
+    }
+
+    // Acquire swapchain texture
+    SDL_GPUTexture *swapchain_texture = nullptr;
+    if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, impl_->window, &swapchain_texture, nullptr, nullptr)) {
+        sim_estab_log("sim_estab.viz", severity_level::warning, "Failed to acquire swapchain texture: ", SDL_GetError());
+        SDL_CancelGPUCommandBuffer(cmd);
+        return;
+    }
+
+    if (swapchain_texture) {
+        // Set up render pass with clear color
+        SDL_GPUColorTargetInfo color_target{};
+        color_target.texture     = swapchain_texture;
+        color_target.clear_color = {r, g, b, 1.0f};
+        color_target.load_op     = SDL_GPU_LOADOP_CLEAR;
+        color_target.store_op    = SDL_GPU_STOREOP_STORE;
+
+        SDL_GPURenderPass *render_pass = SDL_BeginGPURenderPass(cmd, &color_target, 1, nullptr);
+        if (render_pass) {
+            // Just end the pass immediately (we only want to clear)
+            SDL_EndGPURenderPass(render_pass);
+        }
+    }
+
+    // Submit command buffer
+    SDL_SubmitGPUCommandBuffer(cmd);
+}
+
 // Window state queries
 bool VizContext::is_visible() const {
     check_impl();

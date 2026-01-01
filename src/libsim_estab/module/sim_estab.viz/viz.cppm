@@ -75,6 +75,27 @@ public:
     void maximize();
     void restore();
 
+    // Event handling
+    /**
+     * @brief Process pending window events
+     *
+     * This is essential for Wayland which requires event processing
+     * for window compositing. Should be called regularly in the main loop.
+     */
+    void poll_events();
+
+    /**
+     * @brief Clear the window with a color and present
+     *
+     * Acquires swapchain, clears to a color, and submits.
+     * Required for Wayland to actually display the window content.
+     *
+     * @param r Red component (0.0-1.0)
+     * @param g Green component (0.0-1.0)
+     * @param b Blue component (0.0-1.0)
+     */
+    void clear(float r = 0.0f, float g = 0.0f, float b = 0.0f);
+
     // Window state queries
     bool is_visible() const;
     bool is_minimized() const;

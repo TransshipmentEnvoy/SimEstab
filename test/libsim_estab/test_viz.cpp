@@ -80,8 +80,13 @@ BOOST_AUTO_TEST_CASE(test_viz_context_creation,
 
     // Show window for visual verification
     ctx.show();
-    ctx.clear();
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // Poll events and present frames for ~2 seconds (required for Wayland compositing)
+    for (int i = 0; i < 120; ++i) {
+        ctx.poll_events();
+        ctx.clear();  // Black background
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
 }
 
 /**
