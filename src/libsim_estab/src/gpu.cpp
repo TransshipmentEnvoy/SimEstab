@@ -86,6 +86,91 @@ bool SDL_ctx_is_initialized() noexcept {
 }
 
 // =============================================================================
+// Shared GPU Device Management Implementation
+// =============================================================================
+
+namespace detail {
+static std::mutex GPU_device_mutex;
+static int GPU_device_ref_count      = 0;
+static SDL_GPUDevice *GPU_device_ptr = nullptr;
+static bool GPU_device_debug_mode    = false;
+} // namespace detail
+
+SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode) {
+    std::lock_guard<std::mutex> lock(detail::GPU_device_mutex);
+
+    if (detail::GPU_device_ref_count == 0) {
+        // First acquisition - ensure SDL is initialized
+        // Note: SDL must be initialized before creating GPU device
+        if (!SDL_ctx_is_initialized()) {
+            sim_estab_log("sim_estab.gpu", severity_level::debug, "Auto-acquiring SDL context for GPU device");
+            SDL_ctx_acquire(0); // Minimal SDL init
+        }
+
+        // Create shared GPU device
+        sim_estab_log("sim_estab.gpu", severity_level::info,
+                      "Creating shared GPU device (debug_mode=", debug_mode ? "true" : "false", ")");
+
+        detail::GPU_device_debug_mode = debug_mode;
+        detail::GPU_device_ptr =
+            SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL, debug_mode, nullptr);
+
+        if (!detail::GPU_device_ptr) {
+            const char *error = SDL_GetError();
+            sim_estab_log("sim_estab.gpu", severity_level::error, "SDL_CreateGPUDevice failed: ", error);
+            throw gpu_error(std::string("GPU device creation failed: ") + error);
+        }
+
+        // Log GPU info
+        const char *driver_name = SDL_GetGPUDeviceDriver(detail::GPU_device_ptr);
+        sim_estab_log("sim_estab.gpu", severity_level::info,
+                      "Shared GPU device created with driver: ", driver_name ? driver_name : "unknown");
+    } else {
+        // Device already exists - warn if debug mode differs
+        if (debug_mode != detail::GPU_device_debug_mode) {
+            sim_estab_log("sim_estab.gpu", severity_level::warning,
+                          "GPU device already created with different debug mode, ignoring request");
+        }
+    }
+
+    ++detail::GPU_device_ref_count;
+    sim_estab_log("sim_estab.gpu", severity_level::debug,
+                  "GPU device acquired (ref_count=", detail::GPU_device_ref_count, ")");
+
+    return static_cast<SDL_GPUDevice_ptr>(detail::GPU_device_ptr);
+}
+
+void GPU_device_release() noexcept {
+    std::lock_guard<std::mutex> lock(detail::GPU_device_mutex);
+
+    if (detail::GPU_device_ref_count <= 0) {
+        // Nothing to release
+        return;
+    }
+
+    --detail::GPU_device_ref_count;
+    sim_estab_log("sim_estab.gpu", severity_level::debug,
+                  "GPU device released (ref_count=", detail::GPU_device_ref_count, ")");
+
+    if (detail::GPU_device_ref_count == 0) {
+        sim_estab_log("sim_estab.gpu", severity_level::info, "Destroying shared GPU device");
+        SDL_DestroyGPUDevice(detail::GPU_device_ptr);
+        detail::GPU_device_ptr        = nullptr;
+        detail::GPU_device_debug_mode = false;
+    }
+}
+
+SDL_GPUDevice_ptr GPU_device_get() noexcept {
+    std::lock_guard<std::mutex> lock(detail::GPU_device_mutex);
+    return static_cast<SDL_GPUDevice_ptr>(detail::GPU_device_ptr);
+}
+
+bool GPU_device_is_initialized() noexcept {
+    std::lock_guard<std::mutex> lock(detail::GPU_device_mutex);
+    return detail::GPU_device_ref_count > 0;
+}
+
+// =============================================================================
 // ComputeContext Implementation
 // =============================================================================
 
@@ -100,7 +185,7 @@ void ComputeContext::check_impl() const noexcept {
 
 // Implementation struct holding SDL GPU resources
 struct ComputeContext::Impl {
-    SDL_GPUDevice *gpu_device = nullptr;
+    SDL_GPUDevice *gpu_device = nullptr; // Shared device (not owned)
     bool prefer_discrete      = true;
 
     Impl() = default;
@@ -114,10 +199,9 @@ struct ComputeContext::Impl {
     ~Impl() { cleanup(); }
 
     void cleanup() noexcept {
-        // Clean up in reverse order of creation
+        // Release our reference to the shared GPU device
         if (gpu_device) {
-            sim_estab_log("sim_estab.gpu", severity_level::debug, "Destroying GPU device");
-            SDL_DestroyGPUDevice(gpu_device);
+            GPU_device_release();
             gpu_device = nullptr;
         }
 
@@ -148,16 +232,26 @@ ComputeContext::ComputeContext(bool prefer_discrete) {
         throw;
     }
 
-    // Create GPU device (headless - no window required)
-    // Support both SPIR-V (Vulkan) and DXIL (D3D12)
-    impl_->gpu_device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL,
-                                            true, // debug mode
-                                            nullptr);
+    // Acquire shared GPU device
+    // Note: debug mode is enabled by default for compute contexts
+#ifdef NDEBUG
+    constexpr bool gpu_debug_mode = false;
+#else
+    constexpr bool gpu_debug_mode = true;
+#endif
+
+    try {
+        impl_->gpu_device = static_cast<SDL_GPUDevice *>(GPU_device_acquire(gpu_debug_mode));
+    } catch (const gpu_error& e) {
+        impl_->~Impl();
+        impl_ = nullptr;
+        throw;
+    }
 
     if (!impl_->gpu_device) {
-        const char *error = SDL_GetError();
-        sim_estab_log("sim_estab.gpu", severity_level::error, "SDL_CreateGPUDevice failed: ", error);
-        throw gpu_error(std::string("GPU device creation failed: ") + error);
+        impl_->~Impl();
+        impl_ = nullptr;
+        throw gpu_error("Failed to acquire shared GPU device");
     }
 
     // Log GPU info

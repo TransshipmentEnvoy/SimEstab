@@ -92,11 +92,18 @@ export using ComputePipelineHandle = void *;
 // Multiple contexts (VizContext, ComputeContext) can share the same SDL instance.
 // Subsystems are only initialized, never shut down until the last reference is released.
 
-
 /**
- * Forward declaration of SDL type
+ * SDL type aliases
+ *
+ * Note on C++20 modules compatibility:
+ * - SDL_InitFlags is a simple typedef to uint32_t, safe to use directly.
+ * - SDL_GPUDevice cannot be forward-declared in a module because C++20 module
+ *   type mangling adds @module suffix to struct types, making them incompatible
+ *   with types from SDL headers. We use void* and cast in implementation.
+ *   Callers that need the actual SDL_GPUDevice* should include <SDL3/SDL_gpu.h>.
  */
-export using SDL_InitFlags = uint32_t;
+export using SDL_InitFlags     = uint32_t; // Compatible with SDL3/SDL_init.h
+export using SDL_GPUDevice_ptr = void *;   // Opaque pointer to SDL_GPUDevice
 
 /**
  * Acquire SDL context with optional subsystem initialization
@@ -125,6 +132,49 @@ export void SDL_ctx_release() noexcept;
  * @return true if SDL is initialized (reference count > 0)
  */
 export [[nodiscard]] bool SDL_ctx_is_initialized() noexcept;
+
+// =============================================================================
+// Shared GPU Device Management
+// =============================================================================
+// These functions manage a global shared GPU device with reference counting.
+// All VizContext and ComputeContext instances share the same GPU device.
+// This is required because SDL3 GPU API doesn't support multiple GPU devices
+// in the same process on most drivers.
+
+/**
+ * Acquire shared GPU device
+ *
+ * Increments the global GPU device reference count. On first call, creates the device.
+ * The device is created with SPIR-V and DXIL shader support.
+ *
+ * @param debug_mode Enable debug mode (validation layers)
+ * @return Pointer to the shared GPU device (cast to SDL_GPUDevice* when using SDL API)
+ * @throws gpu_error if device creation fails
+ */
+export [[nodiscard]] SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode = false);
+
+/**
+ * Release shared GPU device
+ *
+ * Decrements the global GPU device reference count. When count reaches zero,
+ * destroys the device. Safe to call even if device was never created (no-op).
+ */
+export void GPU_device_release() noexcept;
+
+/**
+ * Get the current shared GPU device
+ *
+ * @return Pointer to the shared GPU device (cast to SDL_GPUDevice* when using SDL API),
+ *         or nullptr if not initialized
+ */
+export [[nodiscard]] SDL_GPUDevice_ptr GPU_device_get() noexcept;
+
+/**
+ * Check if shared GPU device is currently initialized
+ *
+ * @return true if GPU device is initialized (reference count > 0)
+ */
+export [[nodiscard]] bool GPU_device_is_initialized() noexcept;
 
 /**
  * ComputeContext manages headless GPU compute resources

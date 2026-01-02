@@ -31,7 +31,7 @@ void VizContext::check_impl() const noexcept {
 // Implementation struct holding SDL resources
 struct VizContext::Impl {
     SDL_Window *window        = nullptr;
-    SDL_GPUDevice *gpu_device = nullptr;
+    SDL_GPUDevice *gpu_device = nullptr; // Shared device (not owned)
     int width                 = 0;
     int height                = 0;
     std::string title;
@@ -48,16 +48,23 @@ struct VizContext::Impl {
 
     void cleanup() noexcept {
         // Clean up in reverse order of creation
-        if (gpu_device) {
-            sim_estab_log("sim_estab.viz", severity_level::debug, "Destroying GPU device");
-            SDL_DestroyGPUDevice(gpu_device);
-            gpu_device = nullptr;
+
+        // Release window from GPU device before destroying window
+        if (gpu_device && window) {
+            sim_estab_log("sim_estab.viz", severity_level::debug, "Releasing window from GPU device");
+            SDL_ReleaseWindowFromGPUDevice(gpu_device, window);
         }
 
         if (window) {
             sim_estab_log("sim_estab.viz", severity_level::debug, "Destroying SDL window");
             SDL_DestroyWindow(window);
             window = nullptr;
+        }
+
+        // Release our reference to the shared GPU device
+        if (gpu_device) {
+            sim_estab::core::gpu::GPU_device_release();
+            gpu_device = nullptr;
         }
 
         // Release SDL context reference
@@ -108,21 +115,32 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
 
     sim_estab_log("sim_estab.viz", severity_level::debug, "Window created successfully");
 
-    // Create GPU device (prefer Vulkan)
-    // Note: debug_mode enables Vulkan validation layers which can cause issues
-    // with Wayland + NVIDIA drivers. Disable for stability if needed.
+    // Acquire shared GPU device
 #ifdef NDEBUG
     constexpr bool gpu_debug_mode = false;
 #else
     constexpr bool gpu_debug_mode = true;
 #endif
-    impl_->gpu_device =
-        SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL, gpu_debug_mode, nullptr);
+
+    try {
+        impl_->gpu_device = static_cast<SDL_GPUDevice *>(sim_estab::core::gpu::GPU_device_acquire(gpu_debug_mode));
+    } catch (const sim_estab::core::gpu::gpu_error& e) {
+        // Window created but GPU device acquisition failed - cleanup and rethrow
+        SDL_DestroyWindow(impl_->window);
+        impl_->window = nullptr;
+        sim_estab::core::gpu::SDL_ctx_release();
+        impl_->~Impl();
+        impl_ = nullptr;
+        throw viz_error(std::string("GPU device acquisition failed: ") + e.what());
+    }
 
     if (!impl_->gpu_device) {
-        const char *error = SDL_GetError();
-        sim_estab_log("sim_estab.viz", severity_level::error, "SDL_CreateGPUDevice failed: ", error);
-        throw viz_error(std::string("GPU device creation failed: ") + error);
+        SDL_DestroyWindow(impl_->window);
+        impl_->window = nullptr;
+        sim_estab::core::gpu::SDL_ctx_release();
+        impl_->~Impl();
+        impl_ = nullptr;
+        throw viz_error("Failed to acquire shared GPU device");
     }
 
     // Claim window for GPU device
