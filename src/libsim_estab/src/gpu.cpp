@@ -102,9 +102,10 @@ SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode) {
     if (detail::GPU_device_ref_count == 0) {
         // First acquisition - ensure SDL is initialized
         // Note: SDL must be initialized before creating GPU device
+        // Video subsystem is required for GPU device creation, even for headless compute
         if (!SDL_ctx_is_initialized()) {
             sim_estab_log("sim_estab.gpu", severity_level::debug, "Auto-acquiring SDL context for GPU device");
-            SDL_ctx_acquire(0); // Minimal SDL init
+            SDL_ctx_acquire(SDL_INIT_VIDEO); // Video subsystem required for GPU
         }
 
         // Create shared GPU device
@@ -223,9 +224,9 @@ ComputeContext::ComputeContext(bool prefer_discrete) {
     sim_estab_log("sim_estab.gpu", severity_level::info,
                   "Initializing ComputeContext (headless, prefer_discrete=", prefer_discrete ? "true" : "false", ")");
 
-    // Acquire SDL context (minimal - no video required for compute-only)
+    // Acquire SDL context with video subsystem (required for GPU device creation)
     try {
-        SDL_ctx_acquire(0);
+        SDL_ctx_acquire(SDL_INIT_VIDEO);
     } catch (const gpu_error& e) {
         impl_->~Impl();
         impl_ = nullptr;

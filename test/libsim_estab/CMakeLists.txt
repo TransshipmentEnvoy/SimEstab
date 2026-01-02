@@ -19,6 +19,7 @@ message(STATUS "Test: Using Boost.Test from Boost installation")
 add_executable(libsim_estab_test
     test_main.cpp
     test_log.cpp
+    test_compute.cpp
 )
 
 # Enable C++20 modules if supported by compiler
