@@ -9,6 +9,7 @@ module;
 
 #include <cstdlib>
 #include <memory>
+#include <new>
 #include <utility>
 
 module sim_estab.viz;

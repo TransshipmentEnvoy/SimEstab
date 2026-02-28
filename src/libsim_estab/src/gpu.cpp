@@ -7,6 +7,7 @@ module;
 #include <SDL3/SDL_gpu.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <new>
