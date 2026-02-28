@@ -1,0 +1,10 @@
+# ThreadSanitizer suppressions for known third-party false positives
+race:libdbus-1.so
+race:libvulkan.so
+race:libVkLayer_*
+race:libnvidia*
+race:libamdvlk*
+race:libvulkan_intel*
+race:iris_dri.so
+race:anv_dri.so
+race:radeonsi_dri.so
