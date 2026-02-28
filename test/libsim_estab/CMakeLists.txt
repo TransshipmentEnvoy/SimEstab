@@ -56,6 +56,7 @@ add_test(NAME libsim_estab_test COMMAND libsim_estab_test)
 # Set test properties
 set_tests_properties(libsim_estab_test PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp"
 )
 
 message(STATUS "Test: Built libsim_estab_test executable")
@@ -103,6 +104,7 @@ add_test(NAME libsim_estab_viz_test COMMAND libsim_estab_viz_test)
 set_tests_properties(libsim_estab_viz_test PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     LABELS "visualization;requires_display"
+    ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp"
 )
 
 message(STATUS "Test: Built libsim_estab_viz_test executable (requires display)")

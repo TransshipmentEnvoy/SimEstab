@@ -1,0 +1,4 @@
+# LeakSanitizer suppressions for known third-party leaks
+# SDL3 uses D-Bus internally on Linux; these allocations are not freed at
+# process exit and are not real leaks in our code.
+leak:libdbus-1.so
