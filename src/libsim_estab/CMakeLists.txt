@@ -31,6 +31,7 @@ include(shader_tools)
 option(BUILD_TESTS "Build C++ tests for libsim_estab" OFF)
 option(LIBSIM_ESTAB__SANITIZE_ADDRESS "Enable address sanitizer for libsim_estab" OFF)
 option(LIBSIM_ESTAB__SANITIZE_UNDEFINED "Enable undefined behavior sanitizer for libsim_estab" OFF)
+option(LIBSIM_ESTAB__SANITIZE_THREAD "Enable thread sanitizer for libsim_estab" OFF)
 
 # common path
 cmake_path(GET CMAKE_CURRENT_LIST_FILE PARENT_PATH project_path_current)
@@ -140,6 +141,9 @@ if(LIBSIM_ESTAB__SANITIZE_ADDRESS)
 endif()
 if(LIBSIM_ESTAB__SANITIZE_UNDEFINED)
     target_enable_ubsan(sim_estab)
+endif()
+if(LIBSIM_ESTAB__SANITIZE_THREAD)
+    target_enable_tsan(sim_estab)
 endif()
 
 # install

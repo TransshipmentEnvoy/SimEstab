@@ -50,13 +50,17 @@ if(LIBSIM_ESTAB__SANITIZE_UNDEFINED)
     target_enable_ubsan(libsim_estab_test)
 endif()
 
+if(LIBSIM_ESTAB__SANITIZE_THREAD)
+    target_enable_tsan(libsim_estab_test)
+endif()
+
 # Add test to CTest
 add_test(NAME libsim_estab_test COMMAND libsim_estab_test)
 
 # Set test properties
 set_tests_properties(libsim_estab_test PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp"
+    ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
 )
 
 message(STATUS "Test: Built libsim_estab_test executable")
@@ -97,6 +101,10 @@ if(LIBSIM_ESTAB__SANITIZE_UNDEFINED)
     target_enable_ubsan(libsim_estab_viz_test)
 endif()
 
+if(LIBSIM_ESTAB__SANITIZE_THREAD)
+    target_enable_tsan(libsim_estab_viz_test)
+endif()
+
 # Add test to CTest (disabled by default since it requires display)
 add_test(NAME libsim_estab_viz_test COMMAND libsim_estab_viz_test)
 
@@ -104,7 +112,7 @@ add_test(NAME libsim_estab_viz_test COMMAND libsim_estab_viz_test)
 set_tests_properties(libsim_estab_viz_test PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     LABELS "visualization;requires_display"
-    ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp"
+    ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
 )
 
 message(STATUS "Test: Built libsim_estab_viz_test executable (requires display)")

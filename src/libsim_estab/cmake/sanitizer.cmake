@@ -32,3 +32,19 @@ function(target_enable_ubsan TARGET)
         -fsanitize=undefined
     )
 endfunction()
+
+function(target_enable_tsan TARGET)
+    if (MSVC)
+        message(STATUS "${TARGET}: ThreadSanitizer not enabled on MSVC")
+        return()
+    endif()
+
+    message(STATUS "${TARGET}: enabling ThreadSanitizer")
+    target_compile_options(${TARGET} PRIVATE
+        -fsanitize=thread
+        -fno-omit-frame-pointer
+    )
+    target_link_options(${TARGET} PRIVATE
+        -fsanitize=thread
+    )
+endfunction()
