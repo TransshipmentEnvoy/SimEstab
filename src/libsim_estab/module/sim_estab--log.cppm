@@ -16,19 +16,16 @@
 module;
 
 // Standard library headers
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <ostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-
-// Boost
-#include <boost/log/core.hpp>
-#include <boost/log/keywords/channel.hpp>
-#include <boost/log/keywords/severity.hpp>
-#include <boost/log/sources/record_ostream.hpp>
-#include <boost/log/sources/severity_channel_logger.hpp>
-#include <boost/log/utility/formatting_ostream.hpp>
+#include <type_traits>
+#include <utility>
 
 // Module declaration
 export module sim_estab:log;
@@ -184,11 +181,306 @@ concept OStreamable = requires(std::ostream& os, T&& value) {
     { os << std::forward<T>(value) } -> std::same_as<std::ostream&>;
 };
 
-// Forward declare implementation. Note: not exported.
-namespace detail {
-void sim_estab_log_impl(const std::string& channel, severity_level lvl,
-                        std::function<void(boost::log::record_ostream&)> msg_fn);
-} // namespace detail
+// ============================================================================
+// Opaque wrapper classes for Boost.Log types
+// These classes use fast pimpl to completely hide Boost.Log from the interface
+// ============================================================================
+
+/**
+ * @brief Opaque wrapper for boost::log::record
+ *
+ * Represents a log record that holds attribute values. The record can be
+ * checked for validity using boolean conversion operators.
+ *
+ * Move-only type matching Boost.Log's record semantics.
+ */
+export class record {
+public:
+    /// Default constructor creates an invalid record
+    record() noexcept;
+
+    /// Move constructor
+    record(record&& other) noexcept;
+
+    /// Destructor
+    ~record() noexcept;
+
+    /// Move assignment operator
+    record& operator=(record&& other) noexcept;
+
+    /// Non-copyable
+    record(const record&)            = delete;
+    record& operator=(const record&) = delete;
+
+    /// Check if record is valid (explicit bool conversion)
+    explicit operator bool() const noexcept;
+
+    /// Check if record is invalid
+    bool operator!() const noexcept;
+
+    /// Swap with another record
+    void swap(record& other) noexcept;
+
+    /// Reset to invalid state, releasing resources
+    void reset() noexcept;
+
+    // Fast pimpl storage size/alignment constants (public for static_assert in impl)
+    static constexpr std::size_t storage_size  = 16;
+    static constexpr std::size_t storage_align = 8;
+
+private:
+    friend class record_ostream;
+    friend class logger;
+    friend class logger_mt;
+
+    alignas(storage_align) std::byte storage_[storage_size];
+
+    // Access internal implementation
+    void *get_impl() noexcept;
+    const void *get_impl() const noexcept;
+};
+
+/// Free-standing swap for record
+export inline void swap(record& lhs, record& rhs) noexcept { lhs.swap(rhs); }
+
+/**
+ * @brief Opaque wrapper for boost::log::record_ostream
+ *
+ * Provides streaming capability for composing log messages.
+ * Wraps a record and provides operator<< for various types.
+ *
+ * Non-copyable, non-movable (matches Boost.Log semantics).
+ */
+export class record_ostream {
+public:
+    /// Default constructor creates detached stream
+    record_ostream() noexcept;
+
+    /// Constructor attaching to a record
+    /// @pre rec must be valid (!!rec == true)
+    explicit record_ostream(record& rec);
+
+    /// Destructor - detaches from record
+    ~record_ostream() noexcept;
+
+    /// Non-copyable, non-movable
+    record_ostream(const record_ostream&)            = delete;
+    record_ostream& operator=(const record_ostream&) = delete;
+    record_ostream(record_ostream&&)                 = delete;
+    record_ostream& operator=(record_ostream&&)      = delete;
+
+    /// Check if stream is valid and ready for formatting
+    explicit operator bool() const noexcept;
+
+    /// Check if stream is invalid
+    bool operator!() const noexcept;
+
+    /// Get the attached record
+    /// @pre Stream must be attached to a record
+    record& get_record();
+    const record& get_record() const;
+
+    /// Attach to a new record (detaches from current if any)
+    /// @pre rec must be valid
+    void attach_record(record& rec);
+
+    /// Detach from current record
+    void detach_from_record() noexcept;
+
+    /// Flush the stream
+    record_ostream& flush();
+
+    // ========================================================================
+    // Explicit operator<< overloads for basic types
+    // These forward directly to boost::log::record_ostream without overhead
+    // ========================================================================
+
+    record_ostream& operator<<(bool value);
+    record_ostream& operator<<(char value);
+    record_ostream& operator<<(signed char value);
+    record_ostream& operator<<(unsigned char value);
+    record_ostream& operator<<(short value);
+    record_ostream& operator<<(unsigned short value);
+    record_ostream& operator<<(int value);
+    record_ostream& operator<<(unsigned int value);
+    record_ostream& operator<<(long value);
+    record_ostream& operator<<(unsigned long value);
+    record_ostream& operator<<(long long value);
+    record_ostream& operator<<(unsigned long long value);
+    record_ostream& operator<<(float value);
+    record_ostream& operator<<(double value);
+    record_ostream& operator<<(long double value);
+    record_ostream& operator<<(const char *value);
+    record_ostream& operator<<(const wchar_t *value);
+    record_ostream& operator<<(const void *value);
+    record_ostream& operator<<(const std::string& value);
+    record_ostream& operator<<(std::string_view value);
+
+    // IO manipulators
+    record_ostream& operator<<(std::ostream& (*manip)(std::ostream&));
+    record_ostream& operator<<(std::ios_base& (*manip)(std::ios_base&));
+
+    /**
+     * @brief Template fallback for custom types
+     *
+     * Uses std::ostringstream to convert to string, then writes.
+     * This has some overhead but allows any OStreamable type to work.
+     *
+     * ## How to provide custom formatting:
+     *
+     * Users can define a non-template free function in sim_estab::core::log namespace
+     * that will be found via ADL and take precedence over this member template:
+     *
+     * @code
+     * namespace sim_estab::core::log {
+     *     // Non-template overload - higher priority than member template
+     *     record_ostream& operator<<(record_ostream& os, const MyType& t) {
+     *         return os << "MyType: " << t.value();
+     *     }
+     * }
+     * @endcode
+     *
+     * @note This member template is a fallback; non-template free functions
+     *       in the sim_estab::core::log namespace take precedence.
+     */
+    template <typename T>
+        requires OStreamable<T> && (!std::is_same_v<std::decay_t<T>, bool>) &&
+                 (!std::is_same_v<std::decay_t<T>, char>) && (!std::is_same_v<std::decay_t<T>, signed char>) &&
+                 (!std::is_same_v<std::decay_t<T>, unsigned char>) && (!std::is_same_v<std::decay_t<T>, short>) &&
+                 (!std::is_same_v<std::decay_t<T>, unsigned short>) && (!std::is_same_v<std::decay_t<T>, int>) &&
+                 (!std::is_same_v<std::decay_t<T>, unsigned int>) && (!std::is_same_v<std::decay_t<T>, long>) &&
+                 (!std::is_same_v<std::decay_t<T>, unsigned long>) && (!std::is_same_v<std::decay_t<T>, long long>) &&
+                 (!std::is_same_v<std::decay_t<T>, unsigned long long>) && (!std::is_same_v<std::decay_t<T>, float>) &&
+                 (!std::is_same_v<std::decay_t<T>, double>) && (!std::is_same_v<std::decay_t<T>, long double>) &&
+                 (!std::is_same_v<std::decay_t<T>, const char *>) && (!std::is_same_v<std::decay_t<T>, char *>) &&
+                 (!std::is_same_v<std::decay_t<T>, const wchar_t *>) && (!std::is_same_v<std::decay_t<T>, wchar_t *>) &&
+                 (!std::is_same_v<std::decay_t<T>, const void *>) && (!std::is_same_v<std::decay_t<T>, void *>) &&
+                 (!std::is_same_v<std::decay_t<T>, std::string>) && (!std::is_same_v<std::decay_t<T>, std::string_view>)
+    record_ostream& operator<<(T&& value) {
+        std::ostringstream oss;
+        oss << std::forward<T>(value);
+        return *this << oss.str();
+    }
+
+    // Fast pimpl storage size/alignment constants (public for static_assert in impl)
+    static constexpr std::size_t storage_size  = 512;
+    static constexpr std::size_t storage_align = 16;
+
+private:
+    alignas(storage_align) std::byte storage_[storage_size];
+    record *attached_record_{nullptr};
+
+    void *get_impl() noexcept;
+    const void *get_impl() const noexcept;
+};
+
+/**
+ * @brief Opaque wrapper for boost::log::sources::severity_channel_logger
+ *
+ * Single-threaded logger with severity level and channel support.
+ * Use logger_mt for multi-threaded scenarios.
+ */
+export class logger {
+public:
+    /// Construct logger with channel name
+    explicit logger(const std::string& channel);
+
+    /// Copy constructor
+    logger(const logger& other);
+
+    /// Move constructor
+    logger(logger&& other) noexcept;
+
+    /// Destructor
+    ~logger() noexcept;
+
+    /// Copy assignment
+    logger& operator=(const logger& other);
+
+    /// Move assignment
+    logger& operator=(logger&& other) noexcept;
+
+    /// Swap with another logger
+    void swap(logger& other) noexcept;
+
+    /// Get the channel name
+    std::string channel() const;
+
+    /// Open a new log record with specified severity
+    /// @return Valid record if logging is enabled and passes filters, invalid otherwise
+    record open_record(severity_level level);
+
+    /// Push a completed record to sinks
+    /// @param rec Record to push (will be moved from)
+    void push_record(record&& rec);
+
+    // Fast pimpl storage size/alignment constants (public for static_assert in impl)
+    static constexpr std::size_t storage_size  = 256;
+    static constexpr std::size_t storage_align = 16;
+
+private:
+    alignas(storage_align) std::byte storage_[storage_size];
+
+    void *get_impl() noexcept;
+    const void *get_impl() const noexcept;
+};
+
+/// Free-standing swap for logger
+export inline void swap(logger& lhs, logger& rhs) noexcept { lhs.swap(rhs); }
+
+/**
+ * @brief Opaque wrapper for boost::log::sources::severity_channel_logger_mt
+ *
+ * Multi-threaded logger with severity level and channel support.
+ * Thread-safe for concurrent logging operations.
+ */
+export class logger_mt {
+public:
+    /// Construct logger with channel name
+    explicit logger_mt(const std::string& channel);
+
+    /// Copy constructor
+    logger_mt(const logger_mt& other);
+
+    /// Move constructor
+    logger_mt(logger_mt&& other) noexcept;
+
+    /// Destructor
+    ~logger_mt() noexcept;
+
+    /// Copy assignment
+    logger_mt& operator=(const logger_mt& other);
+
+    /// Move assignment
+    logger_mt& operator=(logger_mt&& other) noexcept;
+
+    /// Swap with another logger
+    void swap(logger_mt& other) noexcept;
+
+    /// Get the channel name
+    std::string channel() const;
+
+    /// Open a new log record with specified severity
+    /// @return Valid record if logging is enabled and passes filters, invalid otherwise
+    record open_record(severity_level level);
+
+    /// Push a completed record to sinks
+    /// @param rec Record to push (will be moved from)
+    void push_record(record&& rec);
+
+    // Fast pimpl storage size/alignment constants (public for static_assert in impl)
+    static constexpr std::size_t storage_size  = 512;
+    static constexpr std::size_t storage_align = 16;
+
+private:
+    alignas(storage_align) std::byte storage_[storage_size];
+
+    void *get_impl() noexcept;
+    const void *get_impl() const noexcept;
+};
+
+/// Free-standing swap for logger_mt
+export inline void swap(logger_mt& lhs, logger_mt& rhs) noexcept { lhs.swap(rhs); }
 
 // abbreviated function template
 //
@@ -202,30 +494,17 @@ export void sim_estab_log(const std::string& ch,   // channel (string, string_vi
         return;
     }
 
-    /*
-    detail::channel_logger_mt logger(boost::log::keywords::channel = std::forward<decltype(ch)>(ch));
-
-    // Use the Boost.Log macro inside the module
-    using keyword::severity;
-    auto& rec = logger.open_record(severity = std::forward<decltype(sev)>(sev));
-    if (!rec)
+    // Directly use the exported opaque wrapper classes
+    logger_mt lg(ch);
+    record rec = lg.open_record(sev);
+    if (!rec) {
         return;
+    }
 
-    boost::log::record_ostream rec_stream(rec);
-
-    // Fold-expression over the variadic message parts:
-    // rec_stream << part1 << part2 << ...
-    (rec_stream << ... << std::forward<decltype(msg)>(msg));
-
-    rec_stream.flush();
-    logger.push_record(boost::move(rec));
-    */
-
-    // workaround
-    auto msg_fn = [... msg_pack = std::forward<decltype(msg)>(msg)](boost::log::record_ostream& rec_stream) mutable {
-        (rec_stream << ... << std::forward<decltype(msg_pack)>(msg_pack));
-    };
-    detail::sim_estab_log_impl(std::forward<decltype(ch)>(ch), std::forward<decltype(sev)>(sev), std::move(msg_fn));
+    record_ostream strm(rec);
+    (strm << ... << std::forward<decltype(msg)>(msg));
+    strm.flush();
+    lg.push_record(std::move(rec));
 }
 
 } // namespace sim_estab::core::log

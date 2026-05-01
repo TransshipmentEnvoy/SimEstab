@@ -17,7 +17,9 @@ module;
 
 #include <atomic>
 #include <iostream>
+#include <memory>
 #include <mutex>
+#include <new>
 // #include <shared_mutex>
 #include <functional>
 #include <ostream>
@@ -550,30 +552,406 @@ void disable_console() noexcept {
     detail::sink_map.erase(it);
 }
 
-// log interface implementation
-namespace detail {
-void sim_estab_log_impl(const std::string& channel, severity_level lvl,
-                        std::function<void(logging::record_ostream&)> msg_fn) {
-    if (!log_is_init()) {
-        return;
-    }
+// Note: sim_estab_log() is now fully implemented in the module interface
+// using the exported opaque wrapper classes (logger_mt, record, record_ostream)
 
-    detail::channel_logger_mt logger(keywords::channel = channel);
+// ============================================================================
+// record implementation
+// ============================================================================
 
-    // Use the Boost.Log macro inside the module
-    auto rec = logger.open_record(keywords::severity = lvl);
-    if (!rec)
-        return;
+// Static assertions to verify storage size
+static_assert(sizeof(boost::log::record) <= record::storage_size, "record storage too small for boost::log::record");
+static_assert(alignof(boost::log::record) <= record::storage_align,
+              "record storage alignment insufficient for boost::log::record");
 
-    logging::record_ostream rec_stream(rec);
+record::record() noexcept { new (storage_) boost::log::record(); }
 
-    // Call the message function to write to the stream
-    msg_fn(rec_stream);
-
-    rec_stream.flush();
-    logger.push_record(boost::move(rec));
+record::record(record&& other) noexcept {
+    auto *other_impl = static_cast<boost::log::record *>(other.get_impl());
+    new (storage_) boost::log::record(std::move(*other_impl));
 }
 
-} // namespace detail
+record::~record() noexcept {
+    auto *impl = std::launder(reinterpret_cast<boost::log::record *>(storage_));
+    std::destroy_at(impl);
+}
+
+record& record::operator=(record&& other) noexcept {
+    if (this != &other) {
+        auto *impl       = static_cast<boost::log::record *>(get_impl());
+        auto *other_impl = static_cast<boost::log::record *>(other.get_impl());
+        *impl            = std::move(*other_impl);
+    }
+    return *this;
+}
+
+record::operator bool() const noexcept {
+    auto *impl = static_cast<const boost::log::record *>(get_impl());
+    return static_cast<bool>(*impl);
+}
+
+bool record::operator!() const noexcept {
+    auto *impl = static_cast<const boost::log::record *>(get_impl());
+    return !(*impl);
+}
+
+void record::swap(record& other) noexcept {
+    auto *impl       = static_cast<boost::log::record *>(get_impl());
+    auto *other_impl = static_cast<boost::log::record *>(other.get_impl());
+    impl->swap(*other_impl);
+}
+
+void record::reset() noexcept {
+    auto *impl = static_cast<boost::log::record *>(get_impl());
+    impl->reset();
+}
+
+void *record::get_impl() noexcept { return static_cast<void *>(storage_); }
+
+const void *record::get_impl() const noexcept { return static_cast<const void *>(storage_); }
+
+// ============================================================================
+// record_ostream implementation
+// ============================================================================
+
+static_assert(sizeof(boost::log::record_ostream) <= record_ostream::storage_size,
+              "record_ostream storage too small for boost::log::record_ostream");
+static_assert(alignof(boost::log::record_ostream) <= record_ostream::storage_align,
+              "record_ostream storage alignment insufficient for boost::log::record_ostream");
+
+record_ostream::record_ostream() noexcept : attached_record_(nullptr) { new (storage_) boost::log::record_ostream(); }
+
+record_ostream::record_ostream(record& rec) : attached_record_(&rec) {
+    auto *rec_impl = static_cast<boost::log::record *>(rec.get_impl());
+    new (storage_) boost::log::record_ostream(*rec_impl);
+}
+
+record_ostream::~record_ostream() noexcept {
+    auto *impl = std::launder(reinterpret_cast<boost::log::record_ostream *>(storage_));
+    std::destroy_at(impl);
+}
+
+record_ostream::operator bool() const noexcept {
+    auto *impl = static_cast<const boost::log::record_ostream *>(get_impl());
+    return static_cast<bool>(*impl);
+}
+
+bool record_ostream::operator!() const noexcept {
+    auto *impl = static_cast<const boost::log::record_ostream *>(get_impl());
+    return !(*impl);
+}
+
+record& record_ostream::get_record() { return *attached_record_; }
+
+const record& record_ostream::get_record() const { return *attached_record_; }
+
+void record_ostream::attach_record(record& rec) {
+    auto *impl     = static_cast<boost::log::record_ostream *>(get_impl());
+    auto *rec_impl = static_cast<boost::log::record *>(rec.get_impl());
+    impl->attach_record(*rec_impl);
+    attached_record_ = &rec;
+}
+
+void record_ostream::detach_from_record() noexcept {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    impl->detach_from_record();
+    attached_record_ = nullptr;
+}
+
+record_ostream& record_ostream::flush() {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    impl->flush();
+    return *this;
+}
+
+void *record_ostream::get_impl() noexcept { return static_cast<void *>(storage_); }
+
+const void *record_ostream::get_impl() const noexcept { return static_cast<const void *>(storage_); }
+
+// operator<< implementations
+record_ostream& record_ostream::operator<<(bool value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(char value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(signed char value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(unsigned char value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(short value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(unsigned short value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(int value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(unsigned int value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(long value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(unsigned long value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(long long value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(unsigned long long value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(float value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(double value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(long double value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(const char *value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(const wchar_t *value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(const void *value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(const std::string& value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(std::string_view value) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << value;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(std::ostream& (*manip)(std::ostream&)) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(std::ios_base& (*manip)(std::ios_base&)) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+// ============================================================================
+// logger implementation
+// ============================================================================
+
+static_assert(sizeof(detail::channel_logger) <= logger::storage_size, "logger storage too small for channel_logger");
+static_assert(alignof(detail::channel_logger) <= logger::storage_align,
+              "logger storage alignment insufficient for channel_logger");
+
+logger::logger(const std::string& channel) { new (storage_) detail::channel_logger(keywords::channel = channel); }
+
+logger::logger(const logger& other) {
+    auto *other_impl = static_cast<const detail::channel_logger *>(other.get_impl());
+    new (storage_) detail::channel_logger(*other_impl);
+}
+
+logger::logger(logger&& other) noexcept {
+    auto *other_impl = static_cast<detail::channel_logger *>(other.get_impl());
+    new (storage_) detail::channel_logger(std::move(*other_impl));
+}
+
+logger::~logger() noexcept {
+    auto *impl        = static_cast<detail::channel_logger *>(get_impl());
+    using logger_type = detail::channel_logger;
+    impl->~logger_type();
+}
+
+logger& logger::operator=(const logger& other) {
+    if (this != &other) {
+        auto *impl       = static_cast<detail::channel_logger *>(get_impl());
+        auto *other_impl = static_cast<const detail::channel_logger *>(other.get_impl());
+        // Use copy-and-swap idiom
+        detail::channel_logger tmp(*other_impl);
+        impl->swap(tmp);
+    }
+    return *this;
+}
+
+logger& logger::operator=(logger&& other) noexcept {
+    if (this != &other) {
+        auto *impl       = static_cast<detail::channel_logger *>(get_impl());
+        auto *other_impl = static_cast<detail::channel_logger *>(other.get_impl());
+        impl->swap(*other_impl);
+    }
+    return *this;
+}
+
+void logger::swap(logger& other) noexcept {
+    auto *impl       = static_cast<detail::channel_logger *>(get_impl());
+    auto *other_impl = static_cast<detail::channel_logger *>(other.get_impl());
+    impl->swap(*other_impl);
+}
+
+std::string logger::channel() const {
+    auto *impl = static_cast<const detail::channel_logger *>(get_impl());
+    return impl->channel();
+}
+
+record logger::open_record(severity_level level) {
+    auto *impl = static_cast<detail::channel_logger *>(get_impl());
+    record rec;
+    auto *rec_impl = static_cast<boost::log::record *>(rec.get_impl());
+    *rec_impl      = impl->open_record(keywords::severity = level);
+    return rec;
+}
+
+void logger::push_record(record&& rec) {
+    auto *impl     = static_cast<detail::channel_logger *>(get_impl());
+    auto *rec_impl = static_cast<boost::log::record *>(rec.get_impl());
+    impl->push_record(std::move(*rec_impl));
+}
+
+void *logger::get_impl() noexcept { return static_cast<void *>(storage_); }
+
+const void *logger::get_impl() const noexcept { return static_cast<const void *>(storage_); }
+
+// ============================================================================
+// logger_mt implementation
+// ============================================================================
+
+static_assert(sizeof(detail::channel_logger_mt) <= logger_mt::storage_size,
+              "logger_mt storage too small for channel_logger_mt");
+static_assert(alignof(detail::channel_logger_mt) <= logger_mt::storage_align,
+              "logger_mt storage alignment insufficient for channel_logger_mt");
+
+logger_mt::logger_mt(const std::string& channel) {
+    new (storage_) detail::channel_logger_mt(keywords::channel = channel);
+}
+
+logger_mt::logger_mt(const logger_mt& other) {
+    auto *other_impl = static_cast<const detail::channel_logger_mt *>(other.get_impl());
+    new (storage_) detail::channel_logger_mt(*other_impl);
+}
+
+logger_mt::logger_mt(logger_mt&& other) noexcept {
+    auto *other_impl = static_cast<detail::channel_logger_mt *>(other.get_impl());
+    new (storage_) detail::channel_logger_mt(std::move(*other_impl));
+}
+
+logger_mt::~logger_mt() noexcept {
+    auto *impl        = static_cast<detail::channel_logger_mt *>(get_impl());
+    using logger_type = detail::channel_logger_mt;
+    impl->~logger_type();
+}
+
+logger_mt& logger_mt::operator=(const logger_mt& other) {
+    if (this != &other) {
+        auto *impl       = static_cast<detail::channel_logger_mt *>(get_impl());
+        auto *other_impl = static_cast<const detail::channel_logger_mt *>(other.get_impl());
+        // Use copy-and-swap idiom
+        detail::channel_logger_mt tmp(*other_impl);
+        impl->swap(tmp);
+    }
+    return *this;
+}
+
+logger_mt& logger_mt::operator=(logger_mt&& other) noexcept {
+    if (this != &other) {
+        auto *impl       = static_cast<detail::channel_logger_mt *>(get_impl());
+        auto *other_impl = static_cast<detail::channel_logger_mt *>(other.get_impl());
+        impl->swap(*other_impl);
+    }
+    return *this;
+}
+
+void logger_mt::swap(logger_mt& other) noexcept {
+    auto *impl       = static_cast<detail::channel_logger_mt *>(get_impl());
+    auto *other_impl = static_cast<detail::channel_logger_mt *>(other.get_impl());
+    impl->swap(*other_impl);
+}
+
+std::string logger_mt::channel() const {
+    auto *impl = static_cast<const detail::channel_logger_mt *>(get_impl());
+    return impl->channel();
+}
+
+record logger_mt::open_record(severity_level level) {
+    auto *impl = static_cast<detail::channel_logger_mt *>(get_impl());
+    record rec;
+    auto *rec_impl = static_cast<boost::log::record *>(rec.get_impl());
+    *rec_impl      = impl->open_record(keywords::severity = level);
+    return rec;
+}
+
+void logger_mt::push_record(record&& rec) {
+    auto *impl     = static_cast<detail::channel_logger_mt *>(get_impl());
+    auto *rec_impl = static_cast<boost::log::record *>(rec.get_impl());
+    impl->push_record(std::move(*rec_impl));
+}
+
+void *logger_mt::get_impl() noexcept { return static_cast<void *>(storage_); }
+
+const void *logger_mt::get_impl() const noexcept { return static_cast<const void *>(storage_); }
 
 } // namespace sim_estab::core::log
