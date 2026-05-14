@@ -17,7 +17,7 @@ class RepoRecipe(ConanFile):
 
     def requirements(self):
         # util
-        self.requires("boost/1.89.0")
+        self.requires("boost/1.91.0")
 
         self.requires("fmt/12.1.0")
         self.requires("rang/3.2")

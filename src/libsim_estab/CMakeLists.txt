@@ -79,7 +79,7 @@ message(STATUS "${PROJECT_NAME}: use spirv-cross: ${spirv-cross_DIR}")
 find_shader_tools()
 
 ## dep: config
-find_package(nlohmann_json 3.11.0 REQUIRED)
+find_package(nlohmann_json 3.12.0 REQUIRED)
 message(STATUS "${PROJECT_NAME}: use nlohmann_json: ${nlohmann_json_DIR}")
 
 ## dep: bundled, to be built together

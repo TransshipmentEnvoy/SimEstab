@@ -39,7 +39,7 @@ class RepoRecipe(ConanFile):
 
     def requirements(self):
         # util
-        self.requires("boost/1.89.0", options={"shared": True})
+        self.requires("boost/1.91.0", options={"shared": True})
 
         self.requires("fmt/12.1.0")
         self.requires("rang/3.2")
@@ -79,7 +79,7 @@ class RepoRecipe(ConanFile):
         # vulkan backend & shader tools
         self.requires("vulkan-loader/1.4.313.0")
         self.requires("glslang/1.4.313.0")
-        self.requires("spirv-cross/1.4.313.0")
+        self.requires("spirv-cross/1.4.321.0")
 
         # geometry
         self.requires("cgal/6.1.1")
