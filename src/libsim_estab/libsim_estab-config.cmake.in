@@ -42,10 +42,10 @@ find_dependency(CGAL REQUIRED)
 # These are needed for the library implementation but not exposed
 
 # SDL3 - PRIVATE dependency for graphics
-find_package(SDL3 3.2 CONFIG COMPONENTS GPU)
+find_package(SDL3 3.4 CONFIG COMPONENTS GPU)
 if(NOT SDL3_FOUND)
     set(${CMAKE_FIND_PACKAGE_NAME}_NOT_FOUND_MESSAGE
-        "SDL3 3.2 with GPU component is required but not found")
+        "SDL3 3.4 with GPU component is required but not found")
     set(${CMAKE_FIND_PACKAGE_NAME}_FOUND FALSE)
     return()
 endif()

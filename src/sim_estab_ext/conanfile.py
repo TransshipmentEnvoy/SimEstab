@@ -43,7 +43,7 @@ class RepoRecipe(ConanFile):
 
         # graphics
         self.requires(
-            "sdl/3.4.0",
+            "sdl/3.4.8",
             options={
                 "shared": True,
                 "gpu": True,
@@ -56,7 +56,7 @@ class RepoRecipe(ConanFile):
         )
 
         # geometry
-        self.requires("cgal/6.1")
+        self.requires("cgal/6.1.1")
         # self.requires("opencascade/7.9.1")  # TODO: replace with custom recipe
 
         # ecs

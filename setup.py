@@ -44,12 +44,12 @@ libraries = [
             # "xorg/system": {
             #     "package": str(here / "buildsys" / "conan" / "recipe" / "xorg"),
             # },
-            # "cgal/6.1": {
+            # "cgal/6.1.1": {
             #     "package": str(here / "buildsys" / "conan" / "recipe" / "cgal"),
             #     "obtain_source": True,
             #     "feed_version": True,
             # },
-            # "sdl/3.4.0": {
+            # "sdl/3.4.8": {
             #     "package": str(here / "buildsys" / "conan" / "recipe" / "sdl"),
             #     "obtain_source": True,
             #     "feed_version": True,

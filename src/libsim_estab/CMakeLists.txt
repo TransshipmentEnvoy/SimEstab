@@ -64,7 +64,7 @@ find_package(CGAL REQUIRED)
 message(STATUS "${PROJECT_NAME}: use CGAL: ${CGAL_DIR}")
 
 ## dep: graphics
-find_package(SDL3 3.2 REQUIRED CONFIG COMPONENTS GPU)
+find_package(SDL3 3.4 REQUIRED CONFIG COMPONENTS GPU)
 message(STATUS "${PROJECT_NAME}: using SDL3 from ${SDL3_DIR}")
 
 ## dep: vulkan
