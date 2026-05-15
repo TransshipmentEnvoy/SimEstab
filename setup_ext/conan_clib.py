@@ -134,8 +134,11 @@ def install_conan_dependency(package_name: str,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    ret = install_process.wait()
+    install_stdout, _ = install_process.communicate()
+    ret = install_process.returncode
     if ret != 0:
+        _pout = safe_decode_stdout(install_stdout)
+        _logger_conan_clib.error(_pout)
         raise DistutilsSetupError(f"failed to install conan package! recipe_path: {recipe_path}")
 
 
