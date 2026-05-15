@@ -252,19 +252,19 @@ class SDLConan(ConanFile):
         if self.options.get_safe("libiconv"):
             self.requires("libiconv/1.17")
         if self.options.get_safe("libusb"):
-            self.requires("libusb/1.0.26")
+            self.requires("libusb/[>=1.0.29]")
         if self._supports_opengl:
             self.requires("opengl/system")
         if self.options.get_safe("libudev"):
             self.requires("libudev/system")
         if self._supports_dbus:
-            self.requires("dbus/1.15.8")
+            self.requires("dbus/[>=1.15.8]")
         if self.options.get_safe("pulseaudio"):
-            self.requires("pulseaudio/17.0")
+            self.requires("pulseaudio/[>=17.0]")
         if self.options.get_safe("alsa"):
-            self.requires("libalsa/[>=1.2 <1.3]")
+            self.requires("libalsa/[>=1.2.13]")
         if self.options.get_safe("sndio"):
-            self.requires("libsndio/1.9.0")
+            self.requires("libsndio/[>=1.9.0]")
         if self.options.get_safe("pipewire"):
             self.requires("pipewire/system")
         if self.options.get_safe("wayland"):
