@@ -3,7 +3,6 @@
 black
 yapf
 flake8
-mypy
 isort
 rope
 pytest
