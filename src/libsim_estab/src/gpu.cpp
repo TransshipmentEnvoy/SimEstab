@@ -106,8 +106,7 @@ SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode, bool prefer_low_power) {
         // Note: SDL must be initialized before creating GPU device
         // Video subsystem is required for GPU device creation, even for headless compute
         if (!SDL_ctx_is_initialized()) {
-            sim_estab_log("sim_estab.gpu", severity_level::debug, "Auto-acquiring SDL context for GPU device");
-            SDL_ctx_acquire(SDL_INIT_VIDEO); // Video subsystem required for GPU
+            throw gpu_error("SDL context must be acquired before GPU device creation");
         }
 
         // Create shared GPU device

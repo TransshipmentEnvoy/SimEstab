@@ -35,6 +35,7 @@ struct VizContext::Impl {
     SDL_GPUDevice *gpu_device = nullptr; // Shared device (not owned)
     int width                 = 0;
     int height                = 0;
+    bool window_claimed       = false;
     std::string title;
 
     Impl() = default;
@@ -51,9 +52,10 @@ struct VizContext::Impl {
         // Clean up in reverse order of creation
 
         // Release window from GPU device before destroying window
-        if (gpu_device && window) {
+        if (gpu_device && window && window_claimed) {
             sim_estab_log("sim_estab.viz", severity_level::debug, "Releasing window from GPU device");
             SDL_ReleaseWindowFromGPUDevice(gpu_device, window);
+            window_claimed = false;
         }
 
         if (window) {
@@ -82,89 +84,84 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
     // Construct Impl in-place using placement new and cache the pointer
     impl_ = new (impl_buffer_) Impl();
 
-    sim_estab_log("sim_estab.viz", severity_level::info, "Initializing VizContext (", width, "x", height, ", \"", title,
-                  "\")");
-
-    // Acquire SDL context with video and events subsystems
     try {
-        sim_estab::core::gpu::SDL_ctx_acquire(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
-    } catch (const sim_estab::core::gpu::gpu_error& e) {
-        impl_->~Impl();  // Explicitly destroy on error
-        impl_ = nullptr; // Mark as destroyed
-        throw viz_error(std::string("SDL initialization failed: ") + e.what());
-    }
-    sim_estab_log("sim_estab.viz", severity_level::debug, "SDL context acquired successfully");
+        sim_estab_log("sim_estab.viz", severity_level::info, "Initializing VizContext (", width, "x", height, ", \"",
+                      title, "\")");
 
-    // Create window flags
-    SDL_WindowFlags flags = SDL_WINDOW_HIDDEN;
-    if (resizable) {
-        flags = static_cast<SDL_WindowFlags>(flags | SDL_WINDOW_RESIZABLE);
-    }
+        // Acquire SDL context with video and events subsystems
+        try {
+            sim_estab::core::gpu::SDL_ctx_acquire(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+        } catch (const sim_estab::core::gpu::gpu_error& e) {
+            throw viz_error(std::string("SDL initialization failed: ") + e.what());
+        }
+        sim_estab_log("sim_estab.viz", severity_level::debug, "SDL context acquired successfully");
 
-    // Create window
-    impl_->window = SDL_CreateWindow(std::string(title).c_str(), width, height, flags);
+        // Create window flags
+        SDL_WindowFlags flags = SDL_WINDOW_HIDDEN;
+        if (resizable) {
+            flags = static_cast<SDL_WindowFlags>(flags | SDL_WINDOW_RESIZABLE);
+        }
 
-    if (!impl_->window) {
-        const char *error = SDL_GetError();
-        sim_estab_log("sim_estab.viz", severity_level::error, "SDL_CreateWindow failed: ", error);
-        throw viz_error(std::string("Window creation failed: ") + error);
-    }
+        // Create window
+        impl_->window = SDL_CreateWindow(std::string(title).c_str(), width, height, flags);
 
-    impl_->width  = width;
-    impl_->height = height;
-    impl_->title  = title;
+        if (!impl_->window) {
+            const char *error = SDL_GetError();
+            sim_estab_log("sim_estab.viz", severity_level::error, "SDL_CreateWindow failed: ", error);
+            throw viz_error(std::string("Window creation failed: ") + error);
+        }
 
-    sim_estab_log("sim_estab.viz", severity_level::debug, "Window created successfully");
+        impl_->width  = width;
+        impl_->height = height;
+        impl_->title  = title;
 
-    // Acquire shared GPU device
+        sim_estab_log("sim_estab.viz", severity_level::debug, "Window created successfully");
+
+        // Acquire shared GPU device
 #ifdef NDEBUG
-    constexpr bool gpu_debug_mode = false;
+        constexpr bool gpu_debug_mode = false;
 #else
-    constexpr bool gpu_debug_mode = true;
+        constexpr bool gpu_debug_mode = true;
 #endif
 
-    try {
-        impl_->gpu_device = static_cast<SDL_GPUDevice *>(sim_estab::core::gpu::GPU_device_acquire(gpu_debug_mode));
-    } catch (const sim_estab::core::gpu::gpu_error& e) {
-        // Window created but GPU device acquisition failed - cleanup and rethrow
-        SDL_DestroyWindow(impl_->window);
-        impl_->window = nullptr;
-        sim_estab::core::gpu::SDL_ctx_release();
+        try {
+            impl_->gpu_device =
+                static_cast<SDL_GPUDevice *>(sim_estab::core::gpu::GPU_device_acquire(gpu_debug_mode));
+        } catch (const sim_estab::core::gpu::gpu_error& e) {
+            throw viz_error(std::string("GPU device acquisition failed: ") + e.what());
+        }
+
+        if (!impl_->gpu_device) {
+            throw viz_error("Failed to acquire shared GPU device");
+        }
+
+        // Claim window for GPU device
+        if (!SDL_ClaimWindowForGPUDevice(impl_->gpu_device, impl_->window)) {
+            const char *error = SDL_GetError();
+            sim_estab_log("sim_estab.viz", severity_level::error, "SDL_ClaimWindowForGPUDevice failed: ", error);
+            throw viz_error(std::string("Failed to claim window for GPU: ") + error);
+        }
+        impl_->window_claimed = true;
+
+        // Log GPU info
+        auto gpu_info            = get_gpu_info();
+        const char *backend_name = "Unknown";
+        switch (gpu_info.backend) {
+        case GPUBackend::Vulkan:
+            backend_name = "Vulkan";
+            break;
+        case GPUBackend::D3D12:
+            backend_name = "Direct3D 12";
+            break;
+        default:
+            break;
+        }
+        sim_estab_log("sim_estab.viz", severity_level::info, "GPU device created with backend: ", backend_name);
+    } catch (...) {
         impl_->~Impl();
         impl_ = nullptr;
-        throw viz_error(std::string("GPU device acquisition failed: ") + e.what());
+        throw;
     }
-
-    if (!impl_->gpu_device) {
-        SDL_DestroyWindow(impl_->window);
-        impl_->window = nullptr;
-        sim_estab::core::gpu::SDL_ctx_release();
-        impl_->~Impl();
-        impl_ = nullptr;
-        throw viz_error("Failed to acquire shared GPU device");
-    }
-
-    // Claim window for GPU device
-    if (!SDL_ClaimWindowForGPUDevice(impl_->gpu_device, impl_->window)) {
-        const char *error = SDL_GetError();
-        sim_estab_log("sim_estab.viz", severity_level::error, "SDL_ClaimWindowForGPUDevice failed: ", error);
-        throw viz_error(std::string("Failed to claim window for GPU: ") + error);
-    }
-
-    // Log GPU info
-    auto gpu_info            = get_gpu_info();
-    const char *backend_name = "Unknown";
-    switch (gpu_info.backend) {
-    case GPUBackend::Vulkan:
-        backend_name = "Vulkan";
-        break;
-    case GPUBackend::D3D12:
-        backend_name = "Direct3D 12";
-        break;
-    default:
-        break;
-    }
-    sim_estab_log("sim_estab.viz", severity_level::info, "GPU device created with backend: ", backend_name);
 }
 
 // Destructor
