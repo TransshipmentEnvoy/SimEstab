@@ -15,11 +15,16 @@
 
 #include <atomic>
 #include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <ios>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // import
@@ -31,6 +36,29 @@ import sim_estab; // :log
 #include <macro.h>
 
 using namespace sim_estab::core::log;
+
+namespace test_log_types {
+
+struct DirectRecordPrintable {
+    int value{};
+};
+
+inline sim_estab::core::log::record_ostream& operator<<(sim_estab::core::log::record_ostream& os,
+                                                        const DirectRecordPrintable& printable) {
+    return os << "DirectRecordPrintable(" << printable.value << ")";
+}
+
+struct OStreamPrintable {
+    int value{};
+};
+
+inline std::ostream& operator<<(std::ostream& os, const OStreamPrintable& printable) {
+    return os << "OStreamPrintable(" << printable.value << ")";
+}
+
+SIM_ESTAB_LOG_ENABLE_OSTREAM(OStreamPrintable)
+
+} // namespace test_log_types
 
 BOOST_AUTO_TEST_SUITE(logging_tests)
 
@@ -204,9 +232,55 @@ BOOST_AUTO_TEST_CASE(test_logging_with_multiple_message_parts) {
     std::string text = "test";
 
     // Test that stream operators work in logging macros
-    // SIM_ESTAB_LOG("test.channel", info, "Integer: " << value << ", String: " << text);
-    // SIM_ESTAB_LOG_DEBUG("test.channel", "Debug info: value=" << value << ", text='" << text << "'");
-    SIM_ESTAB_LOG("test.channel", info, text);
+    SIM_ESTAB_LOG("test.channel", info, "Integer: ", value, ", String: ", text);
+}
+
+/**
+ * @brief Test logging with standard stream manipulators
+ */
+BOOST_AUTO_TEST_CASE(test_logging_with_stream_manipulators) {
+    BOOST_TEST_MESSAGE("Testing logging with standard stream manipulators");
+
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "hex=", std::hex, 255));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "bool=", std::boolalpha, true));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "precision=", std::setprecision(3), 1.23456));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "width=", std::setfill('0'), std::setw(4), 7));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, std::setiosflags(std::ios_base::showbase), std::hex, 255));
+    BOOST_CHECK_NO_THROW(
+        SIM_ESTAB_LOG("test.channel", info, std::resetiosflags(std::ios_base::showbase), std::setbase(10), 255));
+
+    const std::tm timestamp{};
+    const std::string amount = "1234";
+    std::string quoted_text  = "quoted value";
+    constexpr std::string_view quoted_view{"view value"};
+
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "money=", std::put_money(1234.0L)));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "money=", std::put_money(amount)));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "time=", std::put_time(&timestamp, "%Y-%m-%d")));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "quoted=", std::quoted("literal")));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "quoted=", std::quoted(std::as_const(quoted_text))));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "quoted=", std::quoted(quoted_text)));
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, "quoted=", std::quoted(quoted_view)));
+}
+
+/**
+ * @brief Test custom record_ostream output support
+ */
+BOOST_AUTO_TEST_CASE(test_logging_with_custom_record_ostream_type) {
+    BOOST_TEST_MESSAGE("Testing logging with custom record_ostream output");
+
+    test_log_types::DirectRecordPrintable printable{42};
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, printable));
+}
+
+/**
+ * @brief Test explicit std::ostream adapter support
+ */
+BOOST_AUTO_TEST_CASE(test_logging_with_explicit_ostream_adapter) {
+    BOOST_TEST_MESSAGE("Testing logging with explicit std::ostream adapter");
+
+    test_log_types::OStreamPrintable printable{84};
+    BOOST_CHECK_NO_THROW(SIM_ESTAB_LOG("test.channel", info, printable));
 }
 
 /**

@@ -16,15 +16,18 @@
 module;
 
 // Standard library headers
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <functional>
+#include <iomanip>
+#include <ios>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 
 // Module declaration
@@ -175,12 +178,6 @@ export void enable_console();
  */
 export void disable_console() noexcept;
 
-// concept: "printable to std::ostream"
-template <class T>
-concept OStreamable = requires(std::ostream& os, T&& value) {
-    { os << std::forward<T>(value) } -> std::same_as<std::ostream&>;
-};
-
 // ============================================================================
 // Opaque wrapper classes for Boost.Log types
 // These classes use fast pimpl to completely hide Boost.Log from the interface
@@ -319,48 +316,19 @@ public:
     // IO manipulators
     record_ostream& operator<<(std::ostream& (*manip)(std::ostream&));
     record_ostream& operator<<(std::ios_base& (*manip)(std::ios_base&));
-
-    /**
-     * @brief Template fallback for custom types
-     *
-     * Uses std::ostringstream to convert to string, then writes.
-     * This has some overhead but allows any OStreamable type to work.
-     *
-     * ## How to provide custom formatting:
-     *
-     * Users can define a non-template free function in sim_estab::core::log namespace
-     * that will be found via ADL and take precedence over this member template:
-     *
-     * @code
-     * namespace sim_estab::core::log {
-     *     // Non-template overload - higher priority than member template
-     *     record_ostream& operator<<(record_ostream& os, const MyType& t) {
-     *         return os << "MyType: " << t.value();
-     *     }
-     * }
-     * @endcode
-     *
-     * @note This member template is a fallback; non-template free functions
-     *       in the sim_estab::core::log namespace take precedence.
-     */
-    template <typename T>
-        requires OStreamable<T> && (!std::is_same_v<std::decay_t<T>, bool>) &&
-                 (!std::is_same_v<std::decay_t<T>, char>) && (!std::is_same_v<std::decay_t<T>, signed char>) &&
-                 (!std::is_same_v<std::decay_t<T>, unsigned char>) && (!std::is_same_v<std::decay_t<T>, short>) &&
-                 (!std::is_same_v<std::decay_t<T>, unsigned short>) && (!std::is_same_v<std::decay_t<T>, int>) &&
-                 (!std::is_same_v<std::decay_t<T>, unsigned int>) && (!std::is_same_v<std::decay_t<T>, long>) &&
-                 (!std::is_same_v<std::decay_t<T>, unsigned long>) && (!std::is_same_v<std::decay_t<T>, long long>) &&
-                 (!std::is_same_v<std::decay_t<T>, unsigned long long>) && (!std::is_same_v<std::decay_t<T>, float>) &&
-                 (!std::is_same_v<std::decay_t<T>, double>) && (!std::is_same_v<std::decay_t<T>, long double>) &&
-                 (!std::is_same_v<std::decay_t<T>, const char *>) && (!std::is_same_v<std::decay_t<T>, char *>) &&
-                 (!std::is_same_v<std::decay_t<T>, const wchar_t *>) && (!std::is_same_v<std::decay_t<T>, wchar_t *>) &&
-                 (!std::is_same_v<std::decay_t<T>, const void *>) && (!std::is_same_v<std::decay_t<T>, void *>) &&
-                 (!std::is_same_v<std::decay_t<T>, std::string>) && (!std::is_same_v<std::decay_t<T>, std::string_view>)
-    record_ostream& operator<<(T&& value) {
-        std::ostringstream oss;
-        oss << std::forward<T>(value);
-        return *this << oss.str();
-    }
+    record_ostream& operator<<(decltype(std::setprecision(0)) manip);
+    record_ostream& operator<<(decltype(std::setw(0)) manip);
+    record_ostream& operator<<(decltype(std::setfill(' ')) manip);
+    record_ostream& operator<<(decltype(std::setbase(10)) manip);
+    record_ostream& operator<<(decltype(std::setiosflags(std::ios_base::fmtflags{})) manip);
+    record_ostream& operator<<(decltype(std::resetiosflags(std::ios_base::fmtflags{})) manip);
+    record_ostream& operator<<(decltype(std::put_money(std::declval<long double>())) manip);
+    record_ostream& operator<<(decltype(std::put_money(std::declval<const std::string&>())) manip);
+    record_ostream& operator<<(decltype(std::put_time(static_cast<const std::tm *>(nullptr), "")) manip);
+    record_ostream& operator<<(decltype(std::quoted("")) manip);
+    record_ostream& operator<<(decltype(std::quoted(std::declval<const std::string&>())) manip);
+    record_ostream& operator<<(decltype(std::quoted(std::declval<std::string&>())) manip);
+    record_ostream& operator<<(decltype(std::quoted(std::declval<std::string_view>())) manip);
 
     // Fast pimpl storage size/alignment constants (public for static_assert in impl)
     static constexpr std::size_t storage_size  = 512;
@@ -482,13 +450,32 @@ private:
 /// Free-standing swap for logger_mt
 export inline void swap(logger_mt& lhs, logger_mt& rhs) noexcept { lhs.swap(rhs); }
 
+// concept: "printable directly to record_ostream"
+export template <class T>
+concept LogStreamable = requires(record_ostream& os, T&& value) {
+    { os << std::forward<T>(value) } -> std::same_as<record_ostream&>;
+};
+
+/**
+ * @brief Explicit adapter for types that already support std::ostream output.
+ *
+ * This is intentionally opt-in. Unknown types are not implicitly stringified by
+ * record_ostream; users can call this helper from a record_ostream overload when
+ * local stringification is acceptable.
+ */
+export template <typename T> record_ostream& stream_via_ostream(record_ostream& os, const T& value) {
+    std::ostringstream oss;
+    oss << value;
+    return os << oss.str();
+}
+
 // abbreviated function template
 //
-// - `auto`/`OStreamable auto` are placeholder types (abbreviated templates)
+// - `auto`/`LogStreamable auto` are placeholder types (abbreviated templates)
 // - export makes it usable from other translation units via `import sim_estab.log;`
-export void sim_estab_log(const std::string& ch,   // channel (string, string_view, etc.)
-                          severity_level sev,      // severity type (your enum, etc.)
-                          OStreamable auto&&...msg // parts of the message, all OStreamable
+export void sim_estab_log(const std::string& ch,     // channel (string, string_view, etc.)
+                          severity_level sev,        // severity type (your enum, etc.)
+                          LogStreamable auto&&...msg // parts of the message, all LogStreamable
 ) {
     if (!log_is_init()) {
         return;

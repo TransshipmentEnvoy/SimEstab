@@ -9,13 +9,17 @@
 // logger_mt) completely hide Boost.Log types behind fast pimpl.
 
 // Standard library headers needed for module interface
+#include <concepts>
 #include <cstddef>
 #include <functional>
+#include <iomanip>
+#include <ios>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #endif

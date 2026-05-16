@@ -19,6 +19,18 @@
     ::sim_estab::core::log::sim_estab_log(ch, ::sim_estab::core::log::severity_level::sev, __VA_ARGS__)
 
 /**
+ * Opt-in adapter for types that already support std::ostream output.
+ *
+ * Define this in the same namespace as the adapted type so argument-dependent
+ * lookup can find the generated record_ostream overload.
+ */
+#define SIM_ESTAB_LOG_ENABLE_OSTREAM(Type)                                                                             \
+    inline ::sim_estab::core::log::record_ostream& operator<<(::sim_estab::core::log::record_ostream& os,              \
+                                                              const Type& value) {                                     \
+        return ::sim_estab::core::log::stream_via_ostream(os, value);                                                  \
+    }
+
+/**
  * Convenience macros for direct channel-based logging
  *
  * These macros provide a simplified interface for logging messages at specific

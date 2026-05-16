@@ -16,6 +16,9 @@
 module;
 
 #include <atomic>
+#include <ctime>
+#include <iomanip>
+#include <ios>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -27,6 +30,7 @@ module;
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <boost/container/flat_map.hpp>
 #include <boost/shared_ptr.hpp>
@@ -796,6 +800,84 @@ record_ostream& record_ostream::operator<<(std::ostream& (*manip)(std::ostream&)
 }
 
 record_ostream& record_ostream::operator<<(std::ios_base& (*manip)(std::ios_base&)) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::setprecision(0)) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::setw(0)) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::setfill(' ')) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::setbase(10)) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::setiosflags(std::ios_base::fmtflags{})) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::resetiosflags(std::ios_base::fmtflags{})) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::put_money(std::declval<long double>())) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::put_money(std::declval<const std::string&>())) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::put_time(static_cast<const std::tm *>(nullptr), "")) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::quoted("")) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::quoted(std::declval<const std::string&>())) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::quoted(std::declval<std::string&>())) manip) {
+    auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
+    *impl << manip;
+    return *this;
+}
+
+record_ostream& record_ostream::operator<<(decltype(std::quoted(std::declval<std::string_view>())) manip) {
     auto *impl = static_cast<boost::log::record_ostream *>(get_impl());
     *impl << manip;
     return *this;
