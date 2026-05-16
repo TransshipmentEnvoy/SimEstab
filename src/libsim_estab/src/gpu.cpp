@@ -92,12 +92,13 @@ bool SDL_ctx_is_initialized() noexcept {
 
 namespace detail {
 static std::mutex GPU_device_mutex;
-static int GPU_device_ref_count      = 0;
-static SDL_GPUDevice *GPU_device_ptr = nullptr;
-static bool GPU_device_debug_mode    = false;
+static int GPU_device_ref_count         = 0;
+static SDL_GPUDevice *GPU_device_ptr    = nullptr;
+static bool GPU_device_debug_mode       = false;
+static bool GPU_device_prefer_low_power = false;
 } // namespace detail
 
-SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode) {
+SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode, bool prefer_low_power) {
     std::lock_guard<std::mutex> lock(detail::GPU_device_mutex);
 
     if (detail::GPU_device_ref_count == 0) {
@@ -110,17 +111,54 @@ SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode) {
         }
 
         // Create shared GPU device
-        sim_estab_log("sim_estab.gpu", severity_level::info,
-                      "Creating shared GPU device (debug_mode=", debug_mode ? "true" : "false", ")");
+        sim_estab_log("sim_estab.gpu", severity_level::info, "Creating shared GPU device (debug_mode=",
+                      debug_mode ? "true" : "false", ", prefer_low_power=",
+                      prefer_low_power ? "true" : "false", ")");
 
-        detail::GPU_device_debug_mode = debug_mode;
-        detail::GPU_device_ptr =
-            SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL, debug_mode, nullptr);
+        detail::GPU_device_debug_mode       = debug_mode;
+        detail::GPU_device_prefer_low_power = prefer_low_power;
+
+        SDL_PropertiesID props = SDL_CreateProperties();
+        if (props == 0) {
+            const char *error = SDL_GetError();
+            sim_estab_log("sim_estab.gpu", severity_level::error, "SDL_CreateProperties failed: ", error);
+            detail::GPU_device_debug_mode       = false;
+            detail::GPU_device_prefer_low_power = false;
+            throw gpu_error(std::string("GPU device property creation failed: ") + error);
+        }
+
+        const auto set_property = [props](const char *name, bool value) {
+            if (!SDL_SetBooleanProperty(props, name, value)) {
+                const char *error = SDL_GetError();
+                throw gpu_error(std::string("Failed to set GPU device property: ") + name + ": " + error);
+            }
+        };
+
+        try {
+            set_property(SDL_PROP_GPU_DEVICE_CREATE_DEBUGMODE_BOOLEAN, debug_mode);
+            set_property(SDL_PROP_GPU_DEVICE_CREATE_PREFERLOWPOWER_BOOLEAN, prefer_low_power);
+            set_property(SDL_PROP_GPU_DEVICE_CREATE_SHADERS_SPIRV_BOOLEAN, true);
+            set_property(SDL_PROP_GPU_DEVICE_CREATE_SHADERS_DXIL_BOOLEAN, true);
+
+            detail::GPU_device_ptr = SDL_CreateGPUDeviceWithProperties(props);
+        } catch (...) {
+            SDL_DestroyProperties(props);
+            detail::GPU_device_debug_mode       = false;
+            detail::GPU_device_prefer_low_power = false;
+            throw;
+        }
+
+        std::string create_error;
+        if (!detail::GPU_device_ptr) {
+            create_error = SDL_GetError();
+        }
+        SDL_DestroyProperties(props);
 
         if (!detail::GPU_device_ptr) {
-            const char *error = SDL_GetError();
-            sim_estab_log("sim_estab.gpu", severity_level::error, "SDL_CreateGPUDevice failed: ", error);
-            throw gpu_error(std::string("GPU device creation failed: ") + error);
+            sim_estab_log("sim_estab.gpu", severity_level::error, "SDL_CreateGPUDevice failed: ", create_error);
+            detail::GPU_device_debug_mode       = false;
+            detail::GPU_device_prefer_low_power = false;
+            throw gpu_error(std::string("GPU device creation failed: ") + create_error);
         }
 
         // Log GPU info
@@ -132,6 +170,10 @@ SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode) {
         if (debug_mode != detail::GPU_device_debug_mode) {
             sim_estab_log("sim_estab.gpu", severity_level::warning,
                           "GPU device already created with different debug mode, ignoring request");
+        }
+        if (prefer_low_power != detail::GPU_device_prefer_low_power) {
+            sim_estab_log("sim_estab.gpu", severity_level::warning,
+                          "GPU device already created with different power preference, ignoring request");
         }
     }
 
@@ -157,8 +199,9 @@ void GPU_device_release() noexcept {
     if (detail::GPU_device_ref_count == 0) {
         sim_estab_log("sim_estab.gpu", severity_level::info, "Destroying shared GPU device");
         SDL_DestroyGPUDevice(detail::GPU_device_ptr);
-        detail::GPU_device_ptr        = nullptr;
-        detail::GPU_device_debug_mode = false;
+        detail::GPU_device_ptr              = nullptr;
+        detail::GPU_device_debug_mode       = false;
+        detail::GPU_device_prefer_low_power = false;
     }
 }
 
@@ -188,7 +231,7 @@ void ComputeContext::check_impl() const noexcept {
 // Implementation struct holding SDL GPU resources
 struct ComputeContext::Impl {
     SDL_GPUDevice *gpu_device = nullptr; // Shared device (not owned)
-    bool prefer_discrete      = true;
+    bool prefer_low_power     = false;
 
     Impl() = default;
 
@@ -213,17 +256,18 @@ struct ComputeContext::Impl {
 };
 
 // Constructor
-ComputeContext::ComputeContext(bool prefer_discrete) {
+ComputeContext::ComputeContext(bool prefer_low_power) {
     // Ensure our buffer is large enough
     static_assert(sizeof(Impl) <= ImplSize, "Impl size exceeds SBO buffer size");
     static_assert(alignof(Impl) <= ImplAlign, "Impl alignment exceeds SBO buffer alignment");
 
     // Construct Impl in-place using placement new and cache the pointer
-    impl_                  = new (impl_buffer_) Impl();
-    impl_->prefer_discrete = prefer_discrete;
+    impl_                   = new (impl_buffer_) Impl();
+    impl_->prefer_low_power = prefer_low_power;
 
     sim_estab_log("sim_estab.gpu", severity_level::info,
-                  "Initializing ComputeContext (headless, prefer_discrete=", prefer_discrete ? "true" : "false", ")");
+                  "Initializing ComputeContext (headless, prefer_low_power=",
+                  prefer_low_power ? "true" : "false", ")");
 
     // Acquire SDL context with video subsystem (required for GPU device creation)
     try {
@@ -243,7 +287,7 @@ ComputeContext::ComputeContext(bool prefer_discrete) {
 #endif
 
     try {
-        impl_->gpu_device = static_cast<SDL_GPUDevice *>(GPU_device_acquire(gpu_debug_mode));
+        impl_->gpu_device = static_cast<SDL_GPUDevice *>(GPU_device_acquire(gpu_debug_mode, prefer_low_power));
     } catch (const gpu_error& e) {
         impl_->~Impl();
         impl_ = nullptr;

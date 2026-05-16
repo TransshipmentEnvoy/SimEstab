@@ -148,10 +148,11 @@ export [[nodiscard]] bool SDL_ctx_is_initialized() noexcept;
  * The device is created with SPIR-V and DXIL shader support.
  *
  * @param debug_mode Enable debug mode (validation layers)
+ * @param prefer_low_power Prefer energy efficiency over maximum GPU performance
  * @return Pointer to the shared GPU device (cast to SDL_GPUDevice* when using SDL API)
  * @throws gpu_error if device creation fails
  */
-export [[nodiscard]] SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode = false);
+export [[nodiscard]] SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode = false, bool prefer_low_power = false);
 
 /**
  * Release shared GPU device
@@ -190,10 +191,12 @@ public:
     /**
      * Create a new ComputeContext for headless compute
      *
-     * @param prefer_discrete Prefer discrete GPU over integrated if available
+     * @param prefer_low_power Prefer energy efficiency over maximum GPU performance.
+     *                         This maps to SDL's low-power GPU preference and
+     *                         does not guarantee a specific adapter.
      * @throws gpu_error if initialization fails
      */
-    explicit ComputeContext(bool prefer_discrete = true);
+    explicit ComputeContext(bool prefer_low_power = false);
 
     /**
      * Destructor - automatically cleans up GPU device and resources

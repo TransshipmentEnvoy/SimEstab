@@ -50,15 +50,45 @@ BOOST_AUTO_TEST_CASE(test_compute_context_creation,
 }
 
 /**
- * @brief Test ComputeContext with discrete GPU preference
+ * @brief Test ComputeContext with performance/default GPU preference
  */
-BOOST_AUTO_TEST_CASE(test_compute_context_prefer_discrete,
-                     *utf::description("Test ComputeContext creation with discrete GPU preference")) {
-    BOOST_TEST_MESSAGE("Creating ComputeContext preferring discrete GPU");
+BOOST_AUTO_TEST_CASE(test_compute_context_prefer_performance,
+                     *utf::description("Test ComputeContext creation with performance/default GPU preference")) {
+    BOOST_TEST_MESSAGE("Creating ComputeContext preferring performance/default GPU selection");
+
+    ComputeContext ctx(false);
+
+    BOOST_TEST(ctx.has_device());
+}
+
+/**
+ * @brief Test ComputeContext with low-power GPU preference
+ */
+BOOST_AUTO_TEST_CASE(test_compute_context_prefer_low_power,
+                     *utf::description("Test ComputeContext creation with low-power GPU preference")) {
+    BOOST_TEST_MESSAGE("Creating ComputeContext preferring low-power GPU");
 
     ComputeContext ctx(true);
 
     BOOST_TEST(ctx.has_device());
+}
+
+/**
+ * @brief Test mixed GPU preference requests while sharing the device
+ */
+BOOST_AUTO_TEST_CASE(test_compute_context_mixed_device_preferences,
+                     *utf::description("Test multiple ComputeContext instances with different GPU preferences")) {
+    BOOST_TEST_MESSAGE("Testing mixed GPU preference requests");
+
+    ComputeContext ctx1(false);
+    BOOST_TEST(ctx1.has_device());
+
+    ComputeContext ctx2(true);
+    BOOST_TEST(ctx2.has_device());
+
+    auto info1 = ctx1.get_device_info();
+    auto info2 = ctx2.get_device_info();
+    BOOST_TEST(static_cast<int>(info1.backend) == static_cast<int>(info2.backend));
 }
 
 /**
