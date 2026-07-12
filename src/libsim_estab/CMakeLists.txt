@@ -100,6 +100,7 @@ target_sources(sim_estab PRIVATE
     src/log.cpp
     src/gpu.cpp
     src/viz/viz.cpp
+    src/util/thread_util.cpp
 )
 # C++20 module sources
 target_sources(sim_estab PUBLIC
@@ -107,6 +108,7 @@ target_sources(sim_estab PUBLIC
     module/sim_estab.cppm
     module/sim_estab--log.cppm
     module/sim_estab--gpu.cppm
+    module/sim_estab--util.cppm
     module/sim_estab.viz/viz.cppm)
 target_link_libraries(sim_estab PUBLIC
     Boost::headers

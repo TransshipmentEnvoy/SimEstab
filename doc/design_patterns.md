@@ -16,10 +16,12 @@ Sources of truth as of writing:
 ## 1. Module organization
 
 - One primary named module `sim_estab`; subsystems are **module partitions**
-  (`sim_estab:log`, `sim_estab:gpu`) re-exported by `sim_estab.cppm`
-  (`export import :log;`). Optional/heavy subsystems that pull extra
-  dependencies live in a **separate module** (`sim_estab.viz`) which
-  `import sim_estab;`s the core.
+  (`sim_estab:log`, `sim_estab:gpu`, `sim_estab:util`) re-exported by
+  `sim_estab.cppm` (`export import :log;`). Optional/heavy subsystems that
+  pull extra dependencies live in a **separate module** (`sim_estab.viz`)
+  which `import sim_estab;`s the core. Small cross-cutting helpers go in the
+  `:util` partition as sub-namespaces of `sim_estab::core::util` (e.g.
+  `util::thread_util::is_main_thread()`).
 - Interface = `module/*.cppm` (declarations + doc comments + small inline/
   template code). Implementation = `src/*.cpp` module implementation units
   (`module sim_estab;` without `export`), which include the heavy third-party
@@ -103,6 +105,16 @@ Implementation rules:
   dependencies in order.
 - Every ref-count change is logged at `debug` with the new count; create/
   destroy at `info`.
+- **First acquisition must happen on the process main thread** (enforced:
+  `SDL_ctx_acquire` throws `gpu_error` when `ref_count == 0` off the main
+  thread, checked via `core::util::thread_util::is_main_thread()` from the
+  `sim_estab:util` partition). SDL defines
+  its video/main thread as whichever thread first initializes video, and on
+  Apple platforms that must be the real main thread. Worker threads may bump
+  and release references freely once a reference exists. Recommended usage:
+  acquire an app-lifetime reference on the main thread at startup so the
+  refcount never returns to zero mid-run (otherwise the next first-acquire
+  re-runs the main-thread requirement on whatever thread gets there first).
 
 ## 4. RAII context objects (`ComputeContext`, `VizContext`)
 

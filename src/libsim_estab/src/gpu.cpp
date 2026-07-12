@@ -33,6 +33,17 @@ void SDL_ctx_acquire(SDL_InitFlags subsystems) {
     std::lock_guard<std::mutex> lock(detail::SDL_ctx_mutex);
 
     if (detail::SDL_ctx_ref_count == 0) {
+        // First acquisition defines SDL's video/main thread (a hard requirement
+        // on Apple platforms), so it must happen on the process main thread.
+        // Re-acquisitions from worker threads only bump the refcount and stay allowed.
+        if (!util::thread_util::is_main_thread()) {
+            sim_estab_log("sim_estab.gpu", severity_level::error,
+                          "SDL first initialization attempted off the main thread");
+            throw gpu_error("SDL video subsystem must be first initialized on the process main thread "
+                            "(acquire an SDL context on the main thread at startup; worker threads may "
+                            "then acquire additional references)");
+        }
+
         // First acquisition - initialize SDL
         sim_estab_log("sim_estab.gpu", severity_level::info, "Initializing SDL (subsystems=", subsystems, ")");
         if (!SDL_Init(static_cast<SDL_InitFlags>(subsystems))) {

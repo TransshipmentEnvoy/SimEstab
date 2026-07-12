@@ -18,6 +18,7 @@ export module sim_estab;
 // Re-export all submodules
 export import :log;
 export import :gpu;
+export import :util;
 
 /**
  * @namespace sim_estab
@@ -34,5 +35,6 @@ export import :gpu;
  * The library is organized into the following namespaces:
  * - sim_estab::core::log - Hierarchical logging system
  * - sim_estab::core::gpu - Headless GPU compute context
+ * - sim_estab::core::util - General-purpose utilities (thread_util, ...)
  * - (Additional subsystems to be added as modules are migrated)
  */
