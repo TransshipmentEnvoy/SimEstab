@@ -1,5 +1,6 @@
 import os
 import shutil
+import stat
 import glob
 from conan import ConanFile
 from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake, cmake_layout
@@ -35,7 +36,8 @@ class RepoRecipe(ConanFile):
     default_options = {"BUILD_TESTS": False}
 
     def build_requirements(self):
-        pass
+        if self.settings.os == "Linux":
+            self.tool_requires("patchelf/0.18")
 
     def requirements(self):
         # util
@@ -157,6 +159,21 @@ class RepoRecipe(ConanFile):
                 else:
                     copy_shared_lib(lib_path, os.path.join(self.package_folder, "lib"), "libvulkan.so.1")
                     # copy_shared_lib(lib_path, os.path.join(self.package_folder, "lib"), "libvulkan.dylib*")
+
+        if self.settings.os == "Linux":
+            self._patch_bundled_runpaths()
+
+    def _patch_bundled_runpaths(self):
+        """Bundled deps (boost, SDL3, vulkan) ship without RUNPATH, so their own
+        NEEDED entries (e.g. boost_log -> boost_filesystem) are unresolvable next
+        to each other: DT_RUNPATH is not consulted for indirect dependencies.
+        Stamp $ORIGIN so every lib resolves its siblings in the same directory."""
+        lib_dir = os.path.join(self.package_folder, "lib")
+        for f in glob.glob(os.path.join(lib_dir, "*.so*")):
+            if os.path.islink(f) or os.path.basename(f) == "libsim_estab.so":
+                continue
+            os.chmod(f, os.stat(f).st_mode | stat.S_IWUSR)
+            self.run(f"patchelf --set-rpath '$ORIGIN' \"{f}\"")
 
     def package_info(self):
         print(self.env_info)
