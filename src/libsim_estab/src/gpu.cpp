@@ -230,6 +230,7 @@ void ComputeContext::check_impl() const noexcept {
 // Implementation struct holding SDL GPU resources
 struct ComputeContext::Impl {
     SDL_GPUDevice *gpu_device = nullptr; // Shared device (not owned)
+    bool sdl_ctx_acquired     = false;   // True only after SDL_ctx_acquire succeeded
     bool prefer_low_power     = false;
 
     Impl() = default;
@@ -249,8 +250,11 @@ struct ComputeContext::Impl {
             gpu_device = nullptr;
         }
 
-        // Release SDL context reference
-        SDL_ctx_release();
+        // Release SDL context reference only if this instance acquired one
+        if (sdl_ctx_acquired) {
+            SDL_ctx_release();
+            sdl_ctx_acquired = false;
+        }
     }
 };
 
@@ -264,55 +268,47 @@ ComputeContext::ComputeContext(bool prefer_low_power) {
     impl_                   = new (impl_buffer_) Impl();
     impl_->prefer_low_power = prefer_low_power;
 
-    sim_estab_log("sim_estab.gpu", severity_level::info,
-                  "Initializing ComputeContext (headless, prefer_low_power=",
-                  prefer_low_power ? "true" : "false", ")");
-
-    // Acquire SDL context with video subsystem (required for GPU device creation)
     try {
-        SDL_ctx_acquire(SDL_INIT_VIDEO);
-    } catch (const gpu_error& e) {
-        impl_->~Impl();
-        impl_ = nullptr;
-        throw;
-    }
+        sim_estab_log("sim_estab.gpu", severity_level::info,
+                      "Initializing ComputeContext (headless, prefer_low_power=",
+                      prefer_low_power ? "true" : "false", ")");
 
-    // Acquire shared GPU device
-    // Note: debug mode is enabled by default for compute contexts
+        // Acquire SDL context with video subsystem (required for GPU device creation)
+        SDL_ctx_acquire(SDL_INIT_VIDEO);
+        impl_->sdl_ctx_acquired = true;
+
+        // Acquire shared GPU device
+        // Note: debug mode is enabled by default for compute contexts
 #ifdef NDEBUG
-    constexpr bool gpu_debug_mode = false;
+        constexpr bool gpu_debug_mode = false;
 #else
-    constexpr bool gpu_debug_mode = true;
+        constexpr bool gpu_debug_mode = true;
 #endif
 
-    try {
         impl_->gpu_device = static_cast<SDL_GPUDevice *>(GPU_device_acquire(gpu_debug_mode, prefer_low_power));
-    } catch (const gpu_error& e) {
+        if (!impl_->gpu_device) {
+            throw gpu_error("Failed to acquire shared GPU device");
+        }
+
+        // Log GPU info
+        auto gpu_info            = get_device_info();
+        const char *backend_name = "Unknown";
+        switch (gpu_info.backend) {
+        case GPUBackend::Vulkan:
+            backend_name = "Vulkan";
+            break;
+        case GPUBackend::D3D12:
+            backend_name = "Direct3D 12";
+            break;
+        default:
+            break;
+        }
+        sim_estab_log("sim_estab.gpu", severity_level::info, "GPU device created with backend: ", backend_name);
+    } catch (...) {
         impl_->~Impl();
         impl_ = nullptr;
         throw;
     }
-
-    if (!impl_->gpu_device) {
-        impl_->~Impl();
-        impl_ = nullptr;
-        throw gpu_error("Failed to acquire shared GPU device");
-    }
-
-    // Log GPU info
-    auto gpu_info            = get_device_info();
-    const char *backend_name = "Unknown";
-    switch (gpu_info.backend) {
-    case GPUBackend::Vulkan:
-        backend_name = "Vulkan";
-        break;
-    case GPUBackend::D3D12:
-        backend_name = "Direct3D 12";
-        break;
-    default:
-        break;
-    }
-    sim_estab_log("sim_estab.gpu", severity_level::info, "GPU device created with backend: ", backend_name);
 }
 
 // Destructor

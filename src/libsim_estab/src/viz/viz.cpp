@@ -36,6 +36,7 @@ struct VizContext::Impl {
     int width                 = 0;
     int height                = 0;
     bool window_claimed       = false;
+    bool sdl_ctx_acquired     = false; // True only after SDL_ctx_acquire succeeded
     std::string title;
 
     Impl() = default;
@@ -70,8 +71,11 @@ struct VizContext::Impl {
             gpu_device = nullptr;
         }
 
-        // Release SDL context reference
-        sim_estab::core::gpu::SDL_ctx_release();
+        // Release SDL context reference only if this instance acquired one
+        if (sdl_ctx_acquired) {
+            sim_estab::core::gpu::SDL_ctx_release();
+            sdl_ctx_acquired = false;
+        }
     }
 };
 
@@ -94,6 +98,7 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
         } catch (const sim_estab::core::gpu::gpu_error& e) {
             throw viz_error(std::string("SDL initialization failed: ") + e.what());
         }
+        impl_->sdl_ctx_acquired = true;
         sim_estab_log("sim_estab.viz", severity_level::debug, "SDL context acquired successfully");
 
         // Create window flags
