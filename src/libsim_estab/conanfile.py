@@ -65,7 +65,7 @@ class RepoRecipe(ConanFile):
 
         # graphics
         self.requires(
-            "sdl/3.4.8",
+            "sdl/3.4.12",
             options={
                 "shared": True,
                 "gpu": True,
@@ -77,16 +77,16 @@ class RepoRecipe(ConanFile):
             },
         )
         # vulkan backend & shader tools
-        self.requires("vulkan-loader/1.4.313.0")
-        self.requires("glslang/1.4.313.0")
-        self.requires("spirv-cross/1.4.321.0")
+        self.requires("vulkan-loader/1.4.350.0")
+        self.requires("glslang/1.4.350.0")
+        self.requires("spirv-cross/1.4.350.0")
 
         # geometry
-        self.requires("cgal/6.1.1")
+        self.requires("cgal/6.2")
         # self.requires("opencascade/7.9.1")  # TODO: replace with custom recipe
 
         # ecs
-        self.requires("flecs/4.1.1")
+        self.requires("flecs/4.1.5")
 
     def configure(self):
         pass
