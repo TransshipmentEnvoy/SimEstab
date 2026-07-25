@@ -91,10 +91,7 @@ check_lto_support(LTO_SUPPORTED)
 # main library
 add_library(sim_estab SHARED)
 add_library(libsim_estab::sim_estab ALIAS sim_estab)
-set_target_properties(sim_estab PROPERTIES CXX_STANDARD_REQUIRED ON)
-set_target_properties(sim_estab PROPERTIES CXX_STANDARD 23)
-set_target_properties(sim_estab PROPERTIES CXX_EXTENSION ON)
-target_compile_features(sim_estab PUBLIC cxx_std_23)
+target_set_cxx_standard(sim_estab)
 target_sources(sim_estab PRIVATE
     # module-based implementation (imports module, not a module unit itself)
     src/log.cpp

@@ -36,11 +36,7 @@ target_link_libraries(libsim_estab_test PRIVATE
 )
 
 # Set C++ standard for tests
-set_target_properties(libsim_estab_test PROPERTIES
-    CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
-    CXX_EXTENSIONS ON
-)
+target_set_cxx_standard(libsim_estab_test)
 
 # sanitizers
 if(LIBSIM_ESTAB__SANITIZE_ADDRESS)
@@ -87,11 +83,7 @@ target_link_libraries(libsim_estab_viz_test PRIVATE
 )
 
 # Set C++ standard for tests
-set_target_properties(libsim_estab_viz_test PROPERTIES
-    CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
-    CXX_EXTENSIONS ON
-)
+target_set_cxx_standard(libsim_estab_viz_test)
 
 # sanitizers
 if(LIBSIM_ESTAB__SANITIZE_ADDRESS)

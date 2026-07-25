@@ -27,9 +27,9 @@ nanobind_add_module(
     FREE_THREADED
     bind.cpp)
 set_target_properties(_if PROPERTIES CXX_STANDARD_REQUIRED ON)
-set_target_properties(_if PROPERTIES CXX_STANDARD 23)
-set_target_properties(_if PROPERTIES CXX_EXTENSION ON)
-target_compile_features(_if PUBLIC cxx_std_23)
+set_target_properties(_if PROPERTIES CXX_STANDARD 26)
+set_target_properties(_if PROPERTIES CXX_EXTENSIONS ON)
+target_compile_features(_if PUBLIC cxx_std_26)
 # target_compile_definitions(_if PRIVATE BOOST_ALL_DYN_LINK) # Not sure why nanobind needs explicit definition of this
 target_link_libraries(_if PRIVATE Boost::headers Boost::log)
 target_link_libraries(_if PRIVATE libsim_estab::sim_estab)
