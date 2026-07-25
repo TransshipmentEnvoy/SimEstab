@@ -28,3 +28,27 @@ function(target_set_cxx_standard target_name)
             $<$<COMPILE_LANGUAGE:CXX>:-freflection>)
     endif()
 endfunction()
+
+# Applies the -march baseline selected by LIBSIM_ESTAB__ARCH_BASELINE.
+# An empty value disables the flag entirely (portable build).
+function(target_set_arch_baseline target_name)
+    if(NOT LIBSIM_ESTAB__ARCH_BASELINE)
+        return()
+    endif()
+    if(MSVC)
+        # MSVC has no -march; /arch: is a different vocabulary, left to the caller.
+        return()
+    endif()
+
+    set(_arch_flag "-march=${LIBSIM_ESTAB__ARCH_BASELINE}")
+    string(MAKE_C_IDENTIFIER "LIBSIM_ESTAB__HAS_ARCH_${LIBSIM_ESTAB__ARCH_BASELINE}" _arch_cache_var)
+    check_cxx_compiler_flag(${_arch_flag} ${_arch_cache_var})
+
+    if(${_arch_cache_var})
+        target_compile_options(${target_name} PUBLIC
+            $<$<COMPILE_LANGUAGE:CXX>:${_arch_flag}>)
+    else()
+        message(WARNING
+            "${target_name}: compiler rejects ${_arch_flag}, building without an ISA baseline")
+    endif()
+endfunction()

@@ -32,6 +32,12 @@ option(BUILD_TESTS "Build C++ tests for libsim_estab" OFF)
 option(LIBSIM_ESTAB__SANITIZE_ADDRESS "Enable address sanitizer for libsim_estab" OFF)
 option(LIBSIM_ESTAB__SANITIZE_UNDEFINED "Enable undefined behavior sanitizer for libsim_estab" OFF)
 option(LIBSIM_ESTAB__SANITIZE_THREAD "Enable thread sanitizer for libsim_estab" OFF)
+# ISA baseline, as a string option. x86-64-v3 (AVX2) is the level the data
+# container design assumes; set to an empty string for a fully portable build.
+set(LIBSIM_ESTAB__ARCH_BASELINE "x86-64-v3" CACHE STRING
+    "-march baseline for libsim_estab; empty string disables the flag")
+set_property(CACHE LIBSIM_ESTAB__ARCH_BASELINE PROPERTY STRINGS
+    "x86-64-v3" "x86-64-v4" "x86-64-v2" "x86-64" "native" "")
 
 # common path
 cmake_path(GET CMAKE_CURRENT_LIST_FILE PARENT_PATH project_path_current)
@@ -92,6 +98,7 @@ check_lto_support(LTO_SUPPORTED)
 add_library(sim_estab SHARED)
 add_library(libsim_estab::sim_estab ALIAS sim_estab)
 target_set_cxx_standard(sim_estab)
+target_set_arch_baseline(sim_estab)
 target_sources(sim_estab PRIVATE
     # module-based implementation (imports module, not a module unit itself)
     src/log.cpp
