@@ -1,9 +1,12 @@
 [settings]
+# NOTE: capped at C++23 while Linux targets gnu26 -- Conan settings.yml
+# restricts msvc.cppstd to [null, 14, 17, 20, 23]; 26 is not a legal value.
+# Windows is unbuilt/unverified; revisit when Conan gains msvc/26.
 os=Windows
 arch=x86_64
 compiler=msvc
-compiler.cppstd=26
+compiler.cppstd=23
 compiler.runtime=dynamic
-compiler.version=193
+compiler.version=195
 build_type=Release
-&:compiler.cppstd=26
+&:compiler.cppstd=23
