@@ -12,10 +12,11 @@ import dataclasses
 
 import pytest
 
+import sim_estab.config as engine_config
 from sim_estab.config import CommandPolicy, EngineConfig, HostPolicy
 
 # --------------------------------------------------------------------------
-# decided values (doc/design_limits.md 1, 2)
+# decided values (doc/design_limits.md 1, 2, 4)
 # --------------------------------------------------------------------------
 
 
@@ -29,6 +30,14 @@ def test_decided_defaults():
     assert policy.source_capacity == 64
     assert policy.host_source_capacity == 256
     assert policy.peer_source_capacity == 256
+
+
+def test_entity_capacity_decided_values():
+    """The default cap is 2**24, a ceiling rather than a working size; the maximum is
+    what a ``u32`` slot can address (``doc/design_limits.md`` §4)."""
+    assert engine_config.DEFAULT_ENTITY_CAPACITY == 1 << 24
+    assert engine_config.MAX_ENTITY_CAPACITY == 2**32 - 1
+    assert EngineConfig().entity_capacity == {}
 
 
 def test_capacity_is_the_only_number_an_endpoint_declares():
@@ -87,30 +96,17 @@ def test_command_policy_rejects_non_positive(kwargs):
         CommandPolicy(**kwargs)
 
 
-def test_warn_bandwidths_are_two_independent_values():
-    """Separate knobs: a projection crossing is narrowed by a spec or row predicate, a
-    compaction crossing by a schema (``doc/design_limits.md`` §4, §5). Retuning one must
-    not move the other."""
-    config = EngineConfig()
-    assert config.projection_warn_bytes_per_second == 4_000_000_000
-    assert config.compaction_warn_bytes_per_second == 1_000_000_000
-
+def test_projection_warn_bandwidth():
+    """4 GB/s per View, reasoned from the budgeted normal case (``doc/design_limits.md``
+    §5), and overridable per session."""
+    assert EngineConfig().projection_warn_bytes_per_second == 4_000_000_000
     retuned = EngineConfig(projection_warn_bytes_per_second=8_000_000_000)
     assert retuned.projection_warn_bytes_per_second == 8_000_000_000
-    assert retuned.compaction_warn_bytes_per_second == 1_000_000_000
-
-    retuned = EngineConfig(compaction_warn_bytes_per_second=2_000_000_000)
-    assert retuned.compaction_warn_bytes_per_second == 2_000_000_000
-    assert retuned.projection_warn_bytes_per_second == 4_000_000_000
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["projection_warn_bytes_per_second", "compaction_warn_bytes_per_second"],
-)
-def test_warn_bandwidths_must_be_positive(field):
+def test_projection_warn_bandwidth_must_be_positive():
     with pytest.raises(ValueError, match="must be positive"):
-        EngineConfig(**{field: 0})
+        EngineConfig(projection_warn_bytes_per_second=0)
 
 
 def test_tick_rate_must_be_positive():
@@ -130,10 +126,18 @@ def test_seed_may_be_absent_but_not_negative():
         EngineConfig(seed=-1)
 
 
-def test_capacity_entry_must_be_positive():
-    """Zero is not 'uncapped'; omitting the entry is."""
-    with pytest.raises(ValueError, match="omit the entry"):
-        EngineConfig(capacity={"settlement": 0})
+@pytest.mark.parametrize("cap", [0, -1, 2**32])
+def test_entity_capacity_entry_out_of_range(cap):
+    """An entry is 1 to MAX_ENTITY_CAPACITY; omitting it keeps the declared or default
+    cap."""
+    with pytest.raises(ValueError, match="omitting the entry"):
+        EngineConfig(entity_capacity={"settlement": cap})
+
+
+@pytest.mark.parametrize("cap", [1, 200, 2**32 - 1])
+def test_entity_capacity_entry_in_range(cap):
+    config = EngineConfig(entity_capacity={"settlement": cap})
+    assert config.entity_capacity["settlement"] == cap
 
 
 def test_host_policy_defaults():
@@ -193,19 +197,19 @@ def test_config_is_frozen():
         config.tick_rate = 60
 
 
-def test_capacity_mapping_is_read_only():
+def test_entity_capacity_mapping_is_read_only():
     """A frozen dataclass would otherwise still hand out a mutable mapping."""
-    config = EngineConfig(capacity={"settlement": 4096})
-    assert config.capacity["settlement"] == 4096
+    config = EngineConfig(entity_capacity={"settlement": 4096})
+    assert config.entity_capacity["settlement"] == 4096
     with pytest.raises(TypeError):
-        config.capacity["settlement"] = 8192
+        config.entity_capacity["settlement"] = 8192
 
 
-def test_capacity_is_snapshotted_at_construction():
+def test_entity_capacity_is_snapshotted_at_construction():
     source = {"settlement": 4096}
-    config = EngineConfig(capacity=source)
+    config = EngineConfig(entity_capacity=source)
     source["settlement"] = 1
-    assert config.capacity["settlement"] == 4096
+    assert config.entity_capacity["settlement"] == 4096
 
 
 @pytest.mark.smoke

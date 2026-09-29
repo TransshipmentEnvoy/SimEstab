@@ -4,9 +4,7 @@ This document gives every number that the other design docs leave to measurement
 later decision. For each value it gives the value, where it lives in code, the reasoning,
 and what would make it change (§9).
 
-Status: M0 is done, except one follow-up in `TODO.md`. Every decided value below is in
-`sim_estab:limits` or `config.py`, except the object caps of §4. Those are decided here, and
-landing them in code is that follow-up; §8 marks them.
+Status: M0 is done: every decided value below is in `sim_estab:limits` or `config.py`.
 
 Terms are defined in [glossary.md](glossary.md). Five sites send readers here for their
 values: `design_engine_core.md` §3.1, `design_python_api.md` §3 and §7.1, and
@@ -244,7 +242,7 @@ and §2.2.
 
 Both are build constants. A type sets its own cap with `[[=cap(N)]]`, and a session may
 override it per type with `EngineConfig.entity_capacity`. Every cap is closed at the freeze
-and joins session identity. Landing both constants in code is an M0 follow-up (§8).
+and joins session identity.
 
 **Why 2²⁴.** The default cap is a ceiling: reaching it means a runaway system, not normal
 play (`design_data_container.md` §2.2). So it must sit well above any real population and
@@ -467,9 +465,9 @@ This section names the one place each value lives. The C++ side is the partition
 | host policy: shutdown deadline, retry limit, inbox cap | `HostPolicy.shutdown_deadline`, `HostPolicy.mod_retry_limit`, `HostPolicy.max_inbox_size` | — | policy defaults, Python only |
 | chunk quantum | — | `chunk_elements` | build constant. Its one definition is the CMake cache variable `LIBSIM_ESTAB__CHUNK_ELEMENTS` in `src/libsim_estab/CMakeLists.txt`. The partition falls back to 1024 only for a build outside this CMake |
 | projection warning bandwidth | `EngineConfig.projection_warn_bytes_per_second` | `default_projection_warn_bytes_per_second` | policy default. Checked per View, not against the session total (§5) |
-| default object cap | — | `default_entity_capacity` | build constant, 2²⁴ (§4). **M0 follow-up: not yet in code** (`TODO.md`) |
-| maximum object cap | `EngineConfig.entity_capacity` rejects a larger value | `max_entity_capacity` | build constant, 2³²−1 (§4). **M0 follow-up: not yet in code** |
-| per-type caps | `EngineConfig.entity_capacity` | — | per-type override, closed at the freeze (§4), each entry 1 to 2³²−1. **M0 follow-up: not yet in code** |
+| default entity capacity | `DEFAULT_ENTITY_CAPACITY` | `default_entity_capacity` | build constant, 2²⁴ (§4) |
+| maximum entity capacity | `MAX_ENTITY_CAPACITY`, a module constant that `EngineConfig` checks against | `max_entity_capacity` | build constant, 2³²−1 (§4). The `u32` type of the C++ constant is what keeps a cap within a slot |
+| per-type caps | `EngineConfig.entity_capacity` | — | per-type override, closed at the freeze (§4), each entry 1 to 2³²−1 |
 | `C`, ring depth, event ring size | **nowhere** | **nowhere** | computed at the freeze from the closed endpoint set (`design_engine_core.md` §2.4 step 3a). Writing any of them down would create the engine-wide pool that per-endpoint rings avoid |
 | `ipc_deadline` | `HostPolicy.ipc_deadline`, default `None` (unbounded) | — | value open (§7). `EngineConfig` rejects a set value that does not exceed one tick at the configured rate |
 | `high_water`, `input_delay_ticks`, per-slot size | **not yet anywhere** | **not yet anywhere** | values open (§7). `high_water` belongs to the event ring (`design_engine_core.md` §5.2) |
@@ -485,10 +483,8 @@ the relationships between constants, not the session. They check that:
 - participants do not exceed sources, which holds because both caps are 256 (§2.1);
 - the View and participant caps are nonzero;
 - the chunk quantum is a power of two of at least 64, and a multiple of one cache line of
-  1-byte elements.
-
-The M0 follow-up adds two more: the default object cap is at most the maximum, and the
-maximum fits a `u32` slot.
+  1-byte elements;
+- the default entity capacity is positive and within the maximum.
 
 `test/test_config.py` asserts the Python defaults as literals. A change to a default fails
 that test, so the test, this document and `sim_estab:limits` change together.

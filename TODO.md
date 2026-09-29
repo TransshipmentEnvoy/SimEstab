@@ -6,10 +6,8 @@ the design each item implements is in `doc/`. Unresolved design questions are in
 
 **Where things stand.** Built: the `log`, `gpu`, `viz`, `util` and `limits` modules. That
 covers SDL3 compute and viz contexts, logging, the SDL main-thread init guard, and the
-decided limits (M0). The object caps of `doc/design_limits.md` §4 are not in code yet; the
-M0 follow-up below lands them. The toolchain the designs assume is in place: GCC 16, C++26
-with `-freflection`, and `-march=x86-64-v3`. Everything from M1 on is designed but not
-written.
+decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26 with
+`-freflection`, and `-march=x86-64-v3`. Everything from M1 on is designed but not written.
 
 + [x] basic setup
 + [x] graphics basics
@@ -22,18 +20,6 @@ written.
       `doc/design_logging.md` §1)
 + [x] **M0: decided limits in code.** Every value in `doc/design_limits.md` is in
       `sim_estab:limits` or `src/sim_estab/config.py`, with tests in `test/test_config.py`
-+ [ ] **M0 follow-up: object caps in code, compaction constant out** (`doc/design_limits.md`
-      §4, §8)
-  + [ ] add `default_entity_capacity = 1 << 24` and `max_entity_capacity = 2^32 − 1` to
-        `src/libsim_estab/module/sim_estab--limits.cppm`, with `static_assert`s that the
-        default is within the maximum and the maximum fits a `u32` slot, and mirror them in
-        `src/sim_estab/config.py`
-  + [ ] rename `EngineConfig.capacity` to `EngineConfig.entity_capacity`. An empty
-        mapping means every type keeps its declared or default cap; an entry must be 1 to
-        2³²−1. Update `test/test_config.py`
-  + [ ] remove `compaction_warn_bytes_per_second` from `sim_estab--limits.cppm` (with its
-        comment block that cites `doc/design_limits.md` §4), `src/sim_estab/config.py` and
-        `test/test_config.py`
 + [ ] **M1: session, Views, command ring, gate.** No simulation content yet
       (`doc/design_engine_core.md` §7 step 1)
   + [ ] session lifecycle: `configuring → freeze → running`, with the freeze's ordered

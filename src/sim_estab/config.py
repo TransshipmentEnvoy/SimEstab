@@ -2,8 +2,9 @@
 
 Every value here is decided in ``doc/design_limits.md``, which carries the reasoning
 and the revisit trigger for each one; the shapes are ``design_python_api.md`` §3. The
-C++ mirror of the command-policy defaults, the tick rate and the warn thresholds is the
-``sim_estab:limits`` module partition, and the two must not drift. ``HostPolicy`` values
+C++ mirror of the command-policy defaults, the tick rate, the warn threshold and the
+entity capacities is the ``sim_estab:limits`` module partition, and the two must not
+drift. ``HostPolicy`` values
 have no C++ mirror.
 
 Validation happens here, in Python, before anything touches native code
@@ -30,6 +31,14 @@ __all__ = [
 
 #: Ceiling a mod manifest may request for its per-endpoint, per-tick capacity.
 MAX_SOURCE_CAPACITY: Final[int] = 256
+
+#: The cap of every object type that declares none: the most entities of that type
+#: alive at one time (``doc/design_limits.md`` §4). A ceiling, not a working size.
+DEFAULT_ENTITY_CAPACITY: Final[int] = 1 << 24
+
+#: The largest cap a type may declare or a session may configure. A slot is a ``u32``
+#: and the high half of a ``u64`` id, so a larger cap has no slot to put an entity in.
+MAX_ENTITY_CAPACITY: Final[int] = (1 << 32) - 1
 
 
 def _require_positive(value: int | float, name: str) -> None:
@@ -163,10 +172,12 @@ class EngineConfig:
     host_policy: HostPolicy = field(default_factory=HostPolicy)
     command_policy: CommandPolicy = field(default_factory=CommandPolicy)
 
-    #: OPTIONAL caps, per object type. Empty means every table grows as needed, which
-    #: is the default and the normal case. A declared cap is closed at the freeze,
-    #: joins session identity, and makes create-at-cap a deterministic rejection.
-    capacity: Mapping[str, int] = field(default_factory=dict)
+    #: Cap overrides, per object type: the most entities of that type alive at one
+    #: time. Empty means every type keeps its declared ``[[=cap(N)]]``, or
+    #: ``DEFAULT_ENTITY_CAPACITY``. Each entry must be 1 to ``MAX_ENTITY_CAPACITY``.
+    #: Every cap is closed at the freeze and joins session identity, and a create at the
+    #: cap is refused deterministically (``doc/design_data_container.md`` §2.2).
+    entity_capacity: Mapping[str, int] = field(default_factory=dict)
 
     #: ``None`` generates one, which is then recorded.
     seed: int | None = None
@@ -185,23 +196,10 @@ class EngineConfig:
     #: threshold near 1 GB/s would warn during ordinary operation.
     projection_warn_bytes_per_second: int = 4_000_000_000
 
-    #: Compaction scan+gather bandwidth above which the engine warns, naming the object
-    #: type. Compaction is uncapped for the same reason projection is
-    #: (``doc/design_limits.md`` §4), and measured the same way — but **per object
-    #: type**, which is the granularity at which a compaction remedy exists.
-    #:
-    #: A **separate** number from the one above, so either can be retuned alone. It has
-    #: no measurement or derivation behind it, which makes it the weakest default in this
-    #: module (``doc/design_limits.md`` §9).
-    compaction_warn_bytes_per_second: int = 1_000_000_000
-
     def __post_init__(self) -> None:
         _require_positive(self.tick_rate, "tick_rate")
         _require_positive(
             self.projection_warn_bytes_per_second, "projection_warn_bytes_per_second"
-        )
-        _require_positive(
-            self.compaction_warn_bytes_per_second, "compaction_warn_bytes_per_second"
         )
 
         if self.on_failed_stop not in ("raise", "terminate"):
@@ -225,13 +223,16 @@ class EngineConfig:
                     f"not a fault"
                 )
 
-        for name, cap in self.capacity.items():
-            if cap <= 0:
+        for name, cap in self.entity_capacity.items():
+            if not 1 <= cap <= MAX_ENTITY_CAPACITY:
                 raise ValueError(
-                    f"capacity[{name!r}] must be positive, got {cap}; omit the entry "
-                    f"to leave the type uncapped"
+                    f"entity_capacity[{name!r}] must be 1 to {MAX_ENTITY_CAPACITY}, got "
+                    f"{cap}; a slot is a u32, and omitting the entry keeps the type's "
+                    f"declared or default cap"
                 )
 
         # Immutable after construction, in fact and not only by convention: a frozen
         # dataclass would otherwise still hand out a mutable mapping.
-        object.__setattr__(self, "capacity", MappingProxyType(dict(self.capacity)))
+        object.__setattr__(
+            self, "entity_capacity", MappingProxyType(dict(self.entity_capacity))
+        )

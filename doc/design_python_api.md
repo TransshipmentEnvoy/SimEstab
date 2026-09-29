@@ -413,9 +413,7 @@ engine = Engine(config)                  # the only place config crosses the bou
 
 The sketch matches `src/sim_estab/config.py`, which is the implementation. `window` and
 `log` are the only fields not in `config.py` yet
-([Q18](open_question.md#q18-what-goes-in-windowconfig-and-logconfig)). The
-`entity_capacity` field, with its default and range, is not in `config.py` yet; landing it is
-an M0 follow-up in `TODO.md`.
+([Q18](open_question.md#q18-what-goes-in-windowconfig-and-logconfig)).
 
 Rules:
 

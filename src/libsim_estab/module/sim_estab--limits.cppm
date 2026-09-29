@@ -9,8 +9,9 @@
  * Two kinds of constant live here and they are not interchangeable:
  *
  * - Build constants - fixed when this library compiles. Retuning is a rebuild, never a
- *   config change: the chunk quantum, and the ceilings (max_source_capacity, max_players,
- *   max_sources, max_views, max_paced_participants).
+ *   config change: the chunk quantum, the ceilings (max_source_capacity, max_players,
+ *   max_sources, max_views, max_paced_participants), and the entity capacities
+ *   (default_entity_capacity, max_entity_capacity).
  * - Policy defaults - the shipped default of a field a session may override at
  *   construction (EngineConfig, src/sim_estab/config.py). The engine reads the CONFIGURED
  *   value and never these; they exist so C++ and Python cannot drift, and so a session
@@ -137,21 +138,29 @@ export template <typename T>
 inline constexpr std::size_t padding_elements = 64u / sizeof(T);
 
 // ---------------------------------------------------------------------------
-// Measured, not capped - the two warn bandwidths
-// design_limits.md 4 (compaction), design_limits.md 5 (projection)
+// Entity capacity (build constants - [[=cap(N)]], EngineConfig.entity_capacity)
+// design_limits.md 4, design_data_container.md 2.1, 2.2
+// ---------------------------------------------------------------------------
+
+/// The cap of every object type that declares none: the most entities of that type alive
+/// at one time. A ceiling, not a working size - at 64 bytes a row it stops a runaway system
+/// at 1 GiB. It costs address space, not memory: columns are reserved at the cap and
+/// committed as the pool fills.
+export inline constexpr std::uint32_t default_entity_capacity = std::uint32_t{1} << 24;
+
+/// The largest cap a type may declare or a session may configure. A slot is a u32 and the
+/// high half of a u64 id, so a larger cap would have no slot to put an entity in; holding
+/// the value in a u32 is what enforces that.
+export inline constexpr std::uint32_t max_entity_capacity = 0xFFFF'FFFFu;
+
+// ---------------------------------------------------------------------------
+// Measured, not capped - the projection warn bandwidth
+// design_limits.md 5
 //
-// Neither projected-row width nor compaction has a cap, by decision rather than omission.
-// Both costs are measured instead: each pass reports duration and bytes/second as
-// first-class metrics, and crossing its threshold is a diagnosed warning naming the
-// measured rate - never a rejection, and nothing about the simulation changes.
-//
-// TWO thresholds, not one, because they must be able to move independently: the passes
-// differ in what a crossing means and in what narrows it - a projection spec or row
-// predicate on one side, a schema's erasable types or column width on the other. One
-// constant would make retuning either silently retune the other.
-//
-// They also differ in SHAPE, not only in value. Projection is evaluated per View;
-// compaction per object type. Each is the granularity at which a remedy exists.
+// Projected-row width has no cap, by decision rather than omission. Its cost is measured
+// instead: publish reports duration and bytes/second as first-class metrics, and crossing
+// the threshold is a diagnosed warning naming the measured rate - never a rejection, and
+// nothing about the simulation changes.
 // ---------------------------------------------------------------------------
 
 /// Publish bandwidth above which the engine warns, naming the measured rate AND THE VIEW.
@@ -165,12 +174,6 @@ inline constexpr std::size_t padding_elements = 64u / sizeof(T);
 /// quiet, still catches the same View at 10^7 rows (9.6 GB/s), and stays far under a
 /// memcpy-bound machine.
 export inline constexpr std::uint64_t default_projection_warn_bytes_per_second = 4'000'000'000;
-
-/// Compaction scan+gather bandwidth above which the engine warns, naming the object type.
-/// A separate value from the projection figure above, so either can be retuned alone. It
-/// has no measurement and no derivation behind it, which makes it the weakest constant in
-/// this file (design_limits.md 4, 9).
-export inline constexpr std::uint64_t default_compaction_warn_bytes_per_second = 1'000'000'000;
 
 // ---------------------------------------------------------------------------
 // Invariants
@@ -199,6 +202,10 @@ static_assert(max_paced_participants <= max_sources,
 
 static_assert(max_views > 0, "the engine registers a default View, so zero is unrepresentable");
 static_assert(max_paced_participants > 0, "the host is always a participant, so zero is unrepresentable");
+
+static_assert(default_entity_capacity > 0, "a cap of zero admits no entity, so no type could exist");
+static_assert(default_entity_capacity <= max_entity_capacity,
+              "the default cap must be one a type could also declare");
 
 static_assert(chunk_elements >= 64, "a chunk must hold a whole cache line of the narrowest (1-byte) column type");
 static_assert((chunk_elements & (chunk_elements - 1)) == 0, "the chunk quantum must be a power of two");
