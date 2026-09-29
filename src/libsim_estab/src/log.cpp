@@ -343,13 +343,20 @@ inline auto add_colored_console_log(std::ostream& strm) { return add_colored_con
 // management related
 namespace detail {
 
-/// Global mutex protecting all logging system operations
-/// This single lock eliminates potential deadlock scenarios
-/// by ensuring consistent locking order across all functions
+/// Global mutex protecting the logging system's mutable state.
+/// Logging is the bottom of the process lock hierarchy: any subsystem may
+/// emit while holding its own lock, and nothing reachable from the emission
+/// path may take a lock anyone else holds above logging.
+/// See design_patterns.md §2 "Lock hierarchy".
 static std::mutex log_mutex;
 
-/// Initialization status tracking (protected by log_mutex)
-static bool init_status{false};
+/// Initialization status. Deliberately NOT guarded by log_mutex: log_is_init()
+/// sits on every emission path in the process, so taking the mutex there would
+/// (a) deadlock log_init() against itself the moment it logs its own lifecycle
+/// and (b) serialize every emission in the process on one lock, including
+/// inside the parallel core update. Written release / read acquire so a caller
+/// that observes `true` also observes the fully-built sink state.
+static std::atomic<bool> init_status{false};
 
 /// Enum for sink type
 enum class sink_type : int {
@@ -383,54 +390,64 @@ static boost::container::flat_map<sink_type, boost::shared_ptr<sinks::sink>> sin
  * @throws May throw boost::log exceptions if system resources are insufficient
  */
 void log_init() {
-    std::lock_guard<std::mutex> lock(detail::log_mutex);
-
-    // Check if already initialized
-    if (detail::init_status) {
-        return;
-    }
-
-    // Cleanup work
     {
-        // Flush all pending log records before cleanup
-        logging::core::get()->flush();
+        std::lock_guard<std::mutex> lock(detail::log_mutex);
 
-        // Clear our tracking map
-        detail::sink_map.clear();
+        // Check if already initialized
+        if (detail::init_status.load(std::memory_order_acquire)) {
+            return;
+        }
 
-        // Boost.Log will handle ongoing operations gracefully via shared_ptr
-        logging::core::get()->remove_all_sinks();
+        // Cleanup work
+        {
+            // Flush all pending log records before cleanup
+            logging::core::get()->flush();
+
+            // Clear our tracking map
+            detail::sink_map.clear();
+
+            // Boost.Log will handle ongoing operations gracefully via shared_ptr
+            logging::core::get()->remove_all_sinks();
+        }
+
+        // Enable logging
+        logging::core::get()->set_logging_enabled(true);
+
+        // Add common attributes (timestamp, file, line, function)
+        logging::add_common_attributes();
+
+        // Enable filtering, default to INFO level and above
+        logging::core::get()->set_filter(expr::attr<severity_level>("Severity") >= severity_level::info);
+
+        // Automatic enable console
+        {
+            // Setup colored console logging with hierarchical formatting
+            auto sink = detail::add_colored_console_log(std::clog);
+
+            sink->set_formatter(expr::format("[%1%][%2%][%3%] %4%") %
+                                expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f") %
+                                expr::attr<severity_level>("Severity") % expr::attr<std::string>("Channel") %
+                                expr::smessage);
+
+            sink->locked_backend()->auto_flush(true);
+
+            // Add sink to boost core
+            logging::core::get()->add_sink(sink);
+
+            // Add sink to the map
+            detail::sink_map[detail::sink_type::console] = sink;
+        }
+
+        // Release: a caller that observes `true` also observes the sinks above.
+        detail::init_status.store(true, std::memory_order_release);
     }
 
-    // Enable logging
-    logging::core::get()->set_logging_enabled(true);
-
-    // Add common attributes (timestamp, file, line, function)
-    logging::add_common_attributes();
-
-    // Enable filtering, default to INFO level and above
-    logging::core::get()->set_filter(expr::attr<severity_level>("Severity") >= severity_level::info);
-
-    // Automatic enable console
-    {
-        // Setup colored console logging with hierarchical formatting
-        auto sink = detail::add_colored_console_log(std::clog);
-
-        sink->set_formatter(expr::format("[%1%][%2%][%3%] %4%") %
-                            expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f") %
-                            expr::attr<severity_level>("Severity") % expr::attr<std::string>("Channel") %
-                            expr::smessage);
-
-        sink->locked_backend()->auto_flush(true);
-
-        // Add sink to boost core
-        logging::core::get()->add_sink(sink);
-
-        // Add sink to the map
-        detail::sink_map[detail::sink_type::console] = sink;
-    }
-
-    detail::init_status = true;
+    // Lifecycle record, emitted AFTER the lock is released and the flag is set:
+    // before that the guard would drop it, and inside the lock this call would
+    // be re-entrant if log_is_init() ever took the mutex again. §7 of
+    // design_patterns.md requires the record; §2's lock hierarchy is why the
+    // ordering, not an exemption, is what makes it possible.
+    sim_estab_log("sim_estab.log", severity_level::info, "Logging subsystem initialized");
 }
 
 /**
@@ -451,9 +468,19 @@ void log_deinit() noexcept {
     std::lock_guard<std::mutex> lock(detail::log_mutex);
 
     // Check if already deinitialized
-    if (!detail::init_status) {
+    if (!detail::init_status.load(std::memory_order_acquire)) {
         return;
     }
+
+    // Lifecycle record first: the guard is still true and the sinks are still
+    // attached, so this is the last record the subsystem emits about itself.
+    sim_estab_log("sim_estab.log", severity_level::info, "Logging subsystem shutting down");
+
+    // Clear the flag FIRST so no new emission starts against state that is
+    // about to be torn down (design_patterns.md §2). The guard is advisory:
+    // a record already past its check may still be dropped, and log_deinit is
+    // externally synchronized against emission rather than draining it.
+    detail::init_status.store(false, std::memory_order_release);
 
     // Flush all pending log records before cleanup
     logging::core::get()->flush();
@@ -466,9 +493,6 @@ void log_deinit() noexcept {
 
     // Disable logging
     logging::core::get()->set_logging_enabled(false);
-
-    // Reset status to allow re-initialization
-    detail::init_status = false;
 }
 
 /**
@@ -476,8 +500,10 @@ void log_deinit() noexcept {
  * @return true if logging system is initialized and ready to use, false otherwise
  */
 bool log_is_init() noexcept {
-    std::lock_guard<std::mutex> lock(detail::log_mutex);
-    return detail::init_status;
+    // No lock: see the note on detail::init_status. Advisory by contract —
+    // it may go stale the instant it returns, so it gates a best-effort
+    // emission and never a decision that outlives the call.
+    return detail::init_status.load(std::memory_order_acquire);
 }
 
 /**
@@ -496,7 +522,7 @@ void enable_console() {
     std::lock_guard<std::mutex> lock(detail::log_mutex);
 
     // Check if logging system is initialized
-    if (!detail::init_status) {
+    if (!detail::init_status.load(std::memory_order_acquire)) {
         return;
     }
 
@@ -536,7 +562,7 @@ void disable_console() noexcept {
     std::lock_guard<std::mutex> lock(detail::log_mutex);
 
     // Check if logging system is initialized
-    if (!detail::init_status) {
+    if (!detail::init_status.load(std::memory_order_acquire)) {
         return;
     }
 

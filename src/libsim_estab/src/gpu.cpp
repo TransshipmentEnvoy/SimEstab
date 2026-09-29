@@ -24,6 +24,10 @@ namespace sim_estab::core::gpu {
 // =============================================================================
 
 namespace detail {
+/// Lock order within this subsystem: GPU_device_mutex -> SDL_ctx_mutex, never
+/// the reverse (GPU_device_acquire() calls SDL_ctx_is_initialized() while
+/// holding its own lock). Both sit above logging, which takes no lock on its
+/// emission guard. See design_patterns.md §2 "Lock hierarchy".
 static std::mutex SDL_ctx_mutex;
 static int SDL_ctx_ref_count                        = 0;
 static SDL_InitFlags SDL_ctx_initialized_subsystems = 0;
@@ -102,6 +106,7 @@ bool SDL_ctx_is_initialized() noexcept {
 // =============================================================================
 
 namespace detail {
+/// Acquired BEFORE SDL_ctx_mutex; see the note there.
 static std::mutex GPU_device_mutex;
 static int GPU_device_ref_count         = 0;
 static SDL_GPUDevice *GPU_device_ptr    = nullptr;
@@ -333,11 +338,15 @@ ComputeContext::~ComputeContext() noexcept {
 
 // Device queries
 GPUDeviceInfo ComputeContext::get_device_info() const {
-    check_impl();
     GPUDeviceInfo info{};
     info.backend = GPUBackend::Unknown;
 
-    if (impl_->gpu_device) {
+    // Read-only query: degrade instead of aborting (design_patterns.md §5a, §6).
+    // A getter is most likely to be called on a destroyed context from the
+    // error-handling path that is trying to report what went wrong; aborting
+    // there destroys the diagnostic being assembled. Matches
+    // VizContext::get_gpu_info(), which the two used to disagree about.
+    if (impl_ && impl_->gpu_device) {
         // Get the backend driver name from SDL
         const char *driver_name = SDL_GetGPUDeviceDriver(impl_->gpu_device);
         if (driver_name) {
