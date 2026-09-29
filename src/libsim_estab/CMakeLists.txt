@@ -39,6 +39,26 @@ set(LIBSIM_ESTAB__ARCH_BASELINE "x86-64-v3" CACHE STRING
 set_property(CACHE LIBSIM_ESTAB__ARCH_BASELINE PROPERTY STRINGS
     "x86-64-v3" "x86-64-v4" "x86-64-v2" "x86-64" "native" "")
 
+# Chunk quantum in ELEMENTS, defined here and nowhere else (doc/design_limits.md 3).
+# Retuning is a rebuild, deliberately. The constraints are re-checked as static_asserts
+# in sim_estab:limits; they are validated here too so the failure names the cache entry
+# rather than a template instantiation.
+set(LIBSIM_ESTAB__CHUNK_ELEMENTS "1024" CACHE STRING
+    "chunk quantum in elements for libsim_estab columns; power of two, at least 64")
+if(NOT LIBSIM_ESTAB__CHUNK_ELEMENTS MATCHES "^[0-9]+$"
+   OR LIBSIM_ESTAB__CHUNK_ELEMENTS LESS 64)
+    message(FATAL_ERROR
+        "LIBSIM_ESTAB__CHUNK_ELEMENTS must be an integer >= 64, got "
+        "'${LIBSIM_ESTAB__CHUNK_ELEMENTS}'")
+endif()
+math(EXPR _chunk_not_pow2 "${LIBSIM_ESTAB__CHUNK_ELEMENTS} & (${LIBSIM_ESTAB__CHUNK_ELEMENTS} - 1)")
+if(NOT _chunk_not_pow2 EQUAL 0)
+    message(FATAL_ERROR
+        "LIBSIM_ESTAB__CHUNK_ELEMENTS must be a power of two, got "
+        "'${LIBSIM_ESTAB__CHUNK_ELEMENTS}'")
+endif()
+unset(_chunk_not_pow2)
+
 # common path
 cmake_path(GET CMAKE_CURRENT_LIST_FILE PARENT_PATH project_path_current)
 cmake_path(GET project_path_current PARENT_PATH project_path_prefix)
@@ -110,6 +130,7 @@ target_sources(sim_estab PRIVATE
 target_sources(sim_estab PUBLIC
     FILE_SET CXX_MODULES FILES
     module/sim_estab.cppm
+    module/sim_estab--limits.cppm
     module/sim_estab--log.cppm
     module/sim_estab--gpu.cppm
     module/sim_estab--util.cppm
@@ -131,6 +152,12 @@ target_link_libraries(sim_estab PRIVATE
 target_include_directories(sim_estab PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
     $<INSTALL_INTERFACE:include>)
+# PUBLIC, not PRIVATE: consumers compile the installed module sources themselves (the
+# CXX_MODULES file set below), so sim_estab:limits is re-compiled on their side and must
+# see the same value. A consumer that somehow does not inherit it falls back to the same
+# default inside the partition, but the two would then be free to diverge.
+target_compile_definitions(sim_estab PUBLIC
+    LIBSIM_ESTAB__CHUNK_ELEMENTS=${LIBSIM_ESTAB__CHUNK_ELEMENTS})
 set_target_properties(sim_estab PROPERTIES
     INSTALL_RPATH "\$ORIGIN")
 # TODO: change symbol visibility in the future

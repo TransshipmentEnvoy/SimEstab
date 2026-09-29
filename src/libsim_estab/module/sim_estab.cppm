@@ -16,6 +16,7 @@
 export module sim_estab;
 
 // Re-export all submodules
+export import :limits;
 export import :log;
 export import :gpu;
 export import :util;
