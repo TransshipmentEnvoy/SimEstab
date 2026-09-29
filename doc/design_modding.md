@@ -357,12 +357,11 @@ the commands the mod submitted for that tick (§4.2).
     projection copy per publish. The manifest shows that cost, and the mod that asked for it
     pays it. The mod reads it through `view()`, below.
   - The default is `snapshot()`, and most mods should stay on it.
-  - **Row positions in a snapshot are tick-scoped.** Identity is the projected `id` column,
-    and a command names an id, never a row position. Row `r` of one snapshot says nothing
-    about row `r` of the next (`design_data_container.md` §2.2, §5.1). Resolve an id with
-    `snap.find(type, id)`, which is correct under every storage policy. A binary search is
-    right only where the ids are sorted, and an `unordered` type's ids are not
-    (`design_python_api.md` §7.2).
+  - **A row position means something only inside its own snapshot.** Identity is the
+    projected `id` column, and a command names an id, never a row position. Row `r` of one
+    snapshot says nothing about row `r` of the next (`design_data_container.md` §2.2, §5.1).
+    Resolve an id with `snap.find(type, id)`. The `id` column is sorted for every object
+    type, so one lookup rule holds everywhere (`design_python_api.md` §7.2).
   - **The snapshot catalog holds only the columns in the mod's capabilities.** Asking
     `snap.column(...)` for any other column raises `ColumnNotGrantedError`. On a thread host
     this is not a security boundary. It keeps the *observable surface* the same as on a
@@ -620,33 +619,20 @@ rules:
 
 | Aspect | Rule |
 |---|---|
-| Mode | **always `SHARED`.** A `PRIVATE` reader chooses the publisher's next block. `SHARED` exposes only bounded pin counts. The publisher may read them as availability, but never derives an address, index, generation or loop bound from bytes the child can write |
-| Mappings | the payload blocks and the published `(generation,index)` word are read/write for the engine and read-only for the child. The four aligned block-state words sit in a separate region that is read/write for both, because pin and unpin are part of the reader protocol. Page separation is required. Permissions may not be weakened just to simplify the layout |
-| What a scribble can do | corrupt the child's own read, or pin all candidate blocks so that the publisher skips only that View. The publisher claims only a state word exactly equal to zero, uses engine-private block addresses, cursor and generation, and scans at most three candidates. Child bytes cannot steer core memory or delay the tick |
+| Mode | **always `SHARED`.** A `PRIVATE` reader chooses the publisher's next block. `SHARED` exposes only bounded pin counts. The publisher may read them as availability, but never derives an address, index, epoch or loop bound from bytes the child can write |
+| Mappings | the payload blocks and the published `(epoch,index)` word are read/write for the engine and read-only for the child. The four aligned block-state words sit in a separate region that is read/write for both, because pin and unpin are part of the reader protocol. Page separation is required. Permissions may not be weakened just to simplify the layout |
+| What a scribble can do | corrupt the child's own read, or pin all candidate blocks so that the publisher skips only that View. The publisher claims only a state word exactly equal to zero, uses engine-private block addresses, cursor and epoch, and scans at most three candidates. Child bytes cannot steer core memory or delay the tick |
 | Contents | the View's projection spec **is** the capability set, so the segment holds only the columns the mod may read, plus the `id` column. Filtering happens at projection time, where the schema is, not in a later copy step |
 | Mod-side read | load the published word; atomically pin that block unless it is `WRITING`; reload and require the exact same published word; then copy the payload and unpin. Ordinary pointer or payload access starts only after this revalidation |
 | ABI | a shared-memory View **is** a stable cross-boundary layout: fixed aligned `u32` state words and a `u64` published word at pinned literal offsets. It never uses `hardware_destructive_interference_size` or a native struct memcpy. Heap Views use `std::atomic`. Shared memory uses platform interprocess-atomic wrappers over raw aligned integers (`__atomic_*` on supported Unix, `Interlocked*` on Windows). Startup refuses a platform on which these widths are not always lock-free, and the protocol is tested across processes |
 | Reclamation | **only after process death is confirmed** (pidfd/waitpid). Never on a drop message or a deadline, since a live process may still be mid-copy |
-| Growth | **the block is republished at a new generation, and the child remaps.** The segment is not sized once for the session (below) |
+| Size | **the segment is sized once, at the freeze, from the View's maximum rows** (`design_data_container.md` §5.1). Matched rows vary below that maximum, so the segment is never resized and the child never remaps |
 
-**Remapping is allowed, at a cost.** A growing world grows its projections
-(`design_engine_core.md` §3.1), and a shared-memory View is no exception. The engine
-republishes the block under a **new generation**, and the child remaps. Four constraints
-keep remapping from ever stalling the engine:
-
-1. **The engine never waits for the child.** Publishing goes on into the new mapping whether
-   or not the child has moved yet. A publish that could block on a remap would let a mod
-   process delay a tick. That is the one thing this boundary exists to prevent.
-2. **The old mapping stays valid until the child has moved off it or is declared dead.**
-   This is the reclamation rule above, for the same reason: a live process may be mid-copy,
-   and no message or deadline proves otherwise.
-3. **The generation is checked where validity already is.** The child's read protocol
-   already loads the published word, pins, and re-reads the word to revalidate. The
-   generation rides in that word. So remapping adds **no new synchronization point**: a
-   child whose View never grows runs the same sequence as it would without remapping.
-4. **A child that never remaps is a dead child.** The existing detachment path handles it;
-   there is no new path. No state exists in which a live child keeps reading stale bytes
-   forever.
+**The segment never moves.** Every object type has a cap, and every View has a maximum
+number of rows (`design_data_container.md` §2.2, §5.1). So the engine sizes the segment once
+and commits its pages as matched rows reach them, the same way it treats a heap block
+(`design_engine_core.md` §3.1). No publish waits for the child, and the child's read
+protocol has no remap step.
 
 So a slow, hung or hostile mod loses only the freshness of its own View. It cannot delay a
 tick, corrupt the engine or affect another reader. The publisher does read the four fixed
@@ -778,8 +764,10 @@ Rules:
   system whose declarations cannot coexist with either neighbour runs alone in its own
   phase. `write_dbl` is how a system correctly reads a column it also writes: the front
   buffer stays immutable for the phase. Each invocation then receives read *and* write spans
-  computed from its declarations (`design_data_container.md` §7.3). The span is the
-  permission, so a mod never has to work out which rows are safe to touch.
+  computed from its declarations, together with the row set's live bitmap
+  (`design_data_container.md` §7.3). The span is the permission, so a mod never has to work
+  out which rows are safe to touch. Inside the span, a mod masks dead rows by the live
+  bitmap; an append-only type has none.
 - **Loading is split.** Python owns policy: discovery, the manifest, signature verification,
   user consent (§6). C++ owns mechanism: `dlopen`/`LoadLibrary`, the handshake,
   registration. Python hands the engine a vetted path; the engine never scans directories
@@ -834,17 +822,18 @@ A core mod's `tick_fn` must obey the same rules as any core system (`design_engi
 - **scatter only with indices that are provably unique.** If a SIMD scatter's index vector
   repeats a row, which lane wins is unspecified. The result then varies with lane width,
   even on one thread. Uniqueness must follow from where the indices came from: a traversal
-  of a `unique` link, or the distinct row offsets of the task range. It must never rest on
+  of a `unique` link, or the distinct rows of the task range. It must never rest on
   an assumption about the data. Every index must also lie inside the write span
   (`design_data_container.md` §3). How mods traverse links is open
   ([Q58](open_question.md#q58-mod-link-traversal));
-- **row offsets last for the tick; spans last for the invocation.** A row offset stays valid
-  for the whole tick. Nothing moves rows between phases, and the tick's terminal commit is
-  the only compaction point (`design_data_container.md` §2.2). A resolved column pointer or
-  span is valid for **this invocation only**, because spans are recomputed for each phase
-  and staged buffers merge at each boundary (`design_data_container.md` §7.3). So carrying a
-  row offset into the next phase is legal; carrying the pointer you read it with is not.
-  Anything a mod keeps past the tick, or puts into a command, is a permanent id;
+- **rows last for the tick; spans last for the invocation.** A row is a slot, and rows never
+  move (`design_data_container.md` §2.2). But the tick's terminal commit is the only point
+  where the live set changes, and after it a slot may hold a different entity. So a row is
+  usable for the whole tick and no longer. A resolved column pointer or span is valid for
+  **this invocation only**, because spans are recomputed for each phase and staged buffers
+  merge at each boundary (`design_data_container.md` §7.3). So carrying a row into the next
+  phase is legal; carrying the pointer you read it with is not. Anything a mod keeps past
+  the tick, or puts into a command, is an id;
 - no behaviour that depends on iteration order or addresses; no atomics that pick a winner;
   results independent of thread count.
 
@@ -852,7 +841,7 @@ A core mod's `tick_fn` must obey the same rules as any core system (`design_engi
 
 The verification harness (`design_engine_core.md` §2.3) also certifies mods. It runs each
 golden replay with the mod loaded, on one thread and on N, in Debug and in Release, and
-requires identical checksums.
+requires identical full checksums: the whole world every tick, plus one hash per system.
 
 ```python
 # pseudo-code — sim_estab.mod.certify
@@ -863,9 +852,9 @@ def certify(mod_path, golden_replays):
         require_identical(r.per_tick_checksums for r in runs)
 ```
 
-- Per-tick per-system checksums make a desync attributable to the mod system that caused it,
-  in certification and in the wild. Whether they are required is open
-  ([Q24](open_question.md#q24-are-per-system-checksums-required)).
+- The per-system hashes of the full checksum make a desync attributable to the mod system
+  that caused it. That holds in certification, and for a desync from the wild once its
+  replay is re-run at the full level (`design_engine_core.md` §2.3).
 - Certification compares Debug and Release runs. How that fits the engine build recorded in
   session identity is open
   ([Q23](open_question.md#q23-what-does-engine-build-mean-in-session-identity)).

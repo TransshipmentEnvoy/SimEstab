@@ -304,13 +304,14 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
   **A resource the session cannot continue without.** Two paths:
   - GPU device loss (`design_engine_core.md` §5). The GPU is in the peripheral domain, so
     core state is untouched and the session can still be replayed;
-  - world growth allocation failure in the terminal commit (`design_data_container.md`
-    §2.2). The commit allocates before it moves anything. So a failure leaves core state
-    whole at tick N, and the tick is simply abandoned. The freeze uses the same order:
+  - commit failure in the terminal commit (`design_data_container.md` §2.2). Memory is
+    reserved at each object type's cap, and the commit commits the pages it needs before it
+    changes anything. So a failure leaves core state whole at tick N, and the tick is simply
+    abandoned. It is never turned into a rejection. The freeze uses the same order:
     everything that can fail happens before anything is visible (`design_engine_core.md`
     §2.4).
 
-  Device loss and growth failure are specified in other documents. They are listed here
+  Device loss and commit failure are specified in other documents. They are listed here
   because this is where the `failed` paths are collected. The table below is written for the
   live-execution class: leak rather than free, because a live thread may still touch
   anything. For the resource class it is cautious but harmless, since nothing is running
@@ -390,12 +391,12 @@ class EngineConfig:
                                          #   load_mods (design_modding.md §3.1)
     command_policy: CommandPolicy = field(default_factory=CommandPolicy)
                                          # endpoint capacity and D (§7.1)
-    capacity: Mapping[str, int] = field(default_factory=dict)
-                                         # OPTIONAL caps, per object type. Empty = every
-                                         #   table grows as needed, the default. A
-                                         #   declared cap is closed at the freeze and
-                                         #   joins session identity
-                                         #   (design_data_container.md §2.2)
+    entity_capacity: Mapping[str, int] = field(default_factory=dict)
+                                         # cap overrides, per object type, each 1..2**32-1.
+                                         #   Empty = every type keeps its [[=cap(N)]], or
+                                         #   the default 2**24. Every cap is closed at the
+                                         #   freeze and joins session identity
+                                         #   (design_data_container.md §2.1, §2.2)
     seed: int | None = None              # None -> generated, then recorded
     on_failed_stop: str = "raise"        # "raise" | "terminate" (§4.3)
     projection_warn_bytes_per_second: int = 4_000_000_000
@@ -406,19 +407,15 @@ class EngineConfig:
                                          #   by design and measured instead
                                          #   (design_engine_core.md §3.1,
                                          #   doc/design_limits.md §5)
-    compaction_warn_bytes_per_second: int = 1_000_000_000
-                                         # compaction scan+gather bandwidth, per object
-                                         #   type; separate from the projection threshold:
-                                         #   different passes, different remedies, so
-                                         #   either can be retuned alone
-                                         #   (doc/design_limits.md §4, §9)
 
 engine = Engine(config)                  # the only place config crosses the boundary
 ```
 
 The sketch matches `src/sim_estab/config.py`, which is the implementation. `window` and
 `log` are the only fields not in `config.py` yet
-([Q18](open_question.md#q18-what-goes-in-windowconfig-and-logconfig)).
+([Q18](open_question.md#q18-what-goes-in-windowconfig-and-logconfig)). The
+`entity_capacity` field, with its default and range, is not in `config.py` yet; landing it is
+an M0 follow-up in `TODO.md`.
 
 Rules:
 
@@ -489,20 +486,21 @@ Rules:
     `resume()`, `engine.set_time_scale(...)`. They tune the loop and the peripherals and
     never touch core state. They are never recorded. A replay reproduces state bit-exactly,
     and the operator stays free to pause, fast-forward or change log levels during playback.
-- **`capacity` is a cap, and caps are optional.** The world is unbounded by default: tables
-  grow in the terminal commit as needed. This field declares a hard limit for named object
-  types. It either sets one or overrides a `[[=capacity]]` in the schema
-  (`design_data_container.md` §2.1). Declare one only where a bound is wanted *as a rule*: a
-  scenario with a fixed settlement limit, or a CI run that should not balloon.
-  - **A declared cap changes what the simulation does.** So it is closed at the freeze and
+- **`entity_capacity` overrides caps; every object type has one.** A cap is the most
+  entities of one type alive at one time. It comes from `[[=cap(N)]]` in the schema, or is
+  the default 2²⁴ (`design_data_container.md` §2.1). An entry here sets or overrides it, from
+  1 to 2³²−1.
+  Lower a cap where a bound is wanted *as a rule*: a scenario with a fixed settlement limit,
+  or a CI run that should not balloon.
+  - **A cap changes what the simulation does.** So every cap is closed at the freeze and
     recorded in session identity. A create at the cap is rejected deterministically. A
-    replay against a different cap is rejected by the header instead of diverging. An
-    uncapped type records nothing, because unbounded growth cannot be observed.
-  - **Nothing else in the design bounds world size.** `command_policy` bounds *submitted
-    commands*, and a core mod creates entities inside its tick function without submitting
-    any. So an uncapped world really is uncapped. When memory runs out, the result is a
-    session-fatal allocation failure, never a rejection. A rejection driven by machine
-    memory would make two machines replaying one stream diverge by how much RAM they had
+    replay against a different cap is rejected by the header instead of diverging.
+  - **Memory is reserved at the cap and committed as the pool fills.** A large cap costs
+    address space, not memory (`design_data_container.md` §2.2). `command_policy` bounds
+    *submitted commands*, and a core mod creates entities inside its tick function without
+    submitting any, so the cap is what bounds world size. When a commit fails, the result
+    is session-fatal, never a rejection. A rejection driven by machine memory would make
+    two machines replaying one stream diverge by how much RAM they had
     (`design_data_container.md` §2.2).
 - **`tick_rate` is not the speed setting, and must not become one.** It defines what one
   tick *means*. A unit moving one cell per tick moves at a different world speed if the rate
@@ -874,7 +872,7 @@ changing the API.
 
     | Operation | Why it never waits |
     |---|---|
-    | publish | one `acq_rel` exchange, with no wait for the reader. It may grow a block before filling it; that is budgeted tick work, not part of the atomic step (`design_engine_core.md` §3.1, §3.2) |
+    | publish | one `acq_rel` exchange, with no wait for the reader. It may commit pages of its reserved block before filling it; that is budgeted tick work, not part of the atomic step, and the block's address never changes (`design_engine_core.md` §3.1, §3.2) |
     | View take | one `acq_rel` exchange, which also hands the reader's return header to the publisher (`design_engine_core.md` §3.5) |
     | the command drain | reads whatever index each producer has made visible and stops there. A command submitted a moment later is drained at the next tick (`design_engine_core.md` §5.1) |
     | `submit` into a ring with room | an operation lease, an endpoint lease, three bounded validity checks, then one release store. It never raises, and `queue_full` is a returned result (§6, §7.1). A *full* ring is the admission wait, which is declared above rather than absent here |
@@ -1376,36 +1374,24 @@ Rules:
   `take()`. Copies may exist in any number and outlive everything, including `close()`. The
   copy is the pressure valve that makes the one-block rule workable. It is available
   wherever a snapshot is, including `ModContext` (`design_modding.md` §4.1).
-- **Track ids, never row offsets.** A row offset from a tick-N snapshot means nothing at N+k
-  (`design_data_container.md` §2.2). The `id` column is present in every projection, so
+- **Track ids, never snapshot rows.** A row of a tick-N snapshot means nothing at N+k:
+  publish gathers only live rows, so an erase or create shifts every later row
+  (`design_data_container.md` §5.1). The `id` column is present in every projection, so
   re-resolving is always possible. Whether it really is in every projection is open
-  ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)). How to resolve depends
-  on the object type's storage policy, and getting it wrong is silent:
-
-  | Storage policy | `id` column | Lookup |
-  |---|---|---|
-  | `contiguous` | sorted ascending | `np.searchsorted` |
-  | `erasable` | sorted ascending, because compaction keeps order | `np.searchsorted` |
-  | `unordered` | not sorted, because an erase swaps with the last row (`design_data_container.md` §2.2) | see below |
-
-  A binary search over an unsorted column does not fail; it returns *an answer*. It can name
-  the wrong entity, or report a live one as dead, and nothing at the call site shows it. So
-  the snapshot offers one lookup that is correct under every policy, and code should use it:
+  ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)). One rule holds for every
+  object type: snapshot rows are in slot order, and an id's high half is its slot, so the
+  `id` column is sorted ascending (`design_data_container.md` §2.2). `np.searchsorted` is
+  therefore correct everywhere, and `snap.find` is the convenience built on it:
 
   ```python
   def still_alive(view, watched):
       with view.take() as snap:
-          return snap.find("pop", watched) is not None   # right for all three policies
-
-  # np.searchsorted stays available and is correct ONLY for a sorted-id type;
-  # snap.is_sorted("pop") answers whether it is, at run time.
+          return snap.find("pop", watched) is not None   # searchsorted, then an equality check
   ```
 
-  `snap.find` is `searchsorted` where the ids are sorted, and a lookup through a
-  per-snapshot index where they are not. The index is built at publish for `unordered` types
-  only, so a session with no `unordered` type pays nothing for it. The alternative,
-  documenting "use `searchsorted`, but not for `unordered`", would put a correctness
-  condition in prose next to a recipe that runs either way.
+  `snap.find` returns the row whose id equals `watched`, or `None`. The equality check
+  matters: an id whose entity was erased has the same slot as any later occupant, but a
+  different generation, so a search for it finds a neighbour and the check rejects it.
 - **Cadence is per View**, declared at registration. There is no global snapshot-cadence
   control call. An analytics View at `cadence=30` costs a thirtieth of a render View. A tick
   under a `step()` grant attempts every View regardless of cadence, and every attempt
@@ -1427,8 +1413,10 @@ Rules:
 - **A filtered View projects `pop.id` implicitly.** Row 3 of a filtered snapshot is not
   entity 3. So any predicate other than `"all"` adds the `id` column, at 8 bytes per matched
   row, whether or not it was requested. A renderer that only draws may declare
-  `identity=False` to decline it. The GPU cannot key on a row offset across frames anyway
-  (`design_data_container.md` §5). How `identity=False` fits with the `id` column being in
+  `identity=False` to decline it. GPU state must not key on a snapshot row across frames
+  anyway (`design_data_container.md` §5). Per-entity GPU state would key on slot and
+  generation instead, and how a View projects them is open
+  ([Q57](open_question.md#q57-gpu-per-entity-state-across-frames)). How `identity=False` fits with the `id` column being in
   every projection is open ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
 - **`view.lag` and `view.matched_rows`** are the two counters the return header provides.
   `lag` is how many ticks behind the reader is, computed from the `last_consumed_tick` that
@@ -1472,10 +1460,9 @@ Rules:
   - **Detach happens only at close, never on the publish path.** Publishing writes a block
     the View already owns. A detach there would force the publisher to allocate a
     replacement outside the tick budget, which `design_engine_core.md` §3.2 forbids. At
-    close, publishing has already stopped, so that allocation never happens. Growth also
-    reallocates blocks, but it is not detach. It happens inside publish, before the fill, as
-    budgeted tick work (`design_engine_core.md` §3.1). Its line in the tick budget is open
-    ([Q20](open_question.md#q20-where-does-view-block-growth-go-in-the-tick-budget)).
+    close, publishing has already stopped, so that allocation never happens. A block's
+    address never changes: it reserves address space for the View's maximum rows and commits
+    pages as matched rows reach them (`design_engine_core.md` §3.1).
   - Remaining cost, stated so it is not discovered later: a caller that parks an array view
     in a global keeps that memory until interpreter exit. The cost is bounded: one block per
     `PRIVATE` View, once per process, since one engine is closed once and a View holds one
@@ -1484,18 +1471,19 @@ Rules:
   and may do anything with them. Nothing flows back except commands.
 - Column names, dtypes and extents come from the generated snapshot container instance
   (`design_data_container.md` §5.1), with the same schema descriptors as core state.
-  Snapshots are **dense**: every row is a live entity, so there is no validity column and
-  nothing to mask.
+  Snapshots are **dense**: publish gathers only live rows, so every row is a live entity,
+  there is no validity column and there is nothing to mask. Core storage has holes; a
+  snapshot never does (`design_data_container.md` §5.1).
 - **Identity is the `id` column, not the row position.**
-  - An id is a permanent `uint64`, never reused, and the only valid command target. A row
-    position means something *only* inside the snapshot it came from. The core compacts, so
-    row `r` of the next snapshot may be a different entity.
-  - `snap.find(type, id)` is the intended lookup, because it is right under all three
-    storage policies. `np.searchsorted` is right only where the ids are sorted, and an
-    `unordered` type's ids are not (above).
+  - An id is a `uint64`, its slot and its generation, and the only valid command target.
+    No id value is issued twice (`design_data_container.md` §2.2). A row position means
+    something *only* inside the snapshot it came from. An erase or create shifts later rows,
+    so row `r` of the next snapshot may be a different entity.
+  - `snap.find(type, id)` is the intended lookup. The `id` column is sorted for every object
+    type, so `np.searchsorted` works as well (above).
   - A command naming an entity that has since died is rejected deterministically by the
-    core. It is never undefined behaviour and never a silent hit on another entity, since
-    ids are not reused. This is normal reaction latency.
+    core. It is never undefined behaviour and never a silent hit on another entity: a later
+    occupant of the slot has a different generation. This is normal reaction latency.
   - That is an application-time rejection (§7.1): submitted, recorded, rejected at
     consumption, and reported through that command's own outcome. Both of a command's
     answers go back to its submitter. Neither is an event.

@@ -4,7 +4,9 @@ This document gives every number that the other design docs leave to measurement
 later decision. For each value it gives the value, where it lives in code, the reasoning,
 and what would make it change (§9).
 
-Status: M0 is done: every decided value below is in `sim_estab:limits` or `config.py`.
+Status: M0 is done, except one follow-up in `TODO.md`. Every decided value below is in
+`sim_estab:limits` or `config.py`, except the object caps of §4. Those are decided here, and
+landing them in code is that follow-up; §8 marks them.
 
 Terms are defined in [glossary.md](glossary.md). Five sites send readers here for their
 values: `design_engine_core.md` §3.1, `design_python_api.md` §3 and §7.1, and
@@ -19,14 +21,16 @@ them. §8 names the one place each value lives, and **the two must not drift**.
 Two kinds of number live here, and they behave differently:
 
 - **Build constants** are fixed when the library compiles. Changing one is a rebuild, never
-  a config change. Examples: the chunk quantum (§3) and the caps of §2.
+  a config change. Examples: the chunk quantum (§3), the caps of §2 and the object caps of
+  §4.
 - **Policy defaults** are the shipped defaults of fields a session may override at
   construction, in `EngineConfig`. Examples: the tick rate, `D`, endpoint capacity. The
   engine reads the configured value, never the default. The defaults exist so that C++ and
   Python cannot drift, and so that a session that configures nothing still has a value.
 
-A third kind, a cap on what one pass may cost, is left empty on purpose. Compaction (§4) and
-projection (§5) are measured instead, each against a warning threshold.
+A third kind, a cap on what one pass may cost, is left empty on purpose. Projection (§5) is
+measured instead, against a warning threshold. The rows any pass can touch are bounded by the
+object caps of §4.
 
 ---
 
@@ -54,9 +58,9 @@ a tick is 33.3 ms of simulated time. At normal speed, 33.3 ms is also the wall-c
 budget of `design_engine_core.md` §3.1. Time spent waiting at the gate is pacing and is not
 charged.
 
-**Why 30 and not 60.** Every charge in the tick budget is paid once per tick: publish,
-compaction scan and gather, growth reallocation, the command drain and system execution. So
-the rate multiplies all of them equally. 60 Hz would buy finer input timing, which matters
+**Why 30 and not 60.** Every charge in the tick budget is paid once per tick: publish, the
+terminal commit, the checksum, the command drain and system execution. So the rate
+multiplies all of them equally. 60 Hz would buy finer input timing, which matters
 less than the saving on every row of the tick budget.
 
 **The rate is not a speed knob.** This is restated here because this is where a reader would
@@ -198,12 +202,12 @@ frame-time problem.
 
 | Cap | Value | Reasoning |
 |---|---|---|
-| Views per session | **64** | Publish cost is a sum over due Views (`design_engine_core.md` §3.1), so the number of terms must be known at construction. 64 is chosen to be far from binding: render, GUI, the default View and a few analytics taps come nowhere near it. The cap closes the sum; it is not meant to restrain a design. Each View's size is uncapped (§5); the cap is on how many terms there are. Raising it also raises the worst-case snapshot memory in proportion, because that is a sum over the same terms (§5) |
+| Views per session | **64** | Publish cost is a sum over due Views (`design_engine_core.md` §3.1), so the number of terms must be known at construction. 64 is chosen to be far from binding: render, GUI, the default View and a few analytics taps come nowhere near it. The cap closes the sum; it is not meant to restrain a design. Each View's row width is uncapped (§5); the cap is on how many terms there are. Raising it also raises the worst-case snapshot memory in proportion, because that is a sum over the same terms (§5) |
 | Paced participants | **256** | See §2.1. Each participant can add up to its declared deadline to a tick. They wait concurrently, so the worst case is `max(deadline)`, not the sum, which is why the count can be generous. The cap makes the participant set enumerable, scanned once per tick; it is not a restraint. The host is always one of them; in the simplest session it is the only one |
 
 ## 3. Storage: chunk quantum
 
-The chunk quantum is the number of rows in one chunk. It is a build constant, set in one
+The chunk quantum is the number of slots in one chunk. It is a build constant, set in one
 place.
 
 `LIBSIM_ESTAB__CHUNK_ELEMENTS = 1024`. It is a CMake cache variable, defined in one place
@@ -217,59 +221,65 @@ column-padding boundaries under the padding rule of `design_data_container.md` �
 chunk starts in the middle of a vector.
 
 Retuning it is a rebuild. A chunk is the unit of parallel-for work items, SIMD iteration and
-false-sharing isolation, and nothing else. It has no spatial meaning and constrains no GPU
-workgroup, because uploads are whole-column.
+false-sharing isolation. It has no spatial meaning and constrains no GPU workgroup, because
+uploads are whole-column.
 
-## 4. Compaction: measured, not capped
+Each chunk also keeps a count of its live slots (`design_data_container.md` §4), so a scan
+skips a chunk with none. One chunk of a 4-byte column is about one page, so the chunk is a
+natural unit for memory as well. The data pages of a fully empty chunk may be decommitted.
+The generation column is never decommitted, because a slot's generation must survive while
+the slot is empty (`design_data_container.md` §2.2).
 
-**Compaction has no caps, and this is a decision, not an omission.** Its cost is measured
-per object type and checked against its own warning threshold. Attribution per mod takes the
-place of the bound a cap would give.
+## 4. Object caps
 
-The compaction row of the tick budget (`design_engine_core.md` §3.1) has two factors with no
-bound: how many object types may erase, and how many columns each type has. A charge with an
-unbounded factor cannot be derived in advance. Either the factor is capped, or the charge is
-measured. This section chooses measurement: **the compaction charge is measured, not
-derived.**
+Every object type has a cap: the most entities of that type alive at one time. This section
+gives the default and the maximum, and says what a cap bounds and what it does not. The
+mechanism, including what a create at the cap does, is in `design_data_container.md` §2.1
+and §2.2.
 
-This is the position §5 takes for projection, for the same reason. A cap on erasing object
-types restrains a schema. A cap on columns per type restrains what a mod may model. Both
-bound the wrong axis, as a per-row width cap would. The cost is `rows × columns`, summed
-over the types that erased this tick, and the `rows` term is unbounded by default whatever
-the other two are. Fifteen erasable types instead of seventeen do not make a schema cheap.
+| Value | Constant | Reasoning |
+|---|---|---|
+| default cap | **2²⁴** (16,777,216), `default_entity_capacity` | The cap of every object type that declares none (below) |
+| maximum cap | **2³²−1**, `max_entity_capacity` | A slot is a `u32`, and it is the high 32 bits of a `u64` id (`design_data_container.md` §2.2). A larger cap has no slot to put an entity in |
 
-**A metric instead of a cap.** Without one, the tick budget would have a line
-that is both unbounded and unobserved, which is what the tick budget exists to prevent:
+Both are build constants. A type sets its own cap with `[[=cap(N)]]`, and a session may
+override it per type with `EngineConfig.entity_capacity`. Every cap is closed at the freeze
+and joins session identity. Landing both constants in code is an M0 follow-up (§8).
 
-- `compaction duration` and `compaction bytes/second` are first-class metrics, **per object
-  type and in total**, next to the publish pair of §5. Stating the rate as a bandwidth keeps
-  it independent of the tick rate, as in §5.
-- The warning threshold is **1 GB/s**, in `compaction_warn_bytes_per_second`. It is its own
-  value, separate from the projection threshold of §5 (4 GB/s per View). Compaction and
-  publish are both `O(rows × columns)` passes in the same tick, but they are different
-  questions. A projection crossing is fixed by narrowing a spec or a row predicate. A
-  compaction crossing is fixed through a schema's erasable types or its column width. With
-  one constant for both, retuning either would silently retune the other.
+**Why 2²⁴.** The default cap is a ceiling: reaching it means a runaway system, not normal
+play (`design_data_container.md` §2.2). So it must sit well above any real population and
+well below the end of memory. At 64 bytes per row, 2²⁴ entities take 1 GiB, so a runaway
+system stops long before the machine runs out. The budgeted scale is 10⁶ live rows, and 10⁷
+is reachable with row predicates (§5). Both are under the default. A type that legitimately
+needs more declares its own cap.
 
-  **This figure has no measurement and no derivation behind it.** §5's figure is at least
-  reasoned from the budgeted row counts; this one is not. It is the weakest number in this
-  document, and the first real compaction profile should replace it (§9,
-  [Q42](open_question.md#q42-the-warning-thresholds)).
-- Crossing the threshold is diagnosed: a warning-class event naming the measured rate and
-  the object type. It never rejects anything, and the simulation does not change.
+**A large cap costs address space, not memory.** At the freeze the engine reserves address
+space for `cap × element size` for every column. It commits pages as the pool's extent
+reaches them (`design_data_container.md` §2.2). A 2²⁴ cap of 8-byte values reserves 128 MiB
+per column. A thousand such columns use about 125 GiB of the 128 TiB a 64-bit Linux process
+can address. Addresses never move for the whole session.
 
-**Attribution is kept, because it is not about cost.** Compaction's width term is *all*
-of a type's columns, not the `saved`/`viz` subset. So a Tier 3 mod that registers dynamic
-columns raises the compaction cost of a core object type (`design_data_container.md` §7.3).
-That document requires such a cost to be bounded and attributable. Without a cap it is not
-bounded, so attribution carries the whole requirement. **Registered dynamic columns are
-counted and reported per (object type, mod).** A third party that inflates a core type's
-cost is named by the metric, even though nothing refuses it. Where the counts are reported
-is open ([Q36](open_question.md#q36-where-are-per-type-mod-attribution-counts-reported)). An
+**Commit failure ends the session; it is never a rejection.** A failed commit enters
+`failed` (`design_python_api.md` §2). Refusing creates because one machine ran out of memory
+would make the accepted set depend on the machine, and replays would diverge. On Linux,
+overcommit can let a commit succeed and fail later, so the engine commits explicitly and
+counts committed bytes against a budget.
+
+**A cap bounds rows, not row width.** Neither the number of object types nor the columns per
+type is capped, by decision. Capping types restrains a schema, and capping columns restrains
+what a mod may model. Row width is watched where it costs: projection width in §5, and
+dynamic columns by attribution below.
+
+**Attribution is kept, because it is not about a bound.** Every column of a type is reserved
+at the cap, zeroed at every erase and written at every create (`design_data_container.md`
+§2.2). So a Tier 3 mod that registers dynamic columns raises the memory and per-entity cost
+of a core object type (`design_data_container.md` §7.3). That document requires such a cost
+to be bounded and attributable. Nothing caps it, so attribution carries the whole
+requirement. **Registered dynamic columns are counted and reported per (object type,
+mod).** A third party that inflates a core type's cost is named, even though nothing refuses
+it. Where the counts are reported is open
+([Q36](open_question.md#q36-where-are-per-type-mod-attribution-counts-reported)). An
 expensive mod is diagnosed, not rejected, but it is never anonymous.
-
-The `rows` term is bounded only for an object type with a declared cap
-(`design_data_container.md` §2.2). This is intended: an uncapped world is really uncapped.
 
 ## 5. Projection: uncapped on purpose
 
@@ -279,7 +289,7 @@ predicate, not a width cap, is what keeps large worlds affordable.
 
 A per-row cap bounds the wrong axis. An object type may legitimately be complicated. Capping
 row width would restrain the schema and leave the quantity that governs cost, `width ×
-matched rows`, unbounded anyway. At 10⁶ live rows a narrow 32-byte projection is already 32
+matched rows`, as large as before. At 10⁶ live rows a narrow 32-byte projection is already 32
 MB per publish; at 10⁷ it is 320 MB. A smaller row cannot fix either number. Projecting
 fewer *rows* can. That is why the row predicate (`design_engine_core.md` §3.4) carries this
 axis and a width cap does not.
@@ -288,10 +298,14 @@ What is capped is the number of projections: 64 Views (§2.3). Each View holds 3
 exchange word and a fixed `ret[3]` return header (`design_engine_core.md` §3.5). Total
 snapshot memory is `Σ over Views (3 × spec × matched rows)`, plus that small fixed control
 storage. The sum has a fixed number of terms. Each term is a declared column subset over a
-declared row predicate, not one uncapped payload multiplied by a pool size.
+declared row predicate, not one uncapped payload multiplied by a pool size. Each block
+reserves address space for its View's maximum rows and commits pages only as rows match
+(`design_data_container.md` §5.1).
 
-So projection follows the same pattern as table size (`design_data_container.md` §2.2):
-**unbounded by default, with the cost measured and a crossing diagnosed.**
+So projection is bounded in rows and measured in cost. Its rows are bounded by the object
+type's cap, and a View's matched rows by the View's maximum rows
+(`design_data_container.md` §5.1). Its width is not capped. **The cost is measured, and a
+crossing is diagnosed.**
 
 - `publish duration` and `publish bytes/second` are first-class metrics, **per View and in
   total** (`design_engine_core.md` §3.1). The byte rate is the CPU-side counterpart of the
@@ -318,9 +332,9 @@ So projection follows the same pattern as table size (`design_data_container.md`
   That trigger is for revisiting whole-column upload, which is a GPU-bandwidth question, not
   this one.
 
-  **This number is reasoned, not measured**, which makes it the second-weakest value in this
-  document (§4's compaction figure is the weakest). It is reasoned from this design's own
-  budgeted scale. §9 gives its revisit trigger.
+  **This number is reasoned, not measured**, which makes it the weakest value in this
+  document. It is reasoned from this design's own budgeted scale. §9 gives its revisit
+  trigger.
 - Crossing it is diagnosed: a warning-class event naming the measured rate and the View. It
   is never a rejection and never a silent degradation. The simulation does not change.
 - **`matched rows` is a first-class counter per View.** It is the factor the row predicate
@@ -341,8 +355,9 @@ publish (`design_engine_core.md` §3.4). A renderer wants what is on screen; an 
 what is near it. The row axis is what makes 10⁷ live rows reachable at all, because at that
 scale no reader wants every live row. It reuses existing machinery. Registration is the
 declaration site, and the tick budget of `design_engine_core.md` §3.1 is the cost model. The
-algorithm is the compaction scan and gather of `design_data_container.md` §2.2, run against
-a different mask and emitted by the generator of `design_data_container.md` §5.1.
+algorithm is the publish scan and gather of `design_data_container.md` §5.1: the live
+bitmap ANDed with the predicate, an exclusive scan, and a gather, emitted by the same
+generator.
 
 **What remains is the scan, not the gather.** A predicate answered by a linear pass still
 reads its input columns for every live row: 12 bytes per row for a position test, reads only
@@ -351,19 +366,45 @@ shrinks the gather term; the scan term is the floor. The two ways below it are a
 index behind the predicate kind, and running scan and gather on the worker pool. Neither is
 decided here. Where the scan is charged is open (§7).
 
-## 6. Checksum algorithm
+## 6. Checksum algorithm and levels
 
-The per-tick checksum uses one algorithm for every storage policy. This section picks that
-algorithm and says why it is written by hand.
+The checksum detects desyncs. This section sets when it runs, at three levels, and picks the
+one algorithm all three use. It also says why that algorithm is written by hand.
 
-**One order-independent reduction, with each row's id mixed in, for every storage policy.**
-`design_engine_core.md` §4.2 names two correct options, and this is the one chosen. The
-canonical-order streaming hash is not kept as a second path for the two ordered policies. It
-would save a little per tick. The price would be two algorithms, two code paths, and a class
-of bug in which changing a storage policy silently changes what a golden replay compares.
-One algorithm catches permutation failures everywhere. It is also the only option that works
-for `unordered`, which has no canonical row order. So it is the option that survives the
-scale target of §5, where `unordered` is the only affordable erase policy.
+**Three levels, from cheap and always on to full and test-only.** A full hash of the world
+every tick is the strongest check and the most expensive. Only tests need it every tick.
+
+| Level | What it hashes | When it runs | Cost |
+|---|---|---|---|
+| 1. **tick digest** | The commands drained this tick, in drain order, plus each object type's live count and extent | Every tick, always | O(object types + commands) |
+| 2. **rolling checksum** | Each tick, the chunks whose index ≡ tick (mod N), for every object type: columns, generations and bitmaps. The whole world is covered every N ticks | In multiplayer, and while a replay is recorded | 1/N of a full pass per tick |
+| 3. **full checksum** | The whole world every tick, plus one hash per system over the columns it declares as writes, taken when its phase closes | CI golden replays, certification, desync bisecting | A full pass per tick, plus the per-system hashes |
+
+The tick digest catches a divergence in input or in the live set on the tick it happens. The
+rolling checksum catches a divergence in values within N ticks. The full checksum names the
+system that caused it. A single-player session that records nothing needs only the tick
+digest. Derived columns (`design_data_container.md` §2.1) are left out of levels 1 and 2.
+Level 3 rebuilds them and compares.
+
+The rolling period N is proposed at 30, one second at 30 Hz, but it is not decided
+([Q67](open_question.md#q67-the-rolling-checksum-period-and-the-tick-digest)). The tick
+digest's exact contents are part of the same question.
+
+**One algorithm: an order-independent reduction, with each row's id mixed in.**
+`design_engine_core.md` §4.2 names two correct options, and this is the one chosen, for two
+reasons:
+
+- **It splits per chunk.** Each chunk's contribution is computed on its own, and the results
+  combine in any order. So level 3 runs in parallel over chunks, and level 2 can hash one
+  slice of chunks per tick. A hash streamed in row order can do neither.
+- **It catches swapped values.** Two entities' values swapped is the typical failure of an
+  iteration-order bug, and a plain order-independent reduction cannot see it
+  (`design_engine_core.md` §4.2). Mixing the id into each row's contribution can. The id
+  contains the slot, so the same mixing also covers where each entity sits.
+
+The inputs are state: the columns of live rows, plus each pool's generation column, live and
+retired bitmaps, and extent (`design_data_container.md` §2.2). A slot's generation decides
+the next id issued there, so it affects the future and is hashed.
 
 The function is a hand-written 64-bit mix, not an external hash. The reasons, in order:
 
@@ -379,7 +420,7 @@ The bit-level specification is part of M2, with `fixed<>`, and is open
 
 ## 7. What this document does not decide
 
-**Nine things are open on purpose.** Each has an entry in
+**Ten things are open on purpose.** Each has an entry in
 [open_question.md](open_question.md). Each site that would otherwise look unfinished says so
 and says what the value waits on. A reader who finds a missing number should find the reason
 next to it, without coming here to learn whether anyone noticed.
@@ -390,7 +431,8 @@ next to it, without coming here to learn whether anyone noticed.
 | **`ipc_deadline`** ([Q43](open_question.md#q43-ipc_deadline-value-and-constraints)) | the same measurement | It is not a free parameter. Its ceiling is the input delay, so it lands with the row above and not before | §1.1 |
 | **`high_water`** ([Q63](open_question.md#q63-what-is-high_water)): the event backlog threshold | a measured drain rate | The counter has a name, a home and one writer (`design_engine_core.md` §5.2). Its threshold is a separate question, and a number invented here would read as an answer to it | §2 |
 | **Per-slot size**, and so total slot memory ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | M1 | No doc gives a per-slot size for a command or an event entry, on purpose, so the worst case in §2.2 is a count, not a number of bytes | §2.2 |
-| **The GPU allocator's design** ([Q39](open_question.md#q39-the-gpu-allocator-for-growing-worlds)) | before M3 | Destination buffers cannot be resized after creation, and the world grows, so sizing from the current row count does not hold. Growth and suballocation need an allocator. Designing one now, with no measurements, would be guessing | `design_data_container.md` §5 |
+| **A View's maximum rows, and the GPU allocator behind it** ([Q39](open_question.md#q39-the-gpu-allocator-for-growing-worlds)) | before M3 | Destination buffers cannot be resized after creation, so each is sized from its View's maximum rows, not from the current row count. The default maximum, how a View declares it, and whether destinations suballocate from a few large buffers need measurements. Choosing now would be guessing | `design_data_container.md` §5, §5.1 |
+| **The rolling checksum period N**, and the tick digest's exact contents ([Q67](open_question.md#q67-the-rolling-checksum-period-and-the-tick-digest)) | M2 | 30 ticks, one second, is proposed. N trades detection delay against per-tick cost, and a number with no profile behind it would read as an answer | §6 |
 | **`commands_per_tick`** as a manifest field ([Q44](open_question.md#q44-what-commands_per_tick-in-a-manifest-means)) | a design step before M2 | The example manifest requests 4096, and this document caps endpoint capacity at 256. Both stand. The field's *meaning* is not settled, and reconciling the numbers first would settle the wrong question | `design_modding.md` §3; here §2 |
 | **Where the predicate scan is charged** ([Q35](open_question.md#q35-where-is-the-predicate-scan-charged)) | a design step before M3 | The row axis itself is decided (`design_engine_core.md` §3.4). What is not decided is whether the scan is sim-thread work in the tick budget of `design_engine_core.md` §3.1, or runs on the worker pool. At 10⁷ live rows it is roughly a third of a tick ([Q61](open_question.md#q61-what-row-width-does-the-predicate-scan-assume)). Moving it makes publish the first step after the terminal commit to run on the worker pool, which touches the phase structure of `design_engine_core.md` §4.1 | §5 |
 | **The PRNG generator** ([Q26](open_question.md#q26-the-prng)) | M2 | M1 needs only the seed in the header. The generator itself is what M2 specifies | §6 |
@@ -425,7 +467,9 @@ This section names the one place each value lives. The C++ side is the partition
 | host policy: shutdown deadline, retry limit, inbox cap | `HostPolicy.shutdown_deadline`, `HostPolicy.mod_retry_limit`, `HostPolicy.max_inbox_size` | — | policy defaults, Python only |
 | chunk quantum | — | `chunk_elements` | build constant. Its one definition is the CMake cache variable `LIBSIM_ESTAB__CHUNK_ELEMENTS` in `src/libsim_estab/CMakeLists.txt`. The partition falls back to 1024 only for a build outside this CMake |
 | projection warning bandwidth | `EngineConfig.projection_warn_bytes_per_second` | `default_projection_warn_bytes_per_second` | policy default. Checked per View, not against the session total (§5) |
-| compaction warning bandwidth | `EngineConfig.compaction_warn_bytes_per_second` | `default_compaction_warn_bytes_per_second` | policy default, checked per object type. A separate value from the row above, and a different one (§4). They measure different passes with different remedies, and must be able to move independently |
+| default object cap | — | `default_entity_capacity` | build constant, 2²⁴ (§4). **M0 follow-up: not yet in code** (`TODO.md`) |
+| maximum object cap | `EngineConfig.entity_capacity` rejects a larger value | `max_entity_capacity` | build constant, 2³²−1 (§4). **M0 follow-up: not yet in code** |
+| per-type caps | `EngineConfig.entity_capacity` | — | per-type override, closed at the freeze (§4), each entry 1 to 2³²−1. **M0 follow-up: not yet in code** |
 | `C`, ring depth, event ring size | **nowhere** | **nowhere** | computed at the freeze from the closed endpoint set (`design_engine_core.md` §2.4 step 3a). Writing any of them down would create the engine-wide pool that per-endpoint rings avoid |
 | `ipc_deadline` | `HostPolicy.ipc_deadline`, default `None` (unbounded) | — | value open (§7). `EngineConfig` rejects a set value that does not exceed one tick at the configured rate |
 | `high_water`, `input_delay_ticks`, per-slot size | **not yet anywhere** | **not yet anywhere** | values open (§7). `high_water` belongs to the event ring (`design_engine_core.md` §5.2) |
@@ -442,6 +486,9 @@ the relationships between constants, not the session. They check that:
 - the View and participant caps are nonzero;
 - the chunk quantum is a power of two of at least 64, and a multiple of one cache line of
   1-byte elements.
+
+The M0 follow-up adds two more: the default object cap is at most the maximum, and the
+maximum fits a `u32` slot.
 
 `test/test_config.py` asserts the Python defaults as literals. A change to a default fails
 that test, so the test, this document and `sim_estab:limits` change together.
@@ -464,7 +511,7 @@ Each value has a named trigger, so that revisiting it is a decision, not a drift
 | commands executed per tick | The metric (`design_engine_core.md` §3.1) approaches `C` in a session anyone intends to ship. A tick runs everything it is given, so this is the number that turns a busy session into a long tick |
 | `HostPolicy` values | A legitimate mod host is being timed out |
 | chunk elements | A profile shows chunk-boundary overhead, or a column type wider than 8 bytes is approved |
-| compaction bandwidth | The metric crosses `compaction_warn_bytes_per_second` (§4). There is no erase cap to hit: compaction is measured, and a crossing names the object type instead of refusing a schema. **This is the weakest figure in this document.** It is not derived from the budgeted row counts, and nothing has measured this pass. The first real compaction profile should set it ([Q42](open_question.md#q42-the-warning-thresholds)) |
+| default object cap | Most object types in a real schema declare a cap above 2²⁴. One type that needs more declares its own cap; the default moves only when it stops fitting the normal type |
 | projection bandwidth | A View crosses `projection_warn_bytes_per_second` (§5: 4 GB/s, per View). Revisit also when a real profile exists: the figure is reasoned from 10⁶ rows × 32 bytes × 30 Hz, and nothing has measured it ([Q42](open_question.md#q42-the-warning-thresholds)). A threshold at 1 GB/s, checked against the session total, would sit below that budgeted normal case and fire continuously. The figure is independent of the upload trigger in `design_data_container.md` §5, which is separate and answers a GPU-bandwidth question |
 
 ---
@@ -479,9 +526,9 @@ Each value has a named trigger, so that revisiting it is a decision, not a drift
   questions)
 - `design_python_api.md` §3 (`EngineConfig`), §4.1 (the main loop), §7.1 (endpoint capacity,
   `D`), §7.2 (snapshots), §7.3 (events)
-- `design_data_container.md` §2.2 (storage policies, compaction, caps), §3 (padding), §4
-  (chunk), §5 (upload cost and its GB/s trigger), §5.1 (the snapshot generator), §7.3
-  (dynamic columns)
+- `design_data_container.md` §2.1 (annotations, caps), §2.2 (the pool, caps), §3
+  (padding), §4 (chunk, live counts), §5 (upload cost and its GB/s trigger), §5.1 (the
+  snapshot generator, the publish kernel), §7.3 (dynamic columns)
 - `design_modding.md` §3 (manifest), §4.2 (inbox, suspension, quarantine), §4.3 (process
   hosts)
 - Code: `src/libsim_estab/module/sim_estab--limits.cppm`, `src/sim_estab/config.py`,

@@ -136,9 +136,9 @@ participant events.
 
 ### Q17. Should resource failures have their own terminal state?
 
-GPU device loss and allocation failure during growth currently end in `failed`, which
-poisons the process (`python_api` §2). Whether they deserve a cleaner terminal state is
-open.
+GPU device loss and a failed memory commit in the terminal commit end in `failed`, which
+poisons the process (`python_api` §2; `data_container` §2.2). Whether they deserve a cleaner
+terminal state is open.
 
 ### Q18. What goes in `WindowConfig` and `LogConfig`?
 
@@ -148,11 +148,6 @@ Both are named in `EngineConfig` without fields (`python_api` §3; `design_loggi
 
 The logging wrapper is reference-counted (`design_logging.md` §2), but the free-threaded
 build has no stated synchronization for that count (`python_api` §6).
-
-### Q20. Where does View block growth go in the tick budget?
-
-Publish may grow a View's block pool (`engine_core` §3.1), but growth has no line in the
-tick budget, and nothing triggers growth in pool count.
 
 ### Q21. What are the catch-up clamp and `IDLE_SLICE`?
 
@@ -181,8 +176,8 @@ its owner and its place in the gate are decided; the value needs a measured drai
 thread host, and §4.3 applies it to `step()`'s second expiry. `failed` has more entry paths
 (`python_api` §2): the host's gate deadline under `FAIL` (`engine_core` §3.3), an endpoint
 revocation timeout (`engine_core` §5.1, `modding` §6), the operation-lease wait timeout in
-`close()`, GPU device loss (`engine_core` §5) and growth allocation failure
-(`data_container` §2.2). No doc says whether `"terminate"` aborts on these, or what
+`close()`, GPU device loss (`engine_core` §5) and a failed memory commit in the terminal
+commit (`data_container` §2.2). No doc says whether `"terminate"` aborts on these, or what
 `"raise"` means where no call can raise. The `step()` expiry and the host's `FAIL` expiry
 may also be the same path.
 
@@ -196,11 +191,6 @@ Debug and Release builds, certification runs both (`modding` §5.3), and golden 
 meant to work across revisions. A build hash would reject all of these; a determinism
 version number would not.
 
-### Q24. Are per-system checksums required?
-
-`modding` §5.3 needs them to blame a desync on a mod's system. `engine_core` §2.3 makes them
-optional, and `python_api` only exposes `engine.checksum()`.
-
 ### Q25. The `fixed<>` specification
 
 Library choice, and the bit-level rules for rounding, division, division by zero and
@@ -213,9 +203,20 @@ Which generator (PCG or xoshiro) and how streams are derived (`engine_core` §2.
 
 ### Q27. The checksum's exact algorithm and inputs
 
-The family is decided: a 64-bit, id-mixed, order-independent reduction (`limits` §6). Still
-open: the bit-level algorithm (`engine_core` §4.2), and a list of exactly which state can
-affect a future tick and so must be hashed (§2.3).
+The family is decided: a 64-bit, id-mixed, order-independent reduction (`limits` §6). The
+inputs are decided in outline: the columns of live slots, and the generation column, the
+live and retired bitmaps and the extent of every object type (`engine_core` §2.3;
+`data_container` §2.2). Derived columns are left out of the tick digest and the rolling
+checksum (`data_container` §2.1). Still open: the bit-level algorithm (`engine_core` §4.2),
+and a complete list of the other state that can affect a future tick and so must be hashed.
+
+### Q67. The rolling checksum period and the tick digest
+
+The rolling checksum hashes the chunks whose index is congruent to the tick modulo N, so it
+covers the world every N ticks (`engine_core` §2.3; `limits` §6). N is proposed as 30, one
+second at 30 Hz, but a value in `limits` must also land in code. Also open: exactly what the
+tick digest hashes beyond the drained commands and each type's live count and extent, and
+whether the rolling checksum runs in single-player while a replay is being recorded.
 
 ### Q28. Tick counter width and wrap
 
@@ -237,22 +238,34 @@ unproven for fixed-point high-multiply and for gather/scatter (`engine_core` §4
 
 ### Q31. What does hitting a declared cap do?
 
-A cap is either a game rule (reject deterministically) or a ceiling (stop and report, the
-default) (`data_container` §2.2). Neither `[[=capacity(N)]]` nor `EngineConfig.capacity` can
-say which kind. What "stop" means is undefined: pause or `failed`? For a Tier 3 mod's
-system, "suspend that mod" is defined only for Tier 2 mods. M3.
+Every object type has a cap, 2²⁴ unless declared (`data_container` §2.1). A cap is either a
+game rule (reject deterministically) or a ceiling (stop and report, the default)
+(`data_container` §2.2). The default cap is a ceiling. Neither `[[=cap(N)]]` nor
+`EngineConfig.entity_capacity` can say which kind. What "stop" means is undefined: pause or
+`failed`? For a Tier 3 mod's system, "suspend that mod" is defined only for Tier 2 mods. M3.
 
 ### Q32. Relationships
 
 Link storage, indexing, composite keys and delete-time fix-up are undesigned
 (`data_container` §1.4, §2.2). Start with unique links and many-links as arrays. M3.
 
-### Q33. The parallel compaction gather
+The pool fixes four constraints (`data_container` §2.2):
 
-Order-preserving compaction moves rows down, so in-place parallel workers can overwrite rows
-another worker has not read yet (`engine_core` §4.1; `data_container` §2.2, §4). The gather
-must be out-of-place (extra memory) or split into steps. The row predicate reuses this pass
-(`engine_core` §3.4). M3.
+- A link stores the target's slot. Its width follows the target type's cap: `u16` up to
+  2¹⁶−1, `u32` above. How a null link is encoded is open with the rest.
+- An erase fixes every link into the erased entity in the terminal commit, by the
+  relationship's delete rule, before any create can reuse the slot.
+- Links to entities that survive never change, because rows never move.
+- A reverse index (the links into one entity) is kept in slot order, or rebuilt in slot
+  order, so its order follows from state.
+
+dcon offers candidates to evaluate:
+
+- `vector_pool` storage for the reverse lists of many-links;
+- primary-key relationships, stored in the slots of the object they belong to;
+- composite keys backed by a hash map that is used only for lookups, never iterated;
+- `multiple` links, which hold several targets in one link;
+- delete rules: cascade (delete the relationship) or set null (dcon's `optional` links).
 
 ### Q34. Windows and C++26
 
@@ -280,8 +293,11 @@ The execution order inside a phase is unspecified. M4.
 
 ### Q39. The GPU allocator for growing worlds
 
-How GPU buffers grow for uncapped `[[=gpu]]` types (`data_container` §5, §7.4). The one
-fixed constraint: each upload rewrites a whole buffer. Before M3, used in M5.
+Every object type has a cap, but sizing GPU buffers at the cap would reserve device memory
+nobody uses. So each GPU destination, and each View block, is sized from its View's maximum
+rows (`data_container` §5, §5.1, §7.4). Open: how a View declares its maximum, what the
+default is, and whether destinations suballocate from a few large buffers. The one fixed
+constraint: each upload rewrites a whole buffer. Before M3, used in M5.
 
 ### Q40. Naming the publisher's write path
 
@@ -295,10 +311,8 @@ and its NumPy dtype. M5.
 
 ### Q42. The warning thresholds
 
-The projection warning (4 GB/s per View) is reasoned, not measured; M5 owes a profile. The
-compaction warning (1 GB/s per object type) has neither measurement nor derivation, and at
-10⁶ rows of 32 bytes erased every tick it would already be close; M3 owes a profile
-(`limits` §4, §5, §9).
+The projection warning (4 GB/s per View) is reasoned, not measured; M5 owes a profile
+(`limits` §5, §9).
 
 ### Q61. What row width does the predicate scan assume?
 
@@ -306,6 +320,14 @@ compaction warning (1 GB/s per object type) has neither measurement nor derivati
 Q32.32 on `int64` (`data_container` §3), which is 16 bytes in 2D or 24 in 3D, and the
 world's dimensionality is not stated. The scan cost at 10⁷ rows (`limits` §7) needs
 recomputing once this is settled. M5.
+
+### Q68. Per-index column groups
+
+dcon's `array{index}{T}` property holds one value per row of a fixed index type, stored as
+one column per index value, for example `pop.demand[commodity]` (`data_container` §1.4). An
+establishment economy needs this shape. The index type's row count must close at the
+freeze. Open: how the group is declared, how its columns get column ids and catalog names,
+how the mod ABI resolves them, and how checksum and serialization cover them. M3.
 
 ## Blocks M6 and M7
 
@@ -380,8 +402,9 @@ format (`engine_core` §5).
 
 ### Q52. Checksum comparison between peers
 
-How often peers compare checksums, and what a detected desync does. The checksum itself is
-decided (`limits` §6).
+Peers compare the tick digest every tick and the rolling checksum as it completes each
+slice (`engine_core` §2.3; `limits` §6). Open: what a detected desync does, and whether a
+suspected desync triggers a full checksum.
 
 ### Q53. Non-deterministic peripherals in multiplayer
 
@@ -409,8 +432,11 @@ with the input-delay margin, machines drain in different orders (`multiplayer` �
 
 ### Q57. GPU per-entity state across frames
 
-Trails, selection and level-of-detail caches need a GPU-visible id column or a CPU-side
-id-to-row rebuild; neither exists (`data_container` §5).
+Trails, selection and level-of-detail caches need per-entity state that survives from one
+frame to the next. Snapshot rows shift, but core slots are stable for an entity's whole
+life, and both halves of an id are `u32` (`data_container` §2.2, §5). So such state could
+key on slot and generation, if a View projects them. Whether and how Views project them is
+open.
 
 ### Q58. Mod link traversal
 
@@ -424,4 +450,15 @@ Resolve when save/load serialization tags are designed (`data_container` §8).
 ### Q60. Reviving the `SHARED` View
 
 If process hosts need snapshots, choose between a per-reader epoch slot and the original pin
-count (`engine_core` Appendix A; `limits` §9).
+count (`engine_core` Appendix A; `limits` §9). A `SHARED` View may also grow its block pool
+in number of blocks (`engine_core` §3.1). That growth has no line in the tick budget, and
+nothing yet triggers it.
+
+### Q69. A dense storage kind
+
+Every object type is a pool, with holes where entities were erased (`data_container` §2.2).
+A type whose population shrinks can leave many dead lanes in its scans. dcon's `compactable`
+storage, behind a sparse id-to-row table, would keep such a type dense. It costs a second
+lookup path and link patching on every move, and it must keep the rule that only full ids
+cross a boundary. Revisit when a profile shows scan time lost to dead lanes
+(`data_container` §1.4).

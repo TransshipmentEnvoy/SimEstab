@@ -21,13 +21,16 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | session | The world from the freeze until `close()`. One per `Engine`. | engine_core §2.4 |
 | engine state | `created`, `configuring`, `running` (optionally with the sim thread), `closing`, `closed`, plus the terminal states `load_failed` and `failed`. | python_api §2 |
 | freeze | The single call (`start_session()`) that moves the engine from `configuring` to `running`. It closes every set that must not change during a session, computes session identity, and publishes tick 0. | engine_core §2.4 |
-| session identity | What makes two sessions "the same": engine build, schema, content, mod set, declared caps, source ids and seed. Computed at the freeze and written to the replay header. | engine_core §2.3 |
+| session identity | What makes two sessions "the same": engine build, schema, content, mod set, every object type's cap, source ids and seed. Computed at the freeze and written to the replay header. | engine_core §2.3 |
 | schema identity | The schema part of session identity: the descriptor hash, mod-added columns and content hashes. | data_container §7.4 |
 | replay artifact | Everything needed to reproduce a session: the replay header plus every command recorded as it was consumed. A lockstep turn log is a replay artifact. | engine_core §2.3 |
 | replay header | The session-identity part of a replay artifact. Checked at the freeze; any mismatch raises `ReplayIdentityError`. | engine_core §2.3 |
 | golden replay | A replay artifact whose final checksum CI checks, used as a regression test. | engine_core §2.3 |
 | playback | Running a session from a replay artifact. All endpoints are closed and the recorded commands are fed in instead. | python_api §4.2 |
-| checksum | A per-tick hash of world state, the same for every storage policy. Used to detect desyncs. | engine_core §4.2, limits §6 |
+| checksum | A hash of world state used to detect desyncs. One algorithm, used at three levels: the tick digest, the rolling checksum and the full checksum. | engine_core §2.3, §4.2, limits §6 |
+| tick digest | The level-1 checksum, taken every tick: the commands drained this tick, plus each object type's live count and extent. | engine_core §2.3 |
+| rolling checksum | The level-2 checksum, taken in multiplayer and while recording: each tick hashes one slice of the chunks, so the whole world is covered every N ticks. | engine_core §2.3 |
+| full checksum | The level-3 checksum: the whole world every tick, plus one hash per system. Used by CI golden replays, certification and desync bisecting. | engine_core §2.3 |
 | determinism | The same session identity and the same command stream always produce the same checksums. Re-running live producers may produce a different command stream; that is not promised to repeat. | engine_core §2 |
 | M0 … M7 | Build milestones. M0: decided limits in code (done). M1: session, Views, command ring, gate. M2: fixed-point, PRNG, checksum, replay. M3: world container. M4: phase scheduler. M5: View projection, row predicate, GPU upload. M6: first system, renderer, sim thread. M7: mod tiers. | `TODO.md` |
 
@@ -110,19 +113,24 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 
 | Term | Meaning | Where |
 |---|---|---|
-| object type | A kind of entity (for example `pop`), stored as one dense table of columns. | data_container §2.1 |
+| object type | A kind of entity (for example `pop`), stored as one pool. | data_container §2.1 |
+| pool | How every object type is stored: columns indexed by slot, with holes where entities were erased. Rows never move. | data_container §2.2 |
 | column | One array holding one property for every row of an object type. | data_container §3 |
 | column id | A column's `u32` number, returned by `resolve_column` and fixed at the freeze. Not an entity id. | data_container §7.3 |
 | column span | The slice of a column a system may access, sized by its access kind. | data_container §4 |
-| row | An entity's position in its table. Valid only within one tick, because the terminal commit may move it. Never leaves the core. | data_container §2.2 |
-| id | An entity's permanent `u64` number, never reused. The only way commands and snapshots refer to an entity. | data_container §2.2 |
-| storage policy | How a table handles erases: `contiguous` (only remove from the end), `erasable` (compact, keeping order), `unordered` (swap with the last row). | data_container §2.2 |
-| compaction | Removing erased rows from an `erasable` table while keeping order. Runs in the terminal commit. | data_container §2.2 |
-| cap | An optional limit on the rows of one object type, fixed at the freeze. | data_container §2.2 |
+| slot | A position in a pool. An entity keeps its slot for its whole life. After an erase the slot may hold a new entity. | data_container §2.2 |
+| row | An entity's slot, used as an index into its columns. A bare row cannot tell a new occupant from an old one, so it never leaves the core. | data_container §2.2 |
+| generation | A slot's `u32` reuse counter. It starts at 1 and goes up by one at each erase. | data_container §2.2 |
+| id | An entity's `u64` number: its slot in the high 32 bits and its generation in the low 32. No id value is issued twice. The only way commands, snapshots and saves refer to an entity. | data_container §2.2 |
+| live bitmap | One bit per slot of a pool, set while the slot holds an entity. | data_container §2.2 |
+| extent | One past the highest slot a pool has used. It never shrinks during a session. Scans cover `[0, extent)`. | data_container §2.2 |
+| retired slot | A slot whose generation reached its maximum. It is never used again, so no id is issued twice. | data_container §2.2 |
+| append-only object type | An object type declared `[[=append_only]]`: it has no erase, so every slot below its extent is live. | data_container §2.1 |
+| derived column | A column declared `[[=derived]]`: a cache rebuilt from other state. Not saved, and not in the tick digest or the rolling checksum. | data_container §2.1 |
+| cap | The limit on the live entities of one object type, fixed at the freeze: `[[=cap(N)]]` or `EngineConfig.entity_capacity`. Default 2²⁴, at most 2³²−1. | data_container §2.2 |
 | game-rule cap | A cap the game relies on: a create at the cap is rejected deterministically. | data_container §2.2 |
 | ceiling | A cap used as a safety limit, the default kind: hitting it stops and reports. | data_container §2.2 |
-| growth | Uncapped tables grow in the terminal commit. Running out of memory ends the session. | data_container §2.2 |
-| chunk | A fixed run of 1024 rows: the unit of SIMD and parallel work. | data_container §4 |
+| chunk | A fixed run of 1024 slots: the unit of SIMD and parallel work. Each chunk keeps a live count, so empty chunks are skipped. | data_container §4 |
 | body | An agent's world-facing state (position, resources, health). Core state, updated deterministically. | engine_core §6 |
 | mind | Where an agent decides. Inside the determinism boundary it is core logic; outside it is a peripheral that submits commands. | engine_core §6 |
 | system | A deterministic update function. Declares how it accesses each column. | engine_core §4.1 |
@@ -130,8 +138,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | phase | A run of systems within one tick that can execute in parallel safely. Phases are computed at the freeze from the access kinds. | engine_core §4.1 |
 | phase cut | The rule that splits the system list into phases. | engine_core §4.1 |
 | boundary commit | At the end of each phase: merge staged writes and flip double-buffered columns. Never changes row counts. | engine_core §4.1 |
-| terminal commit | Once per tick, after the last phase: every create, erase and growth. The only place row counts change, so an entity created this tick has no row until the commit. | engine_core §4.1 |
-| relationship | A link between object types, stored as row numbers inside the core. | data_container §2.2 |
+| terminal commit | Once per tick, after the last phase: every erase, then every create. The only place the live set changes, so an entity created this tick has no row until the commit. | engine_core §4.1 |
+| relationship | A link between object types, stored as slots inside the core. Not designed yet. | data_container §2.2 |
 | dynamic column | A column a core mod adds before the freeze. | data_container §7.3 |
 | `fixed<>` | The project's fixed-point number type, the only arithmetic allowed in world state. | engine_core §2.1 |
 
@@ -192,7 +200,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | catch-up clamp | The most ticks sim-thread mode runs in one go after falling behind. | python_api §4.3 |
 | build constant | A limit fixed when the library compiles, such as the chunk size. Changing it needs a rebuild. | limits |
 | policy default | The shipped default of an `EngineConfig` field, which a session may override. | limits |
-| warn threshold | A bandwidth above which the engine logs a warning, never a rejection: projection per View, compaction per object type. | limits §4, §5 |
+| warn threshold | A bandwidth above which the engine logs a warning, never a rejection: projection, per View. | limits §5 |
 
 ## Words with one meaning only
 
@@ -207,7 +215,8 @@ the replacement for the other senses.
 | tier | mod tiers | "server tier" / "client nodes" (multiplayer) |
 | admission | the answer to a submit | "endpoint lease"; "operation lease"; "id lookup" (resolving an id to a row) |
 | gate | the tick gate | "endpoint lease"; "operation lease" |
-| capacity | per-endpoint capacity | "cap" (object type); "event ring size"; "inbox size" |
+| capacity | per-endpoint capacity, when unqualified. The prefixed API name `entity_capacity` (`EngineConfig.entity_capacity`, `default_entity_capacity`) sets an object type's cap | "cap" (object type, in prose); "event ring size"; "inbox size" |
+| generation | a slot's reuse counter, the low half of an id | "epoch" (the `SHARED` View's published word) |
 | `commands_per_tick` | only the manifest field | "C" (engine-wide total); "commands executed per tick" (the metric) |
 | shared | the `SHARED` View mode, and the OS term "shared memory" | "default View" (the host's `PRIVATE` View) |
 | View | the engine mechanism | "array view" (NumPy); "column span" |

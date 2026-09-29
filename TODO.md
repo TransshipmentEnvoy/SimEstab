@@ -6,8 +6,10 @@ the design each item implements is in `doc/`. Unresolved design questions are in
 
 **Where things stand.** Built: the `log`, `gpu`, `viz`, `util` and `limits` modules. That
 covers SDL3 compute and viz contexts, logging, the SDL main-thread init guard, and the
-decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26 with
-`-freflection`, and `-march=x86-64-v3`. Everything from M1 on is designed but not written.
+decided limits (M0). The object caps of `doc/design_limits.md` §4 are not in code yet; the
+M0 follow-up below lands them. The toolchain the designs assume is in place: GCC 16, C++26
+with `-freflection`, and `-march=x86-64-v3`. Everything from M1 on is designed but not
+written.
 
 + [x] basic setup
 + [x] graphics basics
@@ -20,6 +22,18 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
       `doc/design_logging.md` §1)
 + [x] **M0: decided limits in code.** Every value in `doc/design_limits.md` is in
       `sim_estab:limits` or `src/sim_estab/config.py`, with tests in `test/test_config.py`
++ [ ] **M0 follow-up: object caps in code, compaction constant out** (`doc/design_limits.md`
+      §4, §8)
+  + [ ] add `default_entity_capacity = 1 << 24` and `max_entity_capacity = 2^32 − 1` to
+        `src/libsim_estab/module/sim_estab--limits.cppm`, with `static_assert`s that the
+        default is within the maximum and the maximum fits a `u32` slot, and mirror them in
+        `src/sim_estab/config.py`
+  + [ ] rename `EngineConfig.capacity` to `EngineConfig.entity_capacity`. An empty
+        mapping means every type keeps its declared or default cap; an entry must be 1 to
+        2³²−1. Update `test/test_config.py`
+  + [ ] remove `compaction_warn_bytes_per_second` from `sim_estab--limits.cppm` (with its
+        comment block that cites `doc/design_limits.md` §4), `src/sim_estab/config.py` and
+        `test/test_config.py`
 + [ ] **M1: session, Views, command ring, gate.** No simulation content yet
       (`doc/design_engine_core.md` §7 step 1)
   + [ ] session lifecycle: `configuring → freeze → running`, with the freeze's ordered
@@ -81,22 +95,25 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
 + [ ] **M2: fixed-point, PRNG, checksum, replay** (`doc/design_engine_core.md` §2, §7 step 2)
   + [ ] the `fixed<>` type ([Q25](doc/open_question.md#q25-the-fixed-specification))
   + [ ] the PRNG and per-system streams ([Q26](doc/open_question.md#q26-the-prng))
-  + [ ] the per-tick checksum
+  + [ ] the three checksum levels: the tick digest, the rolling checksum
+        ([Q67](doc/open_question.md#q67-the-rolling-checksum-period-and-the-tick-digest)),
+        and the full checksum with per-system hashes. The algorithm is open
         ([Q27](doc/open_question.md#q27-the-checksums-exact-algorithm-and-inputs))
   + [ ] replay record and playback, with the replay header checked at the freeze
 + [ ] **M3: the world container** (`doc/design_data_container.md`)
   + [ ] build the reflection-in-module shape (`define_aggregate` in a `.cppm`, exported as
         concrete types) through the Conan/CMake module build; the spike only used bare
         `g++-16 -fmodules` (`doc/design_data_container.md` §8)
-  + [ ] the reflection-generated SoA container: chunked columns, permanent ids over
-        tick-scoped row offsets, SIMD-friendly alignment
-  + [ ] erasable storage: order-preserving compaction in the tick's terminal commit
-        (exclusive scan over the erase mask, then a gather per column), plus remapping
-        internal relationship links from the old-to-new offset map the same pass computes;
-        assert that ids stay sorted (`doc/design_data_container.md` §2.2). It costs one
-        O(rows × columns) pass per object type that erased this tick. The gather may run on
-        the worker pool ([Q33](doc/open_question.md#q33-the-parallel-compaction-gather));
-        the staged merge beside it may not
+  + [ ] the reflection-generated pool: chunked columns with address space reserved at the
+        cap, the live bitmap, chunk live counts, the generation column, the retired bitmap
+        and the extent, with SIMD-friendly alignment (`doc/design_data_container.md` §2.2)
+  + [ ] generational ids (`slot << 32 | generation`) with O(1) lookup
+  + [ ] the terminal commit's two steps: erases (clear the live bit, bump or retire the
+        generation, zero the row), then creates in merge order into the lowest free slots
+        (`doc/design_data_container.md` §2.2)
+  + [ ] `[[=append_only]]` and `[[=derived]]` (`doc/design_data_container.md` §2.1)
+  + [ ] save and load of the layout: extent, live and retired bitmaps, and generations, so
+        a loaded session continues exactly as one that never saved
 + [ ] **M4: the phase scheduler** (`doc/design_engine_core.md` §4.1)
   + [ ] the phase cut: per-column access declarations, the phase invariant check, and the
         greedy cut over the fixed system order
@@ -107,7 +124,7 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
   + [ ] prove that 1 thread and N threads give the same checksums
 + [ ] **M5: View projection, row predicate, GPU upload**
   + [ ] the row predicate kinds beyond `ALL` (`AABB`, `SPHERE`, `FRUSTUM`, `TAG`),
-        evaluated to a mask and reusing the compaction scan and gather. Coarse in the core,
+        evaluated to a mask and reusing the publish scan and gather. Coarse in the core,
         exact in the reader; a filtered View carries the id column. Added when publish
         bandwidth calls for it (`doc/design_engine_core.md` §3.4)
   + [ ] advertise SPIR-V only at device creation. The scope is Vulkan only; today DXIL is
@@ -117,8 +134,8 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         transfer buffer (mapped and unmapped every frame), one cycled destination buffer
         per column rewritten whole, fence handles, and a `last_uploaded_snapshot_tick` per
         destination advanced when its fence signals (`doc/design_data_container.md` §5).
-        How buffers grow for a growing world is open
-        ([Q39](doc/open_question.md#q39-the-gpu-allocator-for-growing-worlds))
+        GPU buffers are sized per View from its maximum rows; how a View declares that
+        maximum is open ([Q39](doc/open_question.md#q39-the-gpu-allocator-for-growing-worlds))
   + [ ] port the std430 spike into `libsim_estab_viz_test` as a regression test; a silent
         stride change would corrupt every frame with no error
 + [ ] **M6: first system, renderer, sim-thread mode** (`doc/design_engine_core.md` §7 step 5,

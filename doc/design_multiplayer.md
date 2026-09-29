@@ -59,7 +59,7 @@ The determinism design already covers most of what lockstep needs:
 | Bit-identical arithmetic on every platform | §2.1: fixed-point, no libm, versioned rounding and overflow rules |
 | Commands as the only way to change the world | §1 |
 | One wire encoding | §2.3: little-endian, fixed widths, fully validated. Replay, IPC and the network all use this one schema |
-| Desync detection | §4.2 and `design_limits.md` §6: one checksum per tick, with one algorithm for every storage policy |
+| Desync detection | §2.3, §4.2 and `design_limits.md` §6: one checksum algorithm at three levels. Peers compare the tick digest every tick and the rolling checksum, which covers the whole world every N ticks |
 | A gate that waits for participants before each tick | §3.3: the core waits until every registered participant is ready for the tick, up to a declared deadline. A peer is a participant |
 | A command endpoint per peer | §5.1: an endpoint is a single-producer (SPSC) ring. A network receive thread is that single producer |
 | A submit call that names the tick | §5.1: every submission names its tick, so peers need no special call. The only extra thing a peer declares is a nonzero stamp margin |
@@ -72,9 +72,10 @@ The determinism design already covers most of what lockstep needs:
 ### 3.1 A peer is a participant
 
 Lockstep's core rule is that tick `t` runs only when the command set for `t` is complete on
-every peer. Otherwise peers compute from different sets, and the next checksum shows a
-desync. The gate in `design_engine_core.md` §3.3 already enforces this rule for every
-participant, and a peer is one more participant:
+every peer. Otherwise peers compute from different sets. The next tick digest then shows a
+differing command set, or the rolling checksum shows the diverged state within N ticks. The
+gate in `design_engine_core.md` §3.3 already enforces this rule for every participant, and a
+peer is one more participant:
 
 ```
 while (!ready_for(t))                                   // every participant, incl. peers
@@ -117,7 +118,7 @@ Peer C is the slowest.
 | 0 ms | finishes tick 999, `first_unexecuted = 1000` | — |
 | 0 ms | `ready_for(1000)` → false (C's `ready_through` is 999); blocks on the gate | relay is still waiting on C's input for 1000 |
 | 12 ms | *blocked: 12 ms of the 33 ms budget* | turn-1000 packet lands; `submit(…, 1000)` on C's endpoint; `C.ready_through = 1000`; the sim is parked, so `gate.release()` |
-| 12 ms | wakes, drains, executes, publishes | sends `checksum(1000)` upstream |
+| 12 ms | wakes, drains, executes, publishes | sends tick 1000's tick digest and rolling-checksum slice upstream |
 | 20 ms | `ready_for(1001)` → true, already buffered, so no wait | turn 1002 arrives |
 
 A runs at C's pace. This pacing comes from the gate itself and needs no separate mechanism.

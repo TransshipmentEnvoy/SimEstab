@@ -229,9 +229,10 @@ The choices:
 These come from Factorio's Friday Facts, Gaffer On Games, and lockstep postmortems:
 
 - **Iteration order**: never iterate hash maps or pointer-keyed containers to produce state
-  changes. Order must come from stable ids, not addresses or insertion timing. Every storage
-  policy keeps tables dense with no free list, and where a row moves is a pure function of
-  the tick's erase mask (`design_data_container.md` §2.2; §4.1).
+  changes. Order must come from stable ids, not addresses or insertion timing. Every object
+  type is a pool whose rows never move. Rows are visited in slot order, which follows from
+  the live bitmap, and the live bitmap is saved state (`design_data_container.md` §2.2;
+  §4.1).
 - **RNG**: a seeded PRNG owned by the core, such as PCG or xoshiro. Each system gets its own
   stream derived from the master seed, so systems cannot disturb each other's sequences.
   Peripherals never call core generators. The generator and how streams are derived are open
@@ -251,17 +252,34 @@ These come from Factorio's Friday Facts, Gaffer On Games, and lockstep postmorte
 Determinism is checked from the start, before there is any simulation to test. This is the
 natural companion of the "session management" work in M1.
 
-- **Per-tick checksum** of core state. Per-system checksums make it possible to find which
-  system desynced; the Unity DOTS lockstep write-up found them indispensable. Whether they
-  are required is open ([Q24](open_question.md#q24-are-per-system-checksums-required)).
+- **Checksums of core state, at three levels.** One algorithm serves all three (§4.2,
+  `design_limits.md` §6). They differ in how much state they cover and when they run:
+
+  | Level | Covers | Runs |
+  |---|---|---|
+  | 1. **tick digest** | the commands drained this tick, in drain order, plus each object type's live count and extent | every tick, always. O(types + commands) |
+  | 2. **rolling checksum** | each tick, the chunks whose index ≡ tick (mod N), of every object type; the whole world every N ticks | in multiplayer and while recording |
+  | 3. **full checksum** | the whole world every tick, plus one hash per system | CI golden replays, certification and desync bisecting |
+
+  The tick digest catches a divergent command stream or live set at once. The rolling
+  checksum catches a divergent value within N ticks, at a flat cost of 1/N of a full pass
+  per tick. The period N is open
+  ([Q67](open_question.md#q67-the-rolling-checksum-period-and-the-tick-digest)). The full
+  checksum costs a full pass per tick, which is why it runs only where a desync must be
+  pinned to one tick. Its per-system hashes find which system desynced; the Unity DOTS
+  lockstep write-up found them indispensable. A system's hash covers the columns it
+  declared as writes, hashed when its phase closes.
 
   The checksum input is canonical, never raw memory: live semantic values in fixed
-  little-endian byte order, without padding, spare capacity or SIMD tail lanes
+  little-endian byte order, without padding, spare capacity, dead rows or SIMD tail lanes
   (`design_data_container.md` §3). Each row's id is mixed into its contribution, so the
-  reduction does not depend on row order and is the same for every storage policy (§4.2,
-  `design_limits.md` §6). Each object type's monotonic id counter affects the future, so it
-  is part of the input too. Exactly which state must be hashed, and the bit-level algorithm,
-  are open ([Q27](open_question.md#q27-the-checksums-exact-algorithm-and-inputs)).
+  reduction does not depend on row order (§4.2, `design_limits.md` §6). The id contains the
+  slot, so the layout is covered too. Each object type's generation column, live and retired
+  bitmaps and extent decide the ids of future creates, so they are part of the input.
+  Derived columns (`design_data_container.md` §2.1) are left out of the tick digest and the
+  rolling checksum; the full checksum rebuilds them and compares. Exactly which state must be
+  hashed, and the bit-level algorithm, are open
+  ([Q27](open_question.md#q27-the-checksums-exact-algorithm-and-inputs)).
 - **Replay harness**: record the seed and the commands. In CI, a replay must produce the
   same final checksum with 1 thread and N threads, in Debug and Release, and later on Linux
   and Windows.
@@ -275,10 +293,9 @@ natural companion of the "session management" work in M1.
     ([Q23](open_question.md#q23-what-does-engine-build-mean-in-session-identity));
   - schema, content and mod identities (`design_data_container.md` §7.4, `design_modding.md`
     §3);
-  - the declared caps of each object type (`design_data_container.md` §2.2). A create at a
-    cap is a deterministic rejection, so a different cap changes what the simulation does,
-    and the header must catch it. An uncapped type adds nothing, because unbounded growth is
-    not observable: every machine grows identically or fails;
+  - the cap of every object type, declared or the default of 2²⁴
+    (`design_data_container.md` §2.2). A create at a cap is a deterministic rejection, so a
+    different cap changes what the simulation does, and the header must catch it;
   - the source-id map, from the engine-assigned `u32` to the source's name. Commands carry
     only the number, so without the map a recorded stream cannot be attributed to a named
     mod;
@@ -333,11 +350,13 @@ terminal state instead of a half-started session.
 1. **Close dynamic column registration, and with it the row width.** The registered set is
    final, and column ids are assigned from it (`design_data_container.md` §7.3). A later
    `register_column` is an error, not a resize.
-2. **Close the declared caps and allocate initial storage.** Caps come from the optional
-   `[[=capacity]]` annotation and from `EngineConfig.capacity`. After this step neither can
-   change (`design_data_container.md` §2.2). Uncapped types get an initial allocation and
-   grow from there, so this step fixes rules, not sizes. It comes after step 1 because the
-   row width is not final until dynamic columns are closed.
+2. **Close every object type's cap and reserve its storage.** Caps come from the
+   `[[=cap(N)]]` annotation and from `EngineConfig.entity_capacity`; a type with neither
+   gets 2²⁴. After this step no cap can change (`design_data_container.md` §2.2). The step reserves
+   address space for `cap × element size` for every column. Pages are committed later, as
+   each pool's extent grows. A reservation can fail, which is one reason this step comes
+   before every observable one. It comes after step 1 because the row width is not final
+   until dynamic columns are closed.
 3. **Assign source ids** and build the map between names and ids. Ids are `u32`: the host is
    0, and mods are numbered in their deterministic load order (`design_modding.md` §3). Ids
    are assigned here and bound to an endpoint when one is created. That split keeps them
@@ -492,8 +511,8 @@ Three rules follow from this:
   with one exchange. §3.4 covers the predicate and §3.2 the mechanism. Whether `step()`
   publishes Views that are not due is open
   ([Q12](open_question.md#q12-does-step-publish-every-view-regardless-of-cadence)).
-- **Publishing never waits.** It may allocate: a block too small for this tick's matched
-  rows is grown before it is filled (see growth below).
+- **Publishing never waits.** It may commit memory: a block commits pages as this tick's
+  matched rows reach them (see block memory below).
 - **A `PRIVATE` View always has a writable block**, so a due publish always happens and is
   never skipped. v1 loses no samples; only `SHARED` can skip (Appendix A).
 
@@ -531,27 +550,28 @@ advanced when its fence signals and used only to skip an upload when the tick ha
 advanced. Only uploads whose fence has completed are presented. The full contract is in
 `design_data_container.md` §5.
 
-**Growth.** Tables have no size limit by default (`design_data_container.md` §2.2), so a
-growing world grows its projections, and so does a predicate that matches more rows than
-last tick. Growth happens after the exchange and before the fill. At that point the
-publisher's block is its own, so it may be reallocated in place.
+**Block memory is reserved up front.** A View's matched rows can change on every
+publish, up to the View's maximum rows: its object type's cap, unless the View declares
+fewer (`design_data_container.md` §5.1). Each block reserves address space for that maximum
+at the freeze and commits pages as matched rows reach them. A commit happens after the
+exchange and before the fill, when the publisher's block is its own. So a block never moves,
+and the bounded atomic step never allocates.
 
-**No block is freed during a session.** Allocation is tick-budget work done before the
-release publication; it is never part of the bounded atomic step. Blocks come from a pool
-that never returns pages to the OS. A freshly mapped block costs one page fault per page on
-first fill, so reusing a warm block is what keeps publish time steady. A pool that freed and
-remapped would make that jitter worse.
+**No block is freed during a session.** Committing is tick-budget work done before the
+release publication; it is never part of the bounded atomic step. Blocks never return pages
+to the OS. A freshly committed page costs one page fault on first fill, so reusing a warm
+block is what keeps publish time steady. Returning pages and committing them again would
+make that jitter worse.
 
-**The pool may also grow in number of blocks.** v1 never needs this, because a `PRIVATE`
-View always has a writable block. Under `SHARED`, the alternative to growing the pool is
-skipping a publish (Appendix A), and growing is the better answer. Either way, the atomic
-step itself never allocates. Block growth has no line in the tick budget yet
-([Q20](open_question.md#q20-where-does-view-block-growth-go-in-the-tick-budget)).
+**The number of blocks is fixed.** A `PRIVATE` View always has a writable block, so it never
+needs a fourth. Under `SHARED`, the alternative to skipping a publish is adding blocks
+(Appendix A); that choice belongs to the `SHARED` mode
+([Q60](open_question.md#q60-reviving-the-shared-view)).
 
 **Cost, and where it is charged.** Per-View projection costs more than one shared projection
 would, in one way:
 
-- Publish cost per due View is `scan(predicate inputs × live rows) + gather(matched rows ×
+- Publish cost per due View is `scan(predicate inputs × live chunks) + gather(matched rows ×
   spec)`, not one full copy. Two Views over the same columns cost twice. That is the price
   of keeping blocks without copying, for both.
 - **The row predicate shrinks the gather term.** A render View over 10⁷ live rows whose
@@ -570,7 +590,8 @@ would, in one way:
   lists, total bytes are normally below one undeclared full projection. That is why the
   column list is a declaration and not a default.
 - **There is no maximum width per row** (`design_limits.md` §5). A per-row cap would bound
-  the wrong thing: cost is width times matched rows, and neither is capped.
+  the wrong thing: cost is width times matched rows. Width is not capped, and matched rows
+  are bounded only by the View's maximum rows (`design_data_container.md` §5.1).
 - **Cost is measured, not capped, and crossing the threshold is diagnosed.** Publish
   duration, publish bytes per second and matched rows are first-class metrics, per View and
   in total. **The threshold is 4 GB/s, checked per View, not against the total**
@@ -608,9 +629,9 @@ endpoint to narrow, just as the per-View figure does for publish.
 
 | Charge | Shape | Bounded by |
 |---|---|---|
-| Publish | `Σ over due Views (scan over live rows + gather over matched rows × spec)` | **nothing, by design**. Measured, and each term is checked against 4 GB/s **for that View** (above; `design_limits.md` §5). The View cap bounds the number of terms; each term's gather is bounded by its row predicate (§3.4); its scan stays proportional to live rows |
-| Compaction scan and gather | O(rows × columns) per object type that erased this tick | **nothing, by design**. Measured and checked against its own `compaction_warn_bytes_per_second`, per object type and in total (`design_limits.md` §4). For a capped type, rows ≤ cap (`design_data_container.md` §2.1). The number of types and the column width are not capped; a mod's share of the width is attributed to that mod, not refused |
-| Growth: reallocate and copy | O(rows × columns) on a tick that doubles a table, per growing object type; **done together with compaction** when the same commit does both | geometric growth, so O(1) per create on average. But it comes in bursts, and a burst has no bound for an uncapped type |
+| Publish | `Σ over due Views (scan over live chunks + gather over matched rows × spec)` | **nothing, by design**. Measured, and each term is checked against 4 GB/s **for that View** (above; `design_limits.md` §5). The View cap bounds the number of terms; each term's gather is bounded by its row predicate (§3.4); its scan stays proportional to the live chunks |
+| Terminal commit | O(erases + creates + links into erased entities), sequential | the tick's staged creates and erases. No step is O(rows): rows never move (`design_data_container.md` §2.2) |
+| Checksum | tick digest: O(types + commands), every tick. Rolling checksum: 1/N of a full pass per tick, when enabled. Full checksum: a full pass per tick | the level in use (§2.3). The full checksum runs only in CI, certification and desync bisecting, never in a shipped session |
 | Upload bytes per frame | the render View's spec over its matched rows, whole columns | same treatment as publish |
 | Command drain and execution | O(commands stamped for this tick) | `C = Σ capacity(endpoint)` over the registered endpoints (§5.1, `design_limits.md` §2). Only a session that registers that many endpoints, each at full capacity, reaches it |
 | System execution | the actual simulation work | not yet measured |
@@ -697,7 +718,8 @@ on x86-64. The sanitizer test checks:
 - riding that same edge, that a return header written before a take is read intact by the
   publisher that receives the block, and never while the reader is still writing it (§3.5).
 
-A race between growing or replacing a block and reusing it is a required test case.
+A race between committing pages for a block or replacing it and reusing it is a required
+test case.
 
 ### 3.3 Participants and the gate (normative)
 
@@ -1002,12 +1024,14 @@ spatial structure for its own systems, `SPHERE` and `FRUSTUM` may be answered fr
 the scan cost disappears. That is an implementation choice behind the declaration. A reader
 never declares or depends on it.
 
-**The algorithm is already specified elsewhere.** Evaluate the predicate to a mask,
-exclusive-scan the mask into destination offsets, and gather each column. That is exactly
-order-preserving compaction (`design_data_container.md` §2.2) run against a different mask.
-Building compaction builds this. It runs in parallel on the worker pool using a prefix sum,
-and keeps ascending row order without extra care. It is safe there because the world does
-not change between the terminal commit and the next tick.
+**The algorithm is already specified elsewhere.** Evaluate the predicate to a mask, AND it
+with the live bitmap, exclusive-scan the mask into destination offsets, and gather each
+column. That is exactly the publish scan and gather (`design_data_container.md` §5.1), which
+every View runs anyway; `ALL` is the live bitmap alone. The scan keeps ascending slot order
+without extra care. The gather may run in parallel on the worker pool, because every
+destination comes from the prefix sum and the world does not change between the terminal
+commit and the next tick. Where the scan is charged is open
+([Q35](open_question.md#q35-where-is-the-predicate-scan-charged)).
 
 **Coarse in the core, exact in the reader.** The core's predicate is conservative: a region,
 not a final visibility answer. The reader refines it against its own fresh camera, on the
@@ -1021,17 +1045,16 @@ rows that passed. This split has three benefits:
   variable-length message.
 
 **A filtered View carries the id column; an unfiltered one need not.** Rows 3, 17 and 902
-mean nothing to a reader without the `[[=id]]` column. So a View whose predicate is not
-`ALL` includes `id` automatically, at 8 bytes per matched row. The render View is the
-exception. The GPU may not key on a row offset across frames anyway
-(`design_data_container.md` §5), so a renderer that only draws needs no id and does not pay
-for one. Whether a View may leave out the id column at all, and how it declares that, is
+mean nothing to a reader without the id column. So a View whose predicate is not `ALL`
+includes `id` automatically, at 8 bytes per matched row. The render View is the exception.
+The GPU may not key on a snapshot row across frames anyway (`design_data_container.md` §5),
+so a renderer that only draws needs no id and does not pay for one. Whether a View may leave out the id column at all, and how it declares that, is
 open ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
 
 **Filtering is turned on by measurement.** `ALL` is the default, and it is right at 10⁵ live
 rows, where a full projection is a few megabytes and a predicate would add complexity for no
 gain. Row filtering is a scaling feature, turned on when `publish bytes/second` calls for
-it. Caps and table growth work the same way.
+it.
 
 ### 3.5 The return header (normative)
 
@@ -1057,10 +1080,10 @@ struct Return {                      // consumer-written, publisher-read
 Return ret[3];                       // parallel to block[3]; never reallocated
 ```
 
-The headers sit in a parallel array rather than inside the blocks, for two reasons. Growth
-reallocates a block and would have to preserve a header stored inside it. And a header in a
-block's first cache line would false-share with the publisher's fill. `ret` has a fixed size
-and never grows.
+The headers sit in a parallel array rather than inside the blocks, for two reasons. A block
+commits pages as its matched rows grow (§3.1), and a header should not depend on which pages
+are committed. And a header in a block's first cache line would false-share with the
+publisher's fill. `ret` has a fixed size and never grows.
 
 **Protocol.**
 
@@ -1115,15 +1138,15 @@ in this codebase that word means only a C++20 module partition (`design_patterns
 
 | Unit | What it is | Unit of |
 |---|---|---|
-| **chunk** | a fixed range of row offsets within a column. Its size is defined once, as `LIBSIM_ESTAB__CHUNK_ELEMENTS`, in `design_data_container.md` §4 | SIMD iteration, false-sharing isolation, parallel-for work items |
+| **chunk** | a fixed range of slots within a column. Its size is defined once, as `LIBSIM_ESTAB__CHUNK_ELEMENTS`, in `design_data_container.md` §4 | SIMD iteration, false-sharing isolation, parallel-for work items |
 | **task range** | the contiguous run of whole chunks given to one parallel invocation | write scoping: the `begin` and `end` of a mod's write span (`design_data_container.md` §7.3) |
 
 Task ranges never overlap, by construction: the parallel-for hands out non-overlapping chunk
 runs, so no system ever has to assert it.
 
-Row offsets last one tick; entity ids are permanent (`design_data_container.md` §2.2).
-Everything below is written in terms of row offsets, because nothing inside a phase needs an
-id.
+A row is an entity's slot. It stays the same for the entity's whole life, but only ids cross
+a boundary (`design_data_container.md` §2.2). Everything below is written in terms of rows,
+because nothing inside a phase needs an id.
 
 ### 4.1 Phase-structured update (read → compute → deterministic commit)
 
@@ -1208,10 +1231,10 @@ separate names:
 | | **Boundary commit** | **Terminal commit** |
 |---|---|---|
 | When | at every phase close (step 3) | once, after the last phase (step 4) |
-| Does | merges `write_staged` buffers, flips `write_dbl` columns | applies **all** structural changes: creates, erases (and so compaction), relationship rewiring |
-| Changes row counts? | never | yes, and only here |
+| Does | merges `write_staged` buffers, flips `write_dbl` columns | applies **all** structural changes: erases with their link fix-up, then creates and relationship rewiring. Moves no row |
+| Changes the live set? | never | yes, and only here |
 
-Both apply their staged input in a fixed order, by task index or row offset, never by the
+Both apply their staged input in a fixed order, by task index or row, never by the
 order threads finish, to produce tick N+1. The one exception, and why, is at the end of this
 subsection. Staged buffers with a fixed-order commit are required for anything that might
 conflict or change structure. That covers shared claims, reductions that are not
@@ -1221,51 +1244,42 @@ mods sign the same contract (`design_modding.md` §5.2).
 
 **Structural changes happen only in the terminal commit.** This has four consequences:
 
-- **Row offsets are stable for the whole tick**, not just within a phase. That is why every
-  tier can call a row offset tick-scoped (`design_data_container.md` §2.2), instead of
-  "phase-scoped, so count your phases".
-- **Compaction runs at most once per tick**, so its O(n) scan and gather is one line in the
-  tick budget (§3.1). Applying structural changes at every boundary would repeat that cost
-  at every boundary where something was erased: the same work, paid k times, for nothing.
+- **The live set is stable for the whole tick**, not just within a phase. A row holds the
+  same entity from the first phase to the last, so no tier has to count phases
+  (`design_data_container.md` §2.2). Rows never move at all; only the terminal commit changes
+  which slots are live.
+- **The terminal commit costs O(changes), not O(rows).** Erases clear bits and zero rows,
+  creates fill the lowest free slots, and nothing moves (`design_data_container.md` §2.2).
+  Its cost is O(erases + creates + links into erased entities), one small line in the tick
+  budget (§3.1).
 - **Creation is deferred.** An entity a system creates in phase 1 cannot be addressed until
   the next tick, because it has no row until the terminal commit assigns one. flecs and
   Unity DOTS defer structural changes the same way, and it is the price of the first two
   points. A system that must act on a new entity in the same tick has to run after whatever
   creates it, and read the staged create buffer instead of the columns.
-- **Growth happens here, and so does the only way a create can fail.** Tables have no size
-  limit by default (`design_data_container.md` §2.2). The commit computes the required row
-  count before moving anything, and reallocates geometrically if it exceeds the current
-  allocation. It writes the compaction gather directly into the new allocation, so a tick
-  that was compacting anyway pays nothing extra. Reallocation changes addresses, not row
-  offsets, and every column pointer expired with its `tick_fn`, so row stability still
-  holds. **Allocation failure ends the session; it is never a rejection.** A rejection
-  caused by host memory would make two machines replaying the same stream accept different
-  creates.
+- **Every way a create can fail is decided here.** Every object type has a cap, and its
+  memory is reserved at the cap at the freeze (`design_data_container.md` §2.2). The commit
+  commits the pages it needs before it changes anything. **Commit failure ends the session;
+  it is never a rejection.** A rejection caused by host memory would make two machines
+  replaying the same stream accept different creates.
 
-  For an object type that declares a cap, the commit accepts creates only while rows remain.
-  The remaining count is taken after compaction, since erases staged this tick free their
-  rows in the same pass. Staged create buffers then merge in fixed task order: the first
-  that fit are accepted, and the rest are rejected and reported. Task order makes the
-  accepted set a function of state, not of scheduling. Without it, a full table would turn
-  the parallel phase into a desync source, which is the one thing §4 exists to prevent. Ids
-  are assigned here, only to accepted creates, in the same order. What kind of cap an object
-  type has, and what "stop" means for a ceiling, are open
-  ([Q31](open_question.md#q31-what-does-hitting-a-declared-cap-do)).
+  The commit accepts creates only while free slots remain. The free count is taken after
+  the erases, since erases staged this tick free their slots in the same commit. Staged
+  create buffers then merge in fixed task order: the first that fit are accepted, and the
+  rest are rejected and reported. Task order makes the accepted set a function of state, not
+  of scheduling. Without it, a full pool would turn the parallel phase into a desync source,
+  which is the one thing §4 exists to prevent. Accepted creates take the lowest free slots,
+  in the same order. What kind of cap an object type has, and what "stop" means for a
+  ceiling, are open ([Q31](open_question.md#q31-what-does-hitting-a-declared-cap-do)).
 
 A boundary commit is cheap by construction: it touches only the columns that systems in the
-closing phase actually staged. Only the terminal commit is O(n).
+closing phase actually staged. Neither commit is O(rows).
 
-**Parallelism inside a commit differs by part, and the difference matters:**
-
-- The **staged merge is sequential**, in fixed task order. That order is the determinism
-  guarantee. Running it on the worker pool would bring back exactly the dependence on
-  completion order that staging exists to remove.
-- The **compaction scan and gather may use the worker pool.** Every row's destination is a
-  pure function of the erase mask, computed before any row moves, so the result is the same
-  for any thread count: it is a deterministic permutation, not a merge. This is the one part
-  of a commit allowed to run in parallel, and it is the part that costs O(n). Whether the
-  parallel gather must write to a separate buffer to avoid overwriting unread rows is open
-  ([Q33](open_question.md#q33-the-parallel-compaction-gather)).
+**Both commits are sequential.** The staged merge runs in fixed task order, and that order
+is the determinism guarantee. Running it on the worker pool would bring back exactly the
+dependence on completion order that staging exists to remove. The terminal commit's erase
+and create steps are sequential too. They touch only the entities that changed, so no
+O(rows) part is left to spread over the worker pool.
 
 flecs staging works this way (per-thread command queues merged sequentially at sync points),
 and so does Unity DOTS `EntityCommandBuffer` playback.
@@ -1293,27 +1307,21 @@ The right kind is obvious only for the first case:
 
 #### Enabling guarantee
 
-**No structural change and no row movement happens during the tick's phases.** Row counts
-are fixed from the first phase to the last, because creates, erases and compaction all
-happen in the terminal commit (`design_data_container.md` §2.2). Without this, the read-span
-rule above could not be proven, because a row offset could change meaning in the middle of a
-tick.
+**No structural change happens during the tick's phases.** The live set, the extent and
+every generation are fixed from the first phase to the last, because creates and erases
+happen only in the terminal commit (`design_data_container.md` §2.2). Without this, the
+read-span rule above could not be proven, because a row could change occupant in the middle
+of a tick.
 
-The guarantee depends on what `create` at the current allocation does: **tables grow in the
-terminal commit, and a cap is optional** (`design_data_container.md` §2.2). Growth
-reallocates, and that is compatible with the guarantee. Row stability is about row offsets,
-which a reallocation keeps. The only pointers into columns are valid for one `tick_fn` call
-(`design_data_container.md` §7.3), and that call has ended before the commit runs. "No row
-movement during the tick" was never a claim about addresses.
-
-Growth does cost three things. There is a bursty `O(rows × columns)` copy on ticks that
-double a table (the budget in §3.1). Payload blocks in every View are replaced (§3.1). And
-world memory cannot be known at the freeze. Declaring a cap removes all three for that
-object type, which is why the annotation exists.
+Rows never move, and neither do addresses. Every column is reserved at its type's cap at the
+freeze, and the terminal commit only commits pages inside that reservation
+(`design_data_container.md` §2.2). A pointer handed to a system is still scoped to one
+`tick_fn` call (`design_data_container.md` §7.3), because the permission it carries changes
+between phases, not because the memory moves.
 
 **No spatial colouring.** Checkerboard colouring over a spatial grid, as Factorio does, is
 deliberately not part of this design. Colouring only means something over a spatial unit,
-and a spatial region's rows are an arbitrary scattered subset of row offsets. So colouring
+and a spatial region's rows are an arbitrary scattered subset of slots. So colouring
 the chunks above would separate nothing and guarantee nothing. Making it work would need a
 cell column derived from position, a deterministic index from cell to rows, declared halos,
 and a write span that checks membership: a whole subsystem, not a rule. `write_staged` is
@@ -1333,17 +1341,16 @@ values were swapped", the typical failure of an iteration-order bug (§2.2), is 
 permutation. The one kind of bug the checksum exists to catch would be the one it cannot
 see. So the checksum must be either a hash streamed in a canonical order, or an
 order-independent reduction *with each row's id mixed in*. Canonicalizing the input (§2.3)
-gives neither by itself. For storage policies that keep ids sorted, the canonical-order
-option is a plain linear scan, and so the cheaper of the two.
+gives neither by itself. Slot order is canonical (`design_data_container.md` §2.2), so a
+hash streamed in slot order would also be correct.
 
-**The checksum is the id-mixed reduction, for every storage policy** (`design_limits.md`
-§6). The cheaper option is not kept as a second path for the two ordered policies. It would
-save a little per tick, at the cost of two algorithms, two code paths, and a class of bug in
-which changing a storage policy silently changes what a golden replay compares. One
-algorithm catches permutations everywhere, and it is the only one that works for `unordered`
-(`design_data_container.md` §2.2), which has no canonical row order. The function is a
-hand-written 64-bit mix rather than an external hash, because bit-exactness across compilers
-matters most, and it vectorizes over SoA columns. Its bit-level specification belongs to §7
+**The checksum is the id-mixed reduction** (`design_limits.md` §6). Two properties decide
+it. First, it splits per chunk: each chunk's partial result combines with the others in any
+order. So the full checksum can run in parallel, and the rolling checksum (§2.3) can hash one
+slice of chunks per tick. A streamed hash can do neither. Second, the id contains the slot
+(`design_data_container.md` §2.2), so mixing in the id also covers which slot each entity
+sits in. The function is a hand-written 64-bit mix rather than an external hash, because
+bit-exactness across compilers matters most, and it vectorizes over SoA columns. Its bit-level specification belongs to §7
 step 2 and is open ([Q27](open_question.md#q27-the-checksums-exact-algorithm-and-inputs)).
 
 ### 4.3 What to avoid
@@ -1353,7 +1360,7 @@ step 2 and is open ([Q27](open_question.md#q27-the-checksums-exact-algorithm-and
   for exactly this reason.
 - **Atomics that pick winners** ("the first thread to claim X wins"): the winner depends on
   timing. If contention needs resolving, collect all claims, then resolve them in a
-  deterministic pass (sort by row offset).
+  deterministic pass (sort by row).
 - **False sharing**: Factorio's first attempt at parallel update was slower than serial,
   because unrelated tasks' data shared cache lines. The fix is physical separation of data:
   per-chunk allocators, 64-byte-aligned SoA blocks, and each task range's working set on its
@@ -1407,11 +1414,12 @@ addresses, and we do not control memory layout or alignment for SIMD.
 
 The design is a hybrid:
 
-- **Core world data lives in custom SoA tables** (M3, the world container). They hold dense
-  columns of fixed-point and integer components, and permanent monotonic entity ids that
-  resolve to tick-scoped row offsets (`design_data_container.md` §2.2). Fixed chunking
-  serves task ranges and SIMD alignment. Archetype-style dense tables iterate faster and
-  vectorize better than sparse sets; sparse sets win only under heavy add/remove churn.
+- **Core world data lives in custom SoA pools** (M3, the world container). They hold
+  columns of fixed-point and integer components, indexed by slot, and generational ids whose
+  slot is the row (`design_data_container.md` §2.2). Fixed chunking serves task ranges and
+  SIMD alignment. Columns indexed by slot iterate faster and vectorize better than sparse
+  sets. Sparse sets win under heavy add/remove churn, and a pool absorbs churn without
+  moving rows.
 - **flecs is optional, for the cold path**: entity lifecycle bookkeeping, composing
   peripheral displays, editor and debug queries. These are places where determinism does not
   matter. Whether to keep flecs at all is open
@@ -1455,9 +1463,9 @@ lagging.
   not affect the simulation. If a replay from the seed alone is ever needed, the AI must
   either be deterministic (integer inference) or its commands must count as external input;
   §6 describes the hybrid split this design uses. A planner whose reasoning spans several
-  ticks must carry entity ids, not row offsets, and re-resolve them against a fresh snapshot
-  before submitting. Row offsets mean something only inside the snapshot that produced them
-  (`design_data_container.md` §2.2).
+  ticks must carry entity ids, not snapshot rows, and re-resolve them against a fresh
+  snapshot before submitting. A snapshot row means something only inside the snapshot that
+  produced it (`design_data_container.md` §5.1).
 - **GPU compute for the core?** Peripheral-only for now. Float GPU work is non-deterministic
   in practice: atomic commit order, per-driver shader compilation and reduction scheduling
   all vary (see NVIDIA's CCCL determinism levels). Integer-only compute shaders are
@@ -1854,8 +1862,8 @@ visible. It has the same shape as the ring of §5.1, with the direction reversed
 **Why it has exactly one producer.** The backlog rule below depends on this. Events are
 emitted at commit points, and commit points are single-threaded: the staged merge at every
 phase close and the terminal commit both run sequentially in fixed task order (§4.1). That
-order is the determinism guarantee, so it cannot be relaxed. The one part of a commit that
-runs on the worker pool, the compaction scan and gather, emits nothing; it is a permutation.
+order is the determinism guarantee, so it cannot be relaxed. The terminal commit's erase and
+create steps emit only the cap-refusal events of `design_data_container.md` §2.2.
 Anything that needs to report from inside a parallel phase uses the same route as log
 records. It writes to a per-worker buffer, which the single thread running the phase
 boundary drains in worker order (`design_patterns.md` §7). So the ring has one producer by
@@ -1948,8 +1956,8 @@ Rules that keep this sound:
   | order key | `(source id, sequence)`, both **assigned by the drain** (§5.1): the endpoint order and the position within it. Nothing is sorted, because nothing arrives out of order |
   | why the engine assigns it | a sequence supplied by the source need be neither unique nor increasing, so ties would resolve by arrival time: an iteration-order desync (§2.2) disguised as a sort |
   | order within one source | still the source's own: an endpoint is a FIFO, so `submit_batch` is `k` submits and ordering the batch orders the commands |
-  | naming | a permanent **id**, never a row offset. A row offset from the snapshot of tick N means nothing at tick N+k (`design_data_container.md` §2.2) |
-  | resolution | id to row, by a lookup whose shape depends on the object type's storage policy: binary search where the id column is sorted, the type's index where it is not (`design_data_container.md` §2.2). **If the id is not found, the entity is gone** and the command is deterministically rejected. That is reaction latency, never an error or undefined behaviour |
+  | naming | an **id**, never a row. A snapshot row from tick N means nothing at tick N+k, and a bare slot cannot tell a new occupant from an old one (`design_data_container.md` §2.2) |
+  | resolution | id to row in O(1): the id's slot is the row, and the entity is alive only if the slot is live and its generation matches (`design_data_container.md` §2.2). **If the id is not found, the entity is gone** and the command is deterministically rejected. That is reaction latency, never an error or undefined behaviour |
 
   The last row is a positive identity test: a command can never silently apply to a
   different entity from the one it named.
@@ -1989,10 +1997,11 @@ Each step is labelled with the milestone it belongs to (see `glossary.md`).
    at the freeze, so every later step is written against a session that already exists. When
    the host is the only participant, the gate never blocks, so this step builds the gate at
    its simplest setting.
-2. **M2: the `fixed<>` type, deterministic PRNG, per-tick checksum, and replay record and
-   playback.** The verification harness must exist before the first system does.
-3. **M3: the SoA world container**, with chunked columns, permanent ids over tick-scoped row
-   offsets, and SIMD-friendly alignment.
+2. **M2: the `fixed<>` type, deterministic PRNG, the three checksum levels (§2.3), and
+   replay record and playback.** The verification harness must exist before the first
+   system does.
+3. **M3: the SoA world container**, with chunked columns, generational ids over stable
+   slots, and SIMD-friendly alignment.
 4. **M4: the phase-structured scheduler**: explicit system list, per-column access
    declarations, the phase cut and its invariant check, staged buffers, fixed-order commit.
    Prove that 1 thread and N threads give the same checksums.
@@ -2031,7 +2040,7 @@ which removes most of what makes general hazard pointers hard.
 **What needs it.** A process mod host, which cannot be given a `PRIVATE` View: a `PRIVATE`
 publisher uses the block index its reader wrote (§3.2), so a hostile reader could steer a
 payload address. `SHARED` reads the block-state words the child process writes only as
-availability, and never derives an address, index, generation or loop bound from them. The
+availability, and never derives an address, index, epoch or loop bound from them. The
 shared-memory mapping, the permission split and the fixed interprocess atomic ABI are in
 `design_modding.md` §4.3, which is deferred together with this appendix.
 
@@ -2049,8 +2058,8 @@ shared-memory mapping, the permission split and the fixed interprocess atomic AB
 
 **Why four blocks.** With four blocks, pin pressure shows up only with a truly slow reader.
 The current block stays available to new readers while the publisher scans the other three,
-and each publish can leave one older generation pinned without waiting. Four blocks give
-**three generations of slack**. This is not an assumption that a copy finishes within 66 ms:
+and each publish can leave one older epoch pinned without waiting. Four blocks give
+**three epochs of slack**. This is not an assumption that a copy finishes within 66 ms:
 an arbitrarily slow copy stays safe, and if all three candidates are pinned, that View skips
 one due publish.
 
@@ -2059,15 +2068,15 @@ one due publish.
 ```
 struct SharedView {
     Block*            block[4];
-    std::atomic<u64>  published;      // (generation << 2) | index
+    std::atomic<u64>  published;      // (epoch << 2) | index
     std::atomic<u32>  state[4];       // bit 31 WRITING; low 31 bits reader count
     u32               cursor;         // publisher-private scan start
-    u64               generation;     // publisher-private; 62 bits on publication
+    u64               epoch;          // publisher-private; 62 bits on publication
 };
 ```
 
-The cursor and generation are plain variables touched only by the publisher. Running out of
-generations is a terminal invariant failure, checked before wrap. At 30 Hz, 2^62 publishes
+The cursor and epoch are plain variables touched only by the publisher. Running out of
+epochs is a terminal invariant failure, checked before wrap. At 30 Hz, 2^62 publishes
 is far beyond any possible session, but the rule removes ABA outright rather than relying on
 that. Block states are 4 bytes and the published word is 8. No 16-byte atomic and no tagged
 pointer is allowed.
@@ -2082,11 +2091,11 @@ publish:
                      expected, WRITING, acquire, relaxed):  # (S2) exclusive claim
                   chosen = i; break
           if no chosen: ++publish_skipped_pinned; return SKIPPED
-          grow/replace *block[chosen] if needed              # (S3) claim excludes readers
+          commit/replace *block[chosen] if needed            # (S3) claim excludes readers
           fill *block[chosen]                                # (S3) plain
           state[chosen].store(0, release)                    # (S4) payload/ptr complete
-          ++generation; assert(generation < 2^62)
-          published.store((generation << 2) | chosen, release) # (S5) LINEARIZATION POINT
+          ++epoch; assert(epoch < 2^62)
+          published.store((epoch << 2) | chosen, release)    # (S5) LINEARIZATION POINT
 
 read:
 retry:    a = published.load(acquire)                       # (R1)
@@ -2104,7 +2113,7 @@ retry:    a = published.load(acquire)                       # (R1)
 **Why validation happens before the copy.** Loading a pointer or payload and then checking a
 version is too late: the overlap has already formed a C++ data race. Here a stale reader
 either loses (R2) to the writer's claim, or pins first and makes (S2) fail. After the pin,
-an exact match at (R3) shows that the pinned block is still the published generation. Only
+an exact match at (R3) shows that the pinned block is still the published epoch. Only
 then is the pointer loaded. A retry therefore detects a lost publication race before any
 ordinary payload access; it never tries to excuse a torn copy.
 
@@ -2125,16 +2134,17 @@ counts skips, and a sustained nonzero rate identifies a reader holding its pin t
 `SHARED` View may not be paced: it is sampled and may skip, so `paced=True` is a
 registration error rather than a promise the mechanism cannot keep.
 
-**Growth.** A successful `0 → WRITING` claim proves that no reader can have loaded that
-block's pointer, so the publisher may free and replace the block in place. A reader loads
+**Committing and replacing.** A successful `0 → WRITING` claim proves that no reader can
+have loaded that block's pointer. So the publisher may commit pages for the block, or free
+and replace it in place. A reader loads
 `block[i]` only after pinning and revalidating, so the pointer is never read and written at
 the same time.
 
 **Verification.** The sanitizer test checks three things. No ordinary pointer or payload
 access happens without a successful pin and revalidation. A writer never claims a block with
 a nonzero reader count. And when all three candidates are pinned, the publish skips without
-touching a pinned block. A long reader spanning many publishes, and a race between growth
-and replacement, are required cases. A protocol that validates after copying cannot express
+touching a pinned block. A long reader spanning many publishes, and a race between
+committing pages and replacement, are required cases. A protocol that validates after copying cannot express
 them without undefined behaviour.
 
 ## References
