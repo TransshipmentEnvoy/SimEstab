@@ -4,7 +4,7 @@ Reference for the recurring patterns in the current codebase (`log`, `gpu`,
 `viz` subsystems). New subsystems should follow these conventions. A deviation
 needs a documented reason.
 
-Sources of truth as of writing:
+Sources of truth:
 
 - `src/libsim_estab/module/sim_estab--log.cppm` + `src/libsim_estab/src/log.cpp`
 - `src/libsim_estab/module/sim_estab--gpu.cppm` + `src/libsim_estab/src/gpu.cpp`
@@ -70,7 +70,8 @@ How to read this doc:
 - For process-global subsystems that initialize once.
 - Three functions: throwing idempotent `init`, noexcept idempotent `deinit`,
   noexcept `is_init` query.
-- One global mutex per subsystem guards everything.
+- One global mutex per subsystem guards its mutable state. The `is_init` query does not take
+  it: it is an atomic load (see the lock hierarchy below).
 
 ### Pattern
 
@@ -87,20 +88,55 @@ Implementation rules:
 - All mutable state lives in a `namespace detail { ... }` inside the
   implementation unit. That state is:
   - one `static std::mutex`;
-  - a `static bool init_status`;
+  - a `static std::atomic<bool> init_status`;
   - whatever tracking containers the subsystem needs.
-- Use a **single global mutex per subsystem**. Take it as the first line of
-  every public function, including the `_is_init` query. One lock, consistent
-  order, no deadlock surface.
+- Use a **single global mutex per subsystem**. Take it as the first line of every function
+  that touches mutable state.
+- **`X_is_init()` takes no lock.** It is one acquire load of the atomic `init_status`. The
+  reason applies beyond logging. The logging guard runs on every emission in the process. If
+  it took the log mutex, `log_deinit` would deadlock, because it emits its last record while
+  holding that mutex. And every emission in the process, including those inside the parallel
+  core update, would queue on one lock. A lock-free query is what makes the lock hierarchy
+  below possible.
+- **`is_init` is advisory.** Its answer can be stale as soon as it returns. It may gate a
+  best-effort action, such as emitting a record or skipping a toggle. It must never gate a
+  decision that has to stay true after the call. Anything that needs such a decision takes
+  the lock and checks again under it.
 - `init` behavior, in order:
   1. Check `init_status`. Return early if already set.
   2. Do a defensive cleanup of any stale state.
   3. Build fresh state.
-  4. Set `init_status = true` last.
-- `deinit` behavior, in order:
-  1. Flush pending work.
-  2. Tear down in reverse order.
-  3. Reset `init_status = false`, so `init` can run again.
+  4. Store `init_status = true` (release) **last**, so a hot-path caller that sees it also
+     sees the fully built state.
+- `deinit` behavior, in order. The flag moves **first**:
+  1. Store `init_status = false` (release), so no new work starts against state that is
+     about to be torn down. Storing it last would leave exactly that window open.
+  2. Flush pending work.
+  3. Tear down in reverse order, leaving the subsystem ready for another `init`.
+- **The caller must not call `deinit` while other threads still use the subsystem.** The
+  flag is a backstop, not a barrier: work already past the check may be dropped. `deinit`
+  does not wait for in-flight callers, because that would put an unbounded wait inside a
+  `noexcept` teardown. For logging, the engine's shutdown order satisfies this: it stops mod
+  hosts and joins the sim thread before releasing logging (`design_python_api.md` §2).
+- **Dropping work at teardown is acceptable only if it is safe, and for logging this has
+  been checked.** The lock-free query does not create the check-then-emit window. A locked
+  query would release the lock before the record was pushed anyway, because emitting spans
+  building a logger, opening a record, streaming and flushing. What the flag decides is the
+  arrival window, and it decides it in the caller's favour: an emitter arriving during
+  `deinit` sees the flag already cleared and skips at once, instead of blocking through the
+  whole teardown and then skipping.
+
+  The remaining window is safe because of Boost.Log, not our mutex. `open_record` captures
+  **weak** pointers to the accepting sinks under the core's read lock. `push_record` locks
+  each one and skips any that fail. `remove_all_sinks()` takes the core's write lock and
+  drops the core's own strong references, so a sink is destroyed only when its last strong
+  reference goes, and an in-flight push holds one. An emitter racing teardown therefore
+  either finds the sink gone and skips it, or keeps it alive until `consume()` finishes.
+  **It is never a use-after-free, in either order.**
+
+  The general rule: a subsystem may drop work at teardown only if its teardown is safe
+  against a caller already past the guard. Otherwise it needs a drain, and cannot use this
+  pattern.
 - `deinit` is `noexcept`. It is safe to call when never initialized.
 - Optional feature toggles follow the same shape: `enable_Y()` /
   `disable_Y() noexcept`. Both are idempotent. Both are no-ops when the
@@ -114,9 +150,40 @@ Implementation rules:
   the sinks registered with the Boost.Log core.
 - Defensive cleanup in `log_init`: flush, clear the tracking map, remove
   stale sinks from the core.
-- Feature toggles: `enable_console()` / `disable_console()` (likewise for the
-  file sink). They check `init_status` and the tracking map.
-- Hot-path guard: `sim_estab_log()` returns silently when `!log_is_init()`.
+- Feature toggles: `enable_console()` / `disable_console()`. The file sink slots exist in
+  the enumeration but have **no toggle pair yet**. They are planned (`design_logging.md`
+  §3), and this document must not describe them as shipped.
+- Hot-path guard: `sim_estab_log()` returns silently when `!log_is_init()`. That is one
+  atomic load, with no lock, on every emission in the process.
+- **The subsystem's own lifecycle records are ordered around its lock**, which is the one
+  place §7 needs care. `log_init` emits its `info` record after releasing the lock and
+  setting the flag; before that, the guard would drop it. `log_deinit` emits its record
+  while still holding the lock, before clearing the flag and tearing down. The log subsystem
+  logs its own lifecycle like every other subsystem; only the order is special.
+
+### Lock hierarchy
+
+§3 requires logging refcount changes while holding a subsystem mutex, and that is correct.
+It needs one rule:
+
+> **Logging is the bottom of the hierarchy.** Any subsystem may emit while
+> holding its own lock. Nothing reachable from the emission path may acquire a
+> lock that anything else takes above logging.
+
+This makes `subsystem_mutex → log` a documented lock order rather than an undocumented
+nesting. It is also the constraint any future file or network sink must meet: a sink called
+from the log path may hold its own lock and no other. Two consequences, because this is
+where the rule gets broken:
+
+- **The log subsystem never calls into another subsystem**: not for formatting,
+  configuration or diagnostics.
+- **`log_is_init()` is lock-free so the hierarchy has a bottom.** If the query took the log
+  mutex, `log_deinit`, which emits while holding it, would deadlock against itself. And
+  every emission under any subsystem lock would serialize the whole process on one mutex.
+
+Within a subsystem, a second mutex is allowed only if its order is stated where both are
+declared. `gpu` has two, acquired as `GPU_device_mutex` → `SDL_ctx_mutex` and never the
+reverse.
 
 ## 3. Ref-counted shared globals: `acquire` / `release` pair
 
@@ -172,8 +239,9 @@ Implementation rules:
     thread at startup. Then the refcount never returns to zero mid-run.
     Otherwise, the next first-acquire re-runs the affinity check on whatever
     thread gets there first.
-- Log every refcount change at `debug`, with the new count. Log
-  create/destroy at `info`.
+- Log every refcount change at `debug`, with the new count, **inside the lock**. The §2 lock
+  hierarchy allows this: logging sits below every subsystem, so `subsystem_mutex → log` is
+  an order, not a cycle. Log create and destroy at `info`.
 
 ### Example: SDL context and shared GPU device (`sim_estab:gpu`)
 
@@ -255,6 +323,38 @@ Implementation rules:
   - Each release in `cleanup()` is guarded by its witness.
   - Never release a ref-counted global unconditionally. If the acquire
     threw, that would steal a reference held by another live context.
+- **Disarming: the one case where `cleanup()` must not release.** Release in reverse order
+  is unconditional, except when releasing would be provably unsafe. If a thread could not be
+  stopped, it may still be using the resource, and freeing it would be a use-after-free that
+  "always clean up" would require. So a context may be **disarmed**:
+
+  ```cpp
+  void cleanup() noexcept {
+      if (disarmed_) {                  // clear witnesses, release NOTHING
+          log_critical(...);            // name every resource being leaked
+          null_all_witnesses();
+          return;
+      }
+      ... normal reverse-order release ...
+  }
+  ```
+
+  - Disarming is narrow. The only valid reason is "a live thread outside our control may
+    still reach this". It is never a fallback for "cleanup looked risky" or "an error
+    happened".
+  - It is never silent. A disarm logs `critical` and names what leaked. Leaking quietly is
+    worse than crashing.
+  - **Do not release ref-counted globals on a disarmed path** (§3). Decrementing would let a
+    later acquire hand a live device to a process that has lost track of one. As a result
+    the process can never acquire that subsystem again, and that is intended: the process is
+    poisoned and should stay so.
+  - Disarming can apply to a single resource, where it is usually called **detaching**. One
+    block of memory is handed to whoever still references it and freed on their schedule,
+    while the rest of the context releases normally. A View's block detach at close
+    (`design_engine_core.md` §3.1) works this way.
+  - The Python face of a disarmed context is the terminal `failed` engine state
+    (`design_python_api.md` §2).
+
 - **Constructor exception safety**: if any step throws, destroy the
   partially-built Impl. Null the cached pointer. Then rethrow. The
   destructor later sees `impl_ == nullptr` and does nothing:
@@ -330,8 +430,16 @@ private:
   `if (impl_) { impl_->~Impl(); impl_ = nullptr; }`.
 - **Mutating operations** call `check_impl()` first. On null, it logs
   `critical` ("programming error") and calls `std::abort()`.
-- **Read-only queries** degrade gracefully instead: `if (!impl_) return {};`.
-  See the `VizContext` getters and `has_device()`.
+- **Read-only queries degrade gracefully instead**: `if (!impl_) return {};`. This is the
+  query contract, not an exception to §6; §6 states the same split from the other side. The
+  reason is not leniency. Reporting what a context was, after something went wrong, is
+  exactly when a getter gets called on a destroyed or never-constructed object. A getter
+  that aborted there would kill the process and destroy the diagnostic the caller was
+  building. A query returns a value-initialized result, which every caller must already
+  handle, because a live but empty context can return the same.
+- **Both contexts follow it**, and the rule is stated once here so they cannot drift apart.
+  `VizContext::get_gpu_info()` and the `VizContext` getters degrade, and so does
+  `ComputeContext::get_device_info()`.
 
 ### 5b. Opaque wrapper style (`record`, `record_ostream`, `logger`, `logger_mt`)
 
@@ -401,8 +509,17 @@ Rules:
   `"Cannot create buffer with size 0"`, `"Cannot dispatch with null pipeline"`.
 - Benign no-ops return early instead of throwing. Examples: empty upload
   span, zero-size download.
-- Use-after-destruction / uninitialized access is a **programming error**:
-  `check_impl()` → log `critical` → `std::abort()`. Never an exception.
+- Use-after-destruction or uninitialized access **through a mutating operation** is a
+  **programming error**: `check_impl()` → log `critical` → `std::abort()`. Never an
+  exception. The rule covers mutating operations only, so it is not read as "every access
+  aborts":
+  - **Mutating operations abort.** Continuing past one either corrupts state or does nothing
+    while the caller believes it worked, and no return value can say "your object is gone".
+  - **Read-only queries degrade**: `if (!impl_) return {};` (§5a). They do not abort,
+    because the caller is most likely a diagnostic reporting the very failure that destroyed
+    the object.
+  - The Python surface goes further: use after close raises `EngineClosedError` instead of
+    aborting (`design_python_api.md` §2).
 
 ## 7. Logging conventions
 
@@ -417,6 +534,26 @@ Rules:
 - Always log the failure **before** throwing.
 - In-library code calls `sim_estab_log(channel, severity_level::x, parts...)`
   directly. It is variadic; each part must be `LogStreamable`.
+- **Emitting while holding your own subsystem lock is allowed**, because logging is the
+  bottom of the lock hierarchy (§2). Emitting while holding a lock the logging path could
+  reach is not allowed; nothing does that today.
+- **The emission guard is advisory** (§2). `sim_estab_log` checks `log_is_init()` and emits
+  after that check, so a record started while the subsystem is being torn down may be
+  dropped. That is the contract: `log_deinit` requires the caller to stop emission first,
+  and never waits for records in flight.
+- **Logging inside a tick must go through a buffered path.** Core (Tier 3) systems run
+  inside the parallel phase (`design_engine_core.md` §4.1), where a lock per record inside
+  the log core would serialize exactly the work the phase runs in parallel. So the host
+  ABI's `log fn` writes into a **per-worker buffer**, which the engine drains at the phase
+  boundary, in worker order, and emits normally (`design_modding.md` §5.2). This buffer is
+  designed but not built. It is not a new cross-thread mechanism and needs no row in the
+  register of `design_engine_core.md` §1.1: the phase close is already a barrier that merges
+  per-task staged buffers in fixed task order (§4.1 there), and the log buffer is one more
+  buffer merged there. That fixed task order is also what gives the records a deterministic
+  order. Records are not core state, so determinism would hold either way, but only the
+  buffered form keeps the throughput. Engine code inside the phase uses the same path. What
+  happens when a buffer fills is open
+  ([Q38](open_question.md#q38-what-happens-when-a-per-worker-log-buffer-fills-during-a-phase)).
 - Consumer-facing macros (`SIM_ESTAB_LOG_*`) live in `macro.h`.
 - Unknown types are not implicitly stringified. Opt in per type via
   `SIM_ESTAB_LOG_ENABLE_OSTREAM(Type)` / `stream_via_ostream`.
@@ -432,8 +569,8 @@ Rules:
   `enable_console`, `disable_console`).
 - Template/variadic APIs get a concrete lambda wrapper, e.g.
   `log(channel, level, message)`. Give it `nb::arg` names and a docstring.
-- Top-level `init` / `deinit` / `run` are placeholders for the future engine
-  lifecycle. Keep that naming when the engine core lands.
+- Top-level `init` / `deinit` / `run` are placeholders. The engine lifecycle (the `Engine`
+  object, pump primitives and a main loop in Python) is specified in `design_python_api.md`.
 
 ## 9. Checklist for a new subsystem
 

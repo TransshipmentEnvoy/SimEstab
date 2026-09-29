@@ -1,0 +1,219 @@
+# Glossary
+
+One name per concept, used the same way in every design doc. If a doc needs a term that is
+not here, add it here first.
+
+Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` is
+`design_python_api.md`, `data_container` is `design_data_container.md`, `modding` is
+`design_modding.md`, `limits` is `design_limits.md`, `multiplayer` is
+`design_multiplayer.md`, `patterns` is `design_patterns.md`.
+
+## Time and session
+
+| Term | Meaning | Where |
+|---|---|---|
+| tick | One fixed engine step: gate, command drain, phases, terminal commit, publish. The tick counter is the only simulation clock. | engine_core §3 |
+| tick rate | Ticks per second, 30 by default. Fixed for a session and recorded in the replay header. Game speed is the time scale, not the tick rate. | limits §1 |
+| tick budget | Wall-clock time of one tick (33.3 ms at 30 Hz) and the list of costs charged against it. Time waiting at the gate is not charged. | engine_core §3.1 |
+| `first_unexecuted` | The next tick that has not run yet. Only the sim writes it. A command stamped for an earlier tick is too late. | engine_core §3.3 |
+| time scale | Game speed: how fast ticks are run in wall-clock terms. A control call; never recorded. | python_api §4.3 |
+| control call | An API call that changes how the engine runs but never touches world state: pause, resume, `step(n)`, `set_time_scale`, log level. Never a command, never recorded. | python_api §3 |
+| session | The world from the freeze until `close()`. One per `Engine`. | engine_core §2.4 |
+| engine state | `created`, `configuring`, `running` (optionally with the sim thread), `closing`, `closed`, plus the terminal states `load_failed` and `failed`. | python_api §2 |
+| freeze | The single call (`start_session()`) that moves the engine from `configuring` to `running`. It closes every set that must not change during a session, computes session identity, and publishes tick 0. | engine_core §2.4 |
+| session identity | What makes two sessions "the same": engine build, schema, content, mod set, declared caps, source ids and seed. Computed at the freeze and written to the replay header. | engine_core §2.3 |
+| schema identity | The schema part of session identity: the descriptor hash, mod-added columns and content hashes. | data_container §7.4 |
+| replay artifact | Everything needed to reproduce a session: the replay header plus every command recorded as it was consumed. A lockstep turn log is a replay artifact. | engine_core §2.3 |
+| replay header | The session-identity part of a replay artifact. Checked at the freeze; any mismatch raises `ReplayIdentityError`. | engine_core §2.3 |
+| golden replay | A replay artifact whose final checksum CI checks, used as a regression test. | engine_core §2.3 |
+| playback | Running a session from a replay artifact. All endpoints are closed and the recorded commands are fed in instead. | python_api §4.2 |
+| checksum | A per-tick hash of world state, the same for every storage policy. Used to detect desyncs. | engine_core §4.2, limits §6 |
+| determinism | The same session identity and the same command stream always produce the same checksums. Re-running live producers may produce a different command stream; that is not promised to repeat. | engine_core §2 |
+| M0 … M7 | Build milestones. M0: decided limits in code (done). M1: session, Views, command ring, gate. M2: fixed-point, PRNG, checksum, replay. M3: world container. M4: phase scheduler. M5: View projection, row predicate, GPU upload. M6: first system, renderer, sim thread. M7: mod tiers. | `TODO.md` |
+
+## Threads and waiting
+
+| Term | Meaning | Where |
+|---|---|---|
+| core | The deterministic simulation: fixed-point, integer-only, the only holder of world state. Also called "the sim". | engine_core §1 |
+| peripheral | Anything outside the core: rendering, viz, AI, GPU compute, logic mods, network peers. Reads Views and changes the world only by submitting commands. | engine_core §1 |
+| determinism boundary | The line between the core (plus content and core mods) and the peripherals. | engine_core §1 |
+| host | The application that owns the engine, usually the Python program. It is source 0 and always a participant. "Mod host" is a different thing (see Mods). | engine_core §3.3 |
+| owner thread | The thread that created the `Engine`. Only it may make lifecycle calls and pump the engine. | python_api §2 |
+| host endpoint | The host's own command endpoint: source 0, margin 0. | python_api §7.1 |
+| sim thread | The C++ thread that runs ticks in sim-thread mode. | python_api §4.3 |
+| inline mode | Ticks run inside `update()` on the owner thread. The default. | python_api §4.3 |
+| sim-thread mode | Ticks run on the sim thread, started by `run_sim_async()`. | python_api §4.3 |
+| participant | A peripheral the core waits for before each tick, up to that participant's deadline. Every command producer is one; others can opt in with `paced=True`. | engine_core §3.3 |
+| recorder | A peripheral that submits nothing but must not miss a tick; it registers as a participant explicitly. | engine_core §3.3 |
+| conjunction | The set of active participants the gate waits for: a tick runs only when all of them are ready. | engine_core §3.3 |
+| observer | A peripheral the core never waits for. It only reads its View. | engine_core §3.3 |
+| gate | The one place the core waits: before each tick, until nothing blocks the tick (stop, event backlog, pause, or a participant that is not ready). | engine_core §3.3 |
+| run grant | The host's `run_until` value: the core may run ticks below it. `U64_MAX` means running; pause and `step(n)` lower it. | engine_core §3.3 |
+| `stop_requested` | Sticky flag that stops the core at the gate. Highest priority. | engine_core §3.3 |
+| declare ready | A participant stores `ready_through = t` to say it has finished submitting for tick `t`. | engine_core §3.3 |
+| deadline | How long the gate waits for one participant. Each participant declares one. A pause stops the clock. | engine_core §3.3 |
+| expiry policy | What happens when a participant's deadline passes: `FAIL`, `CONTINUE_WITHOUT`, `SUSPEND` or `DROP`. | engine_core §3.3 |
+| arming | The wake-up rule used wherever one thread parks on another's store: both sides store `seq_cst` and re-read, and the signaller wakes only a thread that is actually parked. | engine_core §3.3 |
+| mechanism register | The table of every cross-thread mechanism in the engine, each with its atomics, memory orders, linearization point, progress guarantee and failure behaviour. | engine_core §1.1 |
+
+## Views and snapshots
+
+| Term | Meaning | Where |
+|---|---|---|
+| View | The only way data leaves the core. A channel from the sim to one reader, made of three blocks and one atomic word. Registered before the freeze. | engine_core §3.1, §3.2 |
+| `PRIVATE` mode | The only View mode in v1: one trusted reader, three blocks, no copying. | engine_core §3.1 |
+| `SHARED` mode | A deferred View mode for many readers, where each reader copies. Designed but not built. | engine_core Appendix A |
+| default View | The engine's own `PRIVATE` View, read by the host. `engine.snapshot()` copies from it. | engine_core §3.1 |
+| block | One of a View's three payload buffers. The publisher, the reader and the "latest" slot each hold one at a time. | engine_core §3.2 |
+| publish | After a tick, the sim fills its writable block for each due View and swaps it in. Never waits, never skipped. | engine_core §3.2 |
+| take | The reader swaps its old block for the newest published one. | engine_core §3.2 |
+| snapshot | Read-only, float-converted data for one tick, held in a block or copied out. Not a savegame. | engine_core §5 |
+| projection | What publish copies for one View: which columns (the projection spec), which rows (the row predicate), converted from fixed-point to float. | engine_core §3.1 |
+| projection spec | The column list a View declares. | engine_core §3.1 |
+| row predicate | A View's row filter. Its kind (`ALL`, `AABB`, `SPHERE`, `FRUSTUM`, `TAG`) is fixed at the freeze; its parameters can change on every publish. Coarse in the core, refined by the reader. | engine_core §3.4 |
+| return header | A small struct the reader writes before a take and the publisher reads afterwards: predicate parameters, last tick consumed, cadence hint. It can shape the View, never the world. | engine_core §3.5 |
+| cadence | A View is published every `k` ticks. | engine_core §3.1 |
+| cadence hint | A reader's request to be published less often. The publisher may ignore it. | engine_core §3.5 |
+| consumer lag | Last published tick minus the reader's last consumed tick. The signal that a reader is falling behind. | engine_core §3.5 |
+| array view | A NumPy view into a taken block. Not a View. | python_api §7.2 |
+
+## Commands and events
+
+| Term | Meaning | Where |
+|---|---|---|
+| command | The only input that changes world state. Names the tick it applies to, is submitted through an endpoint, runs at that tick and is recorded. | engine_core §5.1 |
+| source | Anything that submits commands: the host, a mod, a peer, an engine AI. | limits §2.1 |
+| source id | A source's `u32` number, fixed at the freeze. The host is 0. Commands run in source id order. | engine_core §2.4 |
+| endpoint | A single-producer command ring for one source. | engine_core §5.1 |
+| producer | The one thread that submits on an endpoint. | engine_core §5.1 |
+| command ring | An endpoint's ring buffer. Its depth is `(margin + 1) × capacity`, computed at the freeze. | engine_core §5.1 |
+| capacity | The most commands one endpoint may hold for one tick. Default 64, maximum 256. Exceeding it returns `queue_full`. The only number an endpoint declares. | limits §2 |
+| stamp | The tick a command names. | engine_core §5.1 |
+| stamp margin | How far past the current tick an endpoint may stamp. 0 for local producers, the input delay for a peer. | engine_core §5.1 |
+| admission | The immediate answer to a submit: `admitted` with a handle, or a rejection (`queue_full`, `too_late`, `out_of_order`, `over_margin`, `invalid`, `revoked`, `host_error`). | engine_core §5.1 |
+| admission wait | A submit that finds its ring full waits for space, for at most one tick. | engine_core §5.1 |
+| endpoint lease | An endpoint's lifecycle state, which every submit enters and which `revoke` closes. | engine_core §5.1 |
+| outcome | The second answer to a command: whether it was applied when its tick ran. Read from the handle after that tick. | engine_core §5.1 |
+| deadlock rule | A producer may wait only for outcomes of ticks it has already declared ready. Breaking it raises `CommandOrderError`. | engine_core §5.1 |
+| command drain | At the start of tick `t`, the sim takes every command stamped for `t` from every endpoint, in ascending source id. | engine_core §5.1 |
+| sequence | A command's position in the drain. With the source id it gives every command a total order, with no sort. | engine_core §5.1 |
+| C | Total commands the engine may run per tick: the sum of all endpoint capacities. Computed at the freeze, never configured. | limits §2 |
+| event | Something the core reports to the host, stamped with its tick. | engine_core §5.2 |
+| event ring | The single-producer queue carrying events from the sim to the owner thread, emptied by `drain_events()`. | engine_core §5.2 |
+| D | The drain interval: how many ticks of events the event ring is sized to hold between two `drain_events()` calls. Default 8. The event ring holds `C × D` entries. | limits §2 |
+| event backlog | Events the host has not drained yet. A plain count owned by the sim. | engine_core §5.2 |
+| `high_water` | The event backlog size at which the gate pauses the sim. Value open. | engine_core §5.2 |
+| delivery class | How an event may be lost: reliable (never), coalescible (only the latest kept), best-effort (may drop). | engine_core §5 |
+
+## World data
+
+| Term | Meaning | Where |
+|---|---|---|
+| object type | A kind of entity (for example `pop`), stored as one dense table of columns. | data_container §2.1 |
+| column | One array holding one property for every row of an object type. | data_container §3 |
+| column id | A column's `u32` number, returned by `resolve_column` and fixed at the freeze. Not an entity id. | data_container §7.3 |
+| column span | The slice of a column a system may access, sized by its access kind. | data_container §4 |
+| row | An entity's position in its table. Valid only within one tick, because the terminal commit may move it. Never leaves the core. | data_container §2.2 |
+| id | An entity's permanent `u64` number, never reused. The only way commands and snapshots refer to an entity. | data_container §2.2 |
+| storage policy | How a table handles erases: `contiguous` (only remove from the end), `erasable` (compact, keeping order), `unordered` (swap with the last row). | data_container §2.2 |
+| compaction | Removing erased rows from an `erasable` table while keeping order. Runs in the terminal commit. | data_container §2.2 |
+| cap | An optional limit on the rows of one object type, fixed at the freeze. | data_container §2.2 |
+| game-rule cap | A cap the game relies on: a create at the cap is rejected deterministically. | data_container §2.2 |
+| ceiling | A cap used as a safety limit, the default kind: hitting it stops and reports. | data_container §2.2 |
+| growth | Uncapped tables grow in the terminal commit. Running out of memory ends the session. | data_container §2.2 |
+| chunk | A fixed run of 1024 rows: the unit of SIMD and parallel work. | data_container §4 |
+| body | An agent's world-facing state (position, resources, health). Core state, updated deterministically. | engine_core §6 |
+| mind | Where an agent decides. Inside the determinism boundary it is core logic; outside it is a peripheral that submits commands. | engine_core §6 |
+| system | A deterministic update function. Declares how it accesses each column. | engine_core §4.1 |
+| access kind | `read_full`, `read_local`, `write_local`, `write_staged` or `write_dbl`. | engine_core §4.1 |
+| phase | A run of systems within one tick that can execute in parallel safely. Phases are computed at the freeze from the access kinds. | engine_core §4.1 |
+| phase cut | The rule that splits the system list into phases. | engine_core §4.1 |
+| boundary commit | At the end of each phase: merge staged writes and flip double-buffered columns. Never changes row counts. | engine_core §4.1 |
+| terminal commit | Once per tick, after the last phase: every create, erase and growth. The only place row counts change, so an entity created this tick has no row until the commit. | engine_core §4.1 |
+| relationship | A link between object types, stored as row numbers inside the core. | data_container §2.2 |
+| dynamic column | A column a core mod adds before the freeze. | data_container §7.3 |
+| `fixed<>` | The project's fixed-point number type, the only arithmetic allowed in world state. | engine_core §2.1 |
+
+## Mods
+
+| Term | Meaning | Where |
+|---|---|---|
+| Tier 1 mod | Content: data only. | modding §1 |
+| Tier 2 mod | Logic: Python outside the core, acting only through commands. | modding §1 |
+| Tier 3 mod | Core: native code inside the tick, trusted. | modding §1 |
+| mod host | Where a Tier 2 mod runs: a thread host (in-process, the default) or a process host (a separate process). | modding §4 |
+| supervisor | The engine-side thread that runs each process host: its endpoint's single producer. | modding §4.3 |
+| containment unit | The OS object that limits a process host: a Job object on Windows, a cgroup on Linux. | modding §4.3 |
+| manifest | A mod's `mod.toml`: id, version, tier, host kind, dependencies, capabilities, limits. | modding §3 |
+| principal | The named party behind a source: a mod's manifest `id`. | modding §3 |
+| capability | What a manifest says a mod may do: command types, event topics, columns to read. Policy can only remove capabilities. | modding §3 |
+| `ModPolicy` | The user's choice of which mods load and what they may do. An argument to `load_mods`, never recorded. | modding §3.1 |
+| `HostPolicy` | Limits the engine enforces on mod hosts, part of `EngineConfig`. | python_api §3 |
+| `ModContext` | The only API a Tier 2 mod uses. | modding §4.1 |
+| mod bus | Delivers engine events to one inbox per mod. | modding §4.2 |
+| inbox | A mod's event queue. Its size is capped by `max_inbox_size`. | modding §4.2 |
+| suspend | A mod whose inbox overflows stops being fed and stops being waited for, but keeps its endpoint. Reversible. | modding §4.2 |
+| quarantine | A mod that fails is stopped. `mod_retry_limit` sets how often it is restarted. | modding §4.2 |
+| host services table | The versioned C ABI the engine gives a Tier 3 mod. | modding §5.1 |
+| certification | Checking that a Tier 3 mod is deterministic by re-running golden replays at 1 and N threads, in Debug and Release. | modding §5.3 |
+
+## Multiplayer
+
+| Term | Meaning | Where |
+|---|---|---|
+| lockstep | Only commands cross the network; every peer simulates everything. | multiplayer §1 |
+| peer | A remote player: a participant with its own source id, endpoint and receive thread. | multiplayer §3.1 |
+| turn | The set of commands for one tick, sent as one network message. One turn is one tick. | multiplayer §5 |
+| input delay | A peer endpoint's stamp margin (`input_delay_ticks`). Value open. | multiplayer §3.2 |
+| server tier | The few server nodes that alone may decide a peer has dropped, and at which turn. | multiplayer §4.1 |
+| authority | The one node that computes and broadcasts commands from a non-deterministic peripheral. | multiplayer §4 |
+
+## Errors and shutdown
+
+| Term | Meaning | Where |
+|---|---|---|
+| shutdown sequence | `mods.stop()`, then `stop_sim_async()`, then `close()`. `close()` does any step not done, never raises and can be called twice. | python_api §2 |
+| shutdown step | One of the three calls of the shutdown sequence. | python_api §2 |
+| shutdown stage | One of the five blocking waits during shutdown, each bounded by `shutdown_deadline`: running submits on a revoked endpoint, a mod host's inbox drain and `on_unload`, mod host and sim thread joins, confirming a killed process is dead, and running engine calls in `close()`. | limits §1.1 |
+| operation lease | Every native call except `close()` registers itself; `close()` refuses new calls and waits for running ones. | python_api §2, §6 |
+| control block | The small object behind the operation lease. It outlives every native resource it guards, so a stale handle can still see that the engine is closed. | python_api §2 |
+| registered dependant | Anything that can outlive a tick and still touch engine memory (mod hosts, View blocks held by array views). `close()` unwinds them before releasing anything native. | python_api §2 |
+| staged join | How `stop_sim_async()` stops the sim thread: request stop, wake the gate, wait, then log and retry once before `failed`. | python_api §4.3 |
+| `shutdown_deadline` | How long each blocking shutdown step may wait. 5 seconds. | limits §1.1 |
+| `failed` | Terminal state when something could not be stopped safely. Resources are leaked on purpose and no new `Engine` may be created in the process. | python_api §2 |
+| `load_failed` | Terminal state after a failed load or freeze. Nothing leaks; create a new `Engine`. | python_api §2 |
+| disarm | Cleanup that deliberately releases nothing, because another thread may still use the resource. | patterns §4 |
+| detach | Disarm for one resource: a View block still referenced at `close()` is freed when its last array view drops. | python_api §7.2 |
+| async error | An error on the sim thread, stored once and re-raised on the owner thread at its next engine call. | python_api §8 |
+| rendezvous point | An owner-thread engine call where a stored async error is raised: a pump call, `stop_sim_async()` or `raise_if_failed()`. | python_api §8 |
+| quiescent | The sim is parked and no tick is running, so state can be read safely (for example `checksum()` after `step()`). | python_api §4.3 |
+| `ipc_deadline` | How long one process-host round trip may take before it becomes `host_error`. Value open. | limits §1.1 |
+| catch-up clamp | The most ticks sim-thread mode runs in one go after falling behind. | python_api §4.3 |
+| build constant | A limit fixed when the library compiles, such as the chunk size. Changing it needs a rebuild. | limits |
+| policy default | The shipped default of an `EngineConfig` field, which a session may override. | limits |
+| warn threshold | A bandwidth above which the engine logs a warning, never a rejection: projection per View, compaction per object type. | limits §4, §5 |
+
+## Words with one meaning only
+
+Several words were used for more than one thing. Use each only in the sense above, and use
+the replacement for the other senses.
+
+| Word | Means only | For the other senses, write |
+|---|---|---|
+| host | the host application (source 0) | "mod host" (where a mod runs); "the engine" (for Tier 3 mods); "owner thread" (the thread) |
+| owner | owner thread | "reader" (a View's single reader); "authority" (multiplayer) |
+| phase | a compute phase within a tick | "inline mode" / "sim-thread mode"; "shutdown step"; "engine state"; "registration" / "session start" (Tier 3 mods) |
+| tier | mod tiers | "server tier" / "client nodes" (multiplayer) |
+| admission | the answer to a submit | "endpoint lease"; "operation lease"; "id lookup" (resolving an id to a row) |
+| gate | the tick gate | "endpoint lease"; "operation lease" |
+| capacity | per-endpoint capacity | "cap" (object type); "event ring size"; "inbox size" |
+| `commands_per_tick` | only the manifest field | "C" (engine-wide total); "commands executed per tick" (the metric) |
+| shared | the `SHARED` View mode, and the OS term "shared memory" | "default View" (the host's `PRIVATE` View) |
+| View | the engine mechanism | "array view" (NumPy); "column span" |
+| publish | View publish, and the release-store "publication" idiom of engine_core §1.1 | "fan out" (mod bus); "submit" (commands) |
+| drain | command drain, `drain_events()`, inbox drain, per-worker log buffer drain | "wait for running calls" (leases at shutdown) |
+| grant | run grant | "capability" (mods) |
+| ledger | do not use | "`first_unexecuted`"; "tick budget" |
+| backlog | event backlog | "ticks owed" (catch-up) |
+| M | milestones | "catch-up clamp" |
