@@ -18,7 +18,6 @@ from setup_ext import setuptools_wrap, meta_build
 from setup_ext import cmake_clib, cmake_extension, cmake_if
 from setup_ext import conan_clib
 from setup_ext import conan_cmake_extension
-from setup_ext import develop_warp
 from setup_ext import path_util, rpath_util
 
 sys.path.pop(0)
@@ -93,7 +92,6 @@ setuptools_wrap.setup(
     packages=packages,
     # cmdclass
     cmdclass={
-        "develop": develop_warp.CustomDevelop,
         "build_clib": meta_build.MetaBuildClib,
         "build_ext": meta_build.MetaBuildExt,
     },
