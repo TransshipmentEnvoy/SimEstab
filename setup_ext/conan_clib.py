@@ -212,11 +212,10 @@ def create_conan_package(package_name: str,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    install_stdout, _ = install_process.communicate()
-    ret = install_process.returncode
+    with install_process.stdout:
+        _log_subprocess_output(install_process.stdout)
+    ret = install_process.wait()
     if ret != 0:
-        _pout = safe_decode_stdout(install_stdout)
-        _logger_conan_clib.error(_pout)
         raise DistutilsSetupError(f"failed to install conan package! recipe_path: {recipe_path}")
 
     _logger_conan_clib.info("    exec conan cmd at %s: %s", recipe_dir,
@@ -228,11 +227,10 @@ def create_conan_package(package_name: str,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    build_stdout, _ = build_process.communicate()
-    ret = build_process.returncode
+    with build_process.stdout:
+        _log_subprocess_output(build_process.stdout)
+    ret = build_process.wait()
     if ret != 0:
-        _pout = safe_decode_stdout(build_stdout)
-        _logger_conan_clib.error(_pout)
         raise DistutilsSetupError(f"failed to create conan package! recipe_path: {recipe_path}")
 
     _logger_conan_clib.info("    exec conan cmd at %s: %s", recipe_dir,
@@ -244,11 +242,10 @@ def create_conan_package(package_name: str,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    export_stdout, _ = export_process.communicate()
-    ret = export_process.returncode
+    with export_process.stdout:
+        _log_subprocess_output(export_process.stdout)
+    ret = export_process.wait()
     if ret != 0:
-        _pout = safe_decode_stdout(export_stdout)
-        _logger_conan_clib.error(_pout)
         raise DistutilsSetupError(f"failed to create conan package! recipe_path: {recipe_path}")
 
     if not detect_conan_package(package_name, conan_home_dir):
