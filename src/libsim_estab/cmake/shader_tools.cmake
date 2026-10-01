@@ -59,6 +59,11 @@ function(find_shader_tools)
         endif()
     endif()
 
+    # Search on every configure. A cached result would keep pointing into the previous
+    # package after a Conan dependency upgrade; the unset clears entries older builds cached.
+    unset(_GLSLANG_VALIDATOR CACHE)
+    unset(_SPIRV_CROSS CACHE)
+
     # Find glslangValidator (glslang compiler)
     # First try Conan package path
     if(_glslang_package_folder)
@@ -67,6 +72,7 @@ function(find_shader_tools)
             HINTS "${_glslang_package_folder}/bin"
             NO_DEFAULT_PATH
             DOC "Path to glslangValidator executable"
+            NO_CACHE
         )
     endif()
     # Fallback to system paths if not found in Conan
@@ -81,6 +87,7 @@ function(find_shader_tools)
                 /usr/local/bin
                 /opt/vulkan/bin
             DOC "Path to glslangValidator executable"
+            NO_CACHE
         )
     endif()
 
@@ -92,6 +99,7 @@ function(find_shader_tools)
             HINTS "${_spirv_cross_package_folder}/bin"
             NO_DEFAULT_PATH
             DOC "Path to spirv-cross executable"
+            NO_CACHE
         )
     endif()
     # Fallback to system paths if not found in Conan
@@ -106,6 +114,7 @@ function(find_shader_tools)
                 /usr/local/bin
                 /opt/vulkan/bin
             DOC "Path to spirv-cross executable"
+            NO_CACHE
         )
     endif()
 
