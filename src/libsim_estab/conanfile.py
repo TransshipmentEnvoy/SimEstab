@@ -40,55 +40,10 @@ class RepoRecipe(ConanFile):
             self.tool_requires("patchelf/0.18")
 
     def requirements(self):
-        # util
-        self.requires("boost/1.91.0", options={"shared": True})
-
-        self.requires("fmt/12.1.0")
-        self.requires("rang/3.2")
-        self.requires("indicators/2.3")
-
-        self.requires("range-v3/0.12.0")
-
-        self.requires("tsl-robin-map/1.4.0")
-        self.requires("tl-function-ref/1.0.0")
-        self.requires("scope-lite/0.2.0")
-        self.requires("magic_enum/0.9.7")
-
-        # config
-        self.requires("nlohmann_json/3.12.0")
-        #self.requires("yaml-cpp/0.8.0")
-        #self.requires("tomlplusplus/3.4.0")
-
-        # math
-        self.requires("eigen/5.0.1")
-
-        # unittest
-        self.requires("boost-ext-ut/2.3.1")
-
-        # graphics
-        self.requires(
-            "sdl/3.4.12",
-            options={
-                "shared": True,
-                "gpu": True,
-                # "pipewire": True, # TODO: currently not supported in conan-center-index
-                # some unwanted components
-                "opengles": False,
-                "sndio": False,
-                "pulseaudio": False,
-            },
-        )
-        # vulkan backend & shader tools
-        self.requires("vulkan-loader/1.4.350.0")
-        self.requires("glslang/1.4.350.0")
-        self.requires("spirv-cross/1.4.350.0")
-
-        # geometry
-        self.requires("cgal/6.2")
-        # self.requires("opencascade/7.9.1")  # TODO: replace with custom recipe
-
-        # ecs
-        self.requires("flecs/4.1.5")
+        # versions and options live in conandata.yml, shared with src/sim_estab_ext
+        options = self.conan_data.get("options", {})
+        for name, version in self.conan_data["requirements"].items():
+            self.requires(f"{name}/{version}", options=options.get(name))
 
     def configure(self):
         pass

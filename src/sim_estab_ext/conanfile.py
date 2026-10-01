@@ -1,9 +1,12 @@
 import os
-from conan import ConanFile
-from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake, cmake_layout
-from conan.tools import files
 
-import os
+import yaml
+from conan import ConanFile
+from conan.tools.cmake import CMakeToolchain, CMakeDeps, cmake_layout
+
+# Versions and options come from the library's conandata.yml, so both builds resolve the same ones.
+_LIBSIM_ESTAB_DEPS = ("boost", "fmt", "rang", "indicators", "range-v3", "tsl-robin-map", "tl-function-ref",
+                      "scope-lite", "magic_enum", "nlohmann_json", "eigen", "boost-ext-ut", "sdl", "cgal", "flecs")
 
 
 class RepoRecipe(ConanFile):
@@ -16,54 +19,11 @@ class RepoRecipe(ConanFile):
         pass
 
     def requirements(self):
-        # util
-        self.requires("boost/1.91.0")
-
-        self.requires("fmt/12.1.0")
-        self.requires("rang/3.2")
-        self.requires("indicators/2.3")
-
-        self.requires("range-v3/0.12.0")
-
-        self.requires("tsl-robin-map/1.4.0")
-        self.requires("tl-function-ref/1.0.0")
-        self.requires("scope-lite/0.2.0")
-        self.requires("magic_enum/0.9.7")
-
-        # config
-        self.requires("nlohmann_json/3.12.0")
-        #self.requires("yaml-cpp/0.8.0")
-        #self.requires("tomlplusplus/3.4.0")
-
-        # math
-        self.requires("eigen/5.0.1")
-
-        # unittest
-        self.requires("boost-ext-ut/2.3.1")
-
-        # graphics
-        self.requires(
-            "sdl/3.4.12",
-            options={
-                "shared": True,
-                "gpu": True,
-                # "pipewire": True, # TODO: currently not supported in conan-center-index
-                # some unwanted components
-                "opengles": False,
-                "sndio": False,
-                "pulseaudio": False,
-            },
-        )
-
-        # geometry
-        self.requires("cgal/6.2")
-        # self.requires("opencascade/7.9.1")  # TODO: replace with custom recipe
-
-        # ecs
-        self.requires("flecs/4.1.5")
-
-    def configure(self):
-        self.options["boost"].shared = True
+        with open(os.path.join(self.recipe_folder, "..", "libsim_estab", "conandata.yml")) as f:
+            libsim_estab = yaml.safe_load(f)
+        options = libsim_estab.get("options", {})
+        for name in _LIBSIM_ESTAB_DEPS:
+            self.requires(f"{name}/{libsim_estab['requirements'][name]}", options=options.get(name))
 
     def layout(self):
         cmake_layout(self)

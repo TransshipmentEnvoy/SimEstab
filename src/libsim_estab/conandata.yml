@@ -1,0 +1,45 @@
+# Conan requirements of libsim_estab: versions, then options.
+#
+# src/sim_estab_ext/conanfile.py reads this file too. The extension compiles the library's
+# module units again and links its shared dependencies, so it must resolve the same versions
+# and options.
+#
+# After changing anything here, regenerate the lockfiles: script/update_conan_lock.sh
+requirements:
+  # util
+  boost: "1.91.0"
+  fmt: "12.1.0"
+  rang: "3.2"
+  indicators: "2.3"
+  range-v3: "0.12.0"
+  tsl-robin-map: "1.4.0"
+  tl-function-ref: "1.0.0"
+  scope-lite: "0.2.0"
+  magic_enum: "0.9.7"
+  # config (candidates: yaml-cpp/0.8.0, tomlplusplus/3.4.0)
+  nlohmann_json: "3.12.0"
+  # math
+  eigen: "5.0.1"
+  # unittest
+  boost-ext-ut: "2.3.1"
+  # graphics
+  sdl: "3.4.12"
+  # vulkan backend & shader tools
+  vulkan-loader: "1.4.350.0"
+  glslang: "1.4.350.0"
+  spirv-cross: "1.4.350.0"
+  # geometry (opencascade/7.9.1 waits for a custom recipe)
+  cgal: "6.2"
+  # ecs
+  flecs: "4.1.5"
+
+options:
+  boost:
+    shared: true
+  sdl:
+    shared: true
+    gpu: true
+    # unwanted components; audio is pipewire only (the bundled recipe's default)
+    opengles: false
+    sndio: false
+    pulseaudio: false
