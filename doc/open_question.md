@@ -513,3 +513,17 @@ doc plans a use for it.
 
 The C++ tests use Boost.Test through CTest. boost-ext-ut is a dependency that no code uses.
 It is worth keeping only if the tests move to it.
+
+### Q78. Audio drivers on Linux
+
+The bundled SDL recipe builds one Linux audio driver, PipeWire. SDL loads
+`libpipewire-0.3.so.0` at run time. Without a running PipeWire server, the audio subsystem
+fails to start. That covers systems with only PulseAudio or only ALSA, and most containers.
+SDL's dummy and disk drivers never start on their own; only `SDL_AUDIO_DRIVER` selects
+them. Windows and macOS use their own audio APIs and are not affected.
+
+Nothing initializes SDL audio yet, so decide before the first use. The `alsa` option is the
+smallest fallback: it adds `libalsa`, and SDL tries ALSA when PipeWire fails. Check that a
+Conan-built `libalsa` finds the system's ALSA configuration and plugins. The `pulseaudio`
+option adds the `pulseaudio` package instead. Both are SDL options in
+`src/libsim_estab/conandata.yml`.
