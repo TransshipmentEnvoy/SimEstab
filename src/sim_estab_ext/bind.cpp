@@ -1,3 +1,8 @@
+// nanobind first: it includes Python.h, which must precede the standard headers
+// because it defines _POSIX_C_SOURCE and _XOPEN_SOURCE
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
+
 // Standard library headers
 #include <functional>
 #include <ostream>
@@ -8,10 +13,6 @@
 #include <sim_estab/compat.h>
 import sim_estab;
 // #include <sim_estab/macro.h>
-
-// nanobind
-#include <nanobind/nanobind.h>
-#include <nanobind/stl/string.h>
 
 namespace nb = nanobind;
 
