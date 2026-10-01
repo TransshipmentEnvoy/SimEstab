@@ -1,13 +1,24 @@
 from conan import ConanFile
-from conan.errors import ConanInvalidConfiguration
+from conan.errors import ConanException, ConanInvalidConfiguration
 from conan.tools.apple import is_apple_os
-from conan.tools.files import get, copy, replace_in_file, rmdir
+from conan.tools.files import get, copy, load, replace_in_file, rmdir
 from conan.tools.gnu import PkgConfigDeps
 from conan.tools.microsoft import is_msvc
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout, CMakeDeps
 import os
+import re
 
 required_conan_version = ">=2"
+
+# Fork of conan-center-index recipes/sdl/3.x. Keep it close to upstream; the differences are:
+# - `pipewire` option (backed by pipewire/system), and pipewire-only audio by default
+# - wayland and xkbcommon come from the system recipes instead of being built from source
+# - `libdecor` option for Wayland window decorations (backed by libdecor/system)
+# - every feature SDL probes the build machine for is set explicitly, and build() checks the
+#   generated build config against the options (_check_build_config)
+# - opengles is off by default
+# - source() prefers a local archive in buildsys/source_tar/sdl, and layout() honours
+#   SETUP_EXT__CONAN_SOURCE_FOLDER__sdl
 
 _subsystems = [
     ("audio", []),
@@ -21,6 +32,7 @@ _subsystems = [
     ("power", []),
     ("sensor", []),
     ("dialog", []),
+    ("tray", []),
 ]
 
 
@@ -39,9 +51,7 @@ class SDLConan(ConanFile):
             "shared": [True, False],
             "fPIC": [True, False],
         },
-        **{
-            subsystem: [True, False] for subsystem, _ in _subsystems
-        },
+        **{subsystem: [True, False] for subsystem, _ in _subsystems},
         **{
             "alsa": [True, False],
             "pulseaudio": [True, False],
@@ -59,6 +69,7 @@ class SDLConan(ConanFile):
             "xshape": [True, False],
             "xsync": [True, False],
             "wayland": [True, False],
+            "libdecor": [True, False],
             "vulkan": [True, False],
             "metal": [True, False],
             "directx": [True, False],
@@ -74,19 +85,17 @@ class SDLConan(ConanFile):
             "shared": False,
             "fPIC": True,
         },
-        **{
-            subsystem: True for subsystem, _ in _subsystems
-        },
+        **{subsystem: True for subsystem, _ in _subsystems},
         **{
             ## Audio
             # Linux only
             "alsa": False,
-            "pulseaudio": False,  # True,
+            "pulseaudio": False,
             "pipewire": True,
-            "sndio": False,  # True,
+            "sndio": False,
             ## Video
             "opengl": True,
-            "opengles": False,  # True,
+            "opengles": False,
             "x11": True,
             "xcursor": True,
             "xdbe": True,
@@ -97,6 +106,7 @@ class SDLConan(ConanFile):
             "xshape": True,
             "xsync": True,
             "wayland": True,
+            "libdecor": True,
             "vulkan": True,
             "metal": True,
             "directx": True,
@@ -130,12 +140,20 @@ class SDLConan(ConanFile):
             del self.options.xshape
             del self.options.xsync
             del self.options.wayland
+            del self.options.libdecor
 
         if not is_apple_os(self):
             del self.options.metal
 
         if self.settings.os != "Windows":
             del self.options.directx
+
+        if self.settings.os in ("iOS", "tvOS", "visionOS", "watchOS"):
+            del self.options.opengl
+
+        if self.settings.os == "Emscripten":
+            del self.options.opengl
+            del self.options.vulkan
 
     def configure(self):
         if self.options.shared:
@@ -169,6 +187,9 @@ class SDLConan(ConanFile):
             self.options.rm_safe("xshape")
             self.options.rm_safe("xsync")
 
+        if not self.options.get_safe("wayland"):
+            self.options.rm_safe("libdecor")
+
         if not self.options.get_safe("hidapi") or self.settings.os in ["Android", "iOS", "tvOS", "visionOS", "watchOS"]:
             # libusb is only an option if hidapi is enabled: https://github.com/libsdl-org/SDL/blob/db3a35e9bc3aa245dfbe67585b3f67d7b4b62845/cmake/sdlchecks.cmake#L1111
             # libusb is not available on Android/iOS/tvOS/visionOS/watchOS https://github.com/libsdl-org/SDL/blob/db3a35e9bc3aa245dfbe67585b3f67d7b4b62845/CMakeLists.txt#L159-L160
@@ -180,8 +201,7 @@ class SDLConan(ConanFile):
             if self.options.get_safe(subsystem):
                 for dependency in dependencies:
                     if not self.options.get_safe(dependency):
-                        raise ConanInvalidConfiguration(
-                            f'-o="&:{subsystem}=True" subsystem requires -o="&:{dependency}=True"')
+                        raise ConanInvalidConfiguration(f'-o="&:{subsystem}=True" subsystem requires -o="&:{dependency}=True"')
 
     def validate_build(self):
         if self.settings.os == "Android" and not self.conf.get("user.sdl:android", False):
@@ -236,13 +256,9 @@ class SDLConan(ConanFile):
         return self.settings.os in ("Linux", "FreeBSD")
 
     @property
-    def _supports_opengl(self):
-        return (self.options.get_safe("opengl") and self.settings.os not in ("iOS", "visionOS", "tvOS", "watchOS"))
-
-    @property
     def _supports_opengles(self):
-        return (self.options.get_safe("opengles") and
-                self.settings.os in ("Android", "iOS", "visionOS", "tvOS", "watchOS"))
+        return (self.options.get_safe("opengles")
+                and self.settings.os in ("Android", "Emscripten", "iOS", "visionOS", "tvOS", "watchOS"))
 
     @property
     def _supports_dbus(self):
@@ -252,30 +268,33 @@ class SDLConan(ConanFile):
         if self.options.get_safe("libiconv"):
             self.requires("libiconv/1.17")
         if self.options.get_safe("libusb"):
-            self.requires("libusb/[>=1.0.29]")
-        if self._supports_opengl:
+            self.requires("libusb/1.0.26")
+        if self.options.get_safe("opengl"):
             self.requires("opengl/system")
         if self.options.get_safe("libudev"):
             self.requires("libudev/system")
         if self._supports_dbus:
-            self.requires("dbus/[>=1.15.8]")
+            self.requires("dbus/1.15.8")
         if self.options.get_safe("pulseaudio"):
-            self.requires("pulseaudio/[>=17.0]")
+            self.requires("pulseaudio/17.0")
         if self.options.get_safe("alsa"):
-            self.requires("libalsa/[>=1.2.13]")
+            self.requires("libalsa/[>=1.2 <1.3]")
         if self.options.get_safe("sndio"):
-            self.requires("libsndio/[>=1.9.0]")
+            self.requires("libsndio/1.9.0")
         if self.options.get_safe("pipewire"):
             self.requires("pipewire/system")
         if self.options.get_safe("wayland"):
+            # wayland/system also checks that wayland-scanner is on PATH
             self.requires("wayland/system")
             self.requires("xkbcommon/system")
             self.requires("egl/system")
+        if self.options.get_safe("libdecor"):
+            self.requires("libdecor/system")
         if self.options.get_safe("x11"):
             self.requires("xorg/system")
 
     def build_requirements(self):
-        self.tool_requires("cmake/[>=3.24 <4]")
+        self.tool_requires("cmake/[>=3.24]")
         if self._is_unix_sys and not self.conf.get("tools.gnu:pkg_config", check_type=str):
             self.tool_requires("pkgconf/[>=2.2 <3]")
 
@@ -291,18 +310,16 @@ class SDLConan(ConanFile):
         tc.cache_variables["SDL_SYSTEM_ICONV_DEFAULT"] = True
         tc.cache_variables["SDL_LIBICONV"] = self.options.libiconv
 
-        tc.cache_variables["SDL_JACK"] = False  # Jack is not available in CCI
+        tc.cache_variables["SDL_JACK"] = False # Jack is not available in CCI
 
         for subsystem in _subsystems:
             tc.cache_variables[f"SDL_{subsystem[0].upper()}"] = self.options.get_safe(subsystem[0])
 
-        if self._supports_opengl:
-            tc.cache_variables["SDL_OPENGL"] = True
-        if self._supports_opengles:
-            tc.cache_variables["SDL_OPENGLES"] = True
+        tc.cache_variables["SDL_OPENGL"] = self.options.get_safe("opengl", False)
+        tc.cache_variables["SDL_OPENGLES"] = bool(self._supports_opengles)
 
         if self.options.hidapi:
-            tc.cache_variables["SDL_HIDAPI_LIBUSB"] = self.options.get_safe("libusb")
+            tc.cache_variables["SDL_HIDAPI_LIBUSB"] = self.options.get_safe("libusb", False)
             # Prevent loading shared libusb during runtime
             # This just means it will be linked traditionally, even when libusb is shared
             # See https://github.com/libsdl-org/SDL/blob/96292a5b464258a2b926e0a3d72f8b98c2a81aa6/cmake/sdlchecks.cmake#L1107-L1113
@@ -312,20 +329,30 @@ class SDLConan(ConanFile):
         tc.variables["SDL_METAL"] = self.options.get_safe("metal")
         tc.variables["SDL_DIRECTX"] = self.options.get_safe("directx")
 
+        # SDL turns on every optional feature by default and silently drops the ones whose
+        # development files it cannot find, so the result would depend on the build machine.
+        # Set each of them explicitly; _check_build_config() verifies the outcome.
+        tc.cache_variables["SDL_PULSEAUDIO"] = bool(self.options.get_safe("pulseaudio"))
         if self.options.get_safe("pulseaudio"):
-            tc.cache_variables["SDL_PULSEAUDIO"] = True
-            tc.cache_variables["SDL_PULSEAUDIO_SHARED"] = self.dependencies["pulseaudio"].options.get_safe(
-                "shared", True)
+            tc.cache_variables["SDL_PULSEAUDIO_SHARED"] = self.dependencies["pulseaudio"].options.get_safe("shared", True)
+        tc.cache_variables["SDL_ALSA"] = bool(self.options.get_safe("alsa"))
         if self.options.get_safe("alsa"):
-            tc.cache_variables["SDL_ALSA"] = True
             tc.cache_variables["SDL_ALSA_SHARED"] = self.dependencies["libalsa"].options.shared
+        tc.cache_variables["SDL_SNDIO"] = bool(self.options.get_safe("sndio"))
         if self.options.get_safe("sndio"):
-            tc.cache_variables["SDL_SNDIO"] = True
             tc.cache_variables["SDL_SNDIO_SHARED"] = True  # sndio is always shared
+        tc.cache_variables["SDL_PIPEWIRE"] = bool(self.options.get_safe("pipewire"))
         if self.options.get_safe("pipewire"):
-            tc.cache_variables["SDL_PIPEWIRE"] = True
             tc.cache_variables["SDL_PIPEWIRE_SHARED"] = True  # system pipewire is shared
+        tc.cache_variables["SDL_OSS"] = False
         tc.cache_variables["SDL_LIBUDEV"] = self.options.get_safe("libudev", False)
+        tc.cache_variables["SDL_DBUS"] = bool(self._supports_dbus)
+        # No recipe provides these, and nothing here uses them
+        tc.cache_variables["SDL_IBUS"] = False
+        tc.cache_variables["SDL_LIBURING"] = False
+        tc.cache_variables["SDL_KMSDRM"] = False
+        tc.cache_variables["SDL_FRIBIDI"] = False
+        tc.cache_variables["SDL_LIBTHAI"] = False
 
         # X11 and wayland configuration
         with_x11 = self.options.get_safe("x11", False)
@@ -342,11 +369,13 @@ class SDLConan(ConanFile):
             tc.cache_variables["SDL_X11_XSCRNSAVER"] = self.options.xscrnsaver
             tc.cache_variables["SDL_X11_XSHAPE"] = self.options.xshape
             tc.cache_variables["SDL_X11_XSYNC"] = self.options.xsync
+            tc.cache_variables["SDL_X11_XTEST"] = True  # xorg/system provides it
 
         with_wayland = self.options.get_safe("wayland", False)
         tc.cache_variables["SDL_WAYLAND"] = with_wayland
         if with_wayland:
             tc.cache_variables["SDL_WAYLAND_SHARED"] = True  # system wayland is shared
+            tc.cache_variables["SDL_WAYLAND_LIBDECOR"] = bool(self.options.get_safe("libdecor"))
         if not with_x11 and not with_wayland:
             # Disable windowing support:
             # https://github.com/libsdl-org/SDL/blob/main/docs/README-cmake.md#cmake-fails-to-build-without-x11-or-wayland-support
@@ -363,7 +392,60 @@ class SDLConan(ConanFile):
     def build(self):
         cmake = CMake(self)
         cmake.configure()
+        self._check_build_config()
         cmake.build()
+
+    @property
+    def _expected_build_config(self):
+        """SDL_build_config.h macros the options require to be defined (True) or absent (False)."""
+        def on(option):
+            return bool(self.options.get_safe(option))
+
+        expected = {
+            "SDL_VIDEO_VULKAN": on("vulkan"),
+            "SDL_VIDEO_OPENGL": on("opengl"),
+            "SDL_VIDEO_OPENGL_ES2": bool(self._supports_opengles),
+        }
+        if self._is_unix_sys:
+            expected.update({
+                "SDL_VIDEO_DRIVER_X11": on("x11"),
+                "SDL_VIDEO_DRIVER_X11_XCURSOR": on("xcursor"),
+                "SDL_VIDEO_DRIVER_X11_XDBE": on("xdbe"),
+                "SDL_VIDEO_DRIVER_X11_XINPUT2": on("xinput"),
+                "SDL_VIDEO_DRIVER_X11_XFIXES": on("xfixes"),
+                "SDL_VIDEO_DRIVER_X11_XRANDR": on("xrandr"),
+                "SDL_VIDEO_DRIVER_X11_XSCRNSAVER": on("xscrnsaver"),
+                "SDL_VIDEO_DRIVER_X11_XSHAPE": on("xshape"),
+                "SDL_VIDEO_DRIVER_X11_XSYNC": on("xsync"),
+                "SDL_VIDEO_DRIVER_X11_XTEST": on("x11"),
+                "SDL_VIDEO_DRIVER_WAYLAND": on("wayland"),
+                "HAVE_LIBDECOR_H": on("libdecor"),
+                "SDL_VIDEO_DRIVER_KMSDRM": False,
+                "SDL_AUDIO_DRIVER_PIPEWIRE": on("pipewire"),
+                "SDL_AUDIO_DRIVER_PULSEAUDIO": on("pulseaudio"),
+                "SDL_AUDIO_DRIVER_ALSA": on("alsa"),
+                "SDL_AUDIO_DRIVER_SNDIO": on("sndio"),
+                "SDL_AUDIO_DRIVER_OSS": False,
+                "HAVE_LIBUDEV_H": on("libudev"),
+                "HAVE_DBUS_DBUS_H": bool(self._supports_dbus),
+                "HAVE_IBUS_IBUS_H": False,
+                "HAVE_LIBURING_H": False,
+                "HAVE_FRIBIDI_H": False,
+                "HAVE_LIBTHAI_H": False,
+            })
+        return expected
+
+    def _check_build_config(self):
+        """Fail when SDL configured something other than the options asked for, typically because
+        a development package is missing on the build machine and SDL dropped the feature."""
+        config_path = os.path.join(self.build_folder, f"include-config-{str(self.settings.build_type).lower()}",
+                                   "build_config", "SDL_build_config.h")
+        defined = set(re.findall(r"^#define (\w+)", load(self, config_path), re.MULTILINE))
+        mismatches = [f"{macro} should be {'defined' if want else 'absent'}"
+                      for macro, want in self._expected_build_config.items() if want != (macro in defined)]
+        if mismatches:
+            raise ConanException(f"SDL configured differently from the recipe options ({config_path}):\n  " +
+                                 "\n  ".join(mismatches))
 
     def package(self):
         copy(self, "LICENSE.txt", self.source_folder, os.path.join(self.package_folder, "licenses"))
@@ -416,6 +498,9 @@ class SDLConan(ConanFile):
 
         if self.options.get_safe("wayland"):
             self.cpp_info.components["sdl3"].requires.extend(["wayland::wayland", "xkbcommon::xkbcommon", "egl::egl"])
+
+        if self.options.get_safe("libdecor"):
+            self.cpp_info.components["sdl3"].requires.append("libdecor::libdecor")
 
         if self.options.get_safe("x11"):
             self.cpp_info.components["sdl3"].requires.extend(["xorg::x11", "xorg::xext"])
@@ -494,17 +579,19 @@ class SDLConan(ConanFile):
 
         # Windows links with all libs by default
         if self.settings.os == "Windows":
-            self.cpp_info.components["sdl3"].system_libs.extend([
-                "kernel32",
-                "user32",
-                "gdi32",
-                "winmm",
-                "imm32",
-                "ole32",
-                "oleaut32",
-                "version",
-                "uuid",
-                "advapi32",
-                "setupapi",
-                "shell32",
-            ])
+            self.cpp_info.components["sdl3"].system_libs.extend(
+                [
+                    "kernel32",
+                    "user32",
+                    "gdi32",
+                    "winmm",
+                    "imm32",
+                    "ole32",
+                    "oleaut32",
+                    "version",
+                    "uuid",
+                    "advapi32",
+                    "setupapi",
+                    "shell32",
+                ]
+            )
