@@ -4,10 +4,9 @@ import yaml
 from conan import ConanFile
 from conan.tools.cmake import CMakeToolchain, CMakeDeps, cmake_layout
 
+# The packages libsim_estab-config.cmake finds (Boost also covers the extension's own Boost::log).
 # Versions and options come from the library's conandata.yml, so both builds resolve the same ones.
-_LIBSIM_ESTAB_DEPS = ("boost", "fmt", "rang", "indicators", "range-v3", "tsl-robin-map", "tl-function-ref",
-                      "scope-lite", "magic_enum", "nlohmann_json", "eigen", "boost-ext-ut", "sdl", "vulkan-loader",
-                      "cgal", "flecs")
+_LIBSIM_ESTAB_DEPS = ("boost", "fmt", "rang", "range-v3", "tsl-robin-map", "eigen", "cgal", "sdl", "vulkan-loader")
 
 
 class RepoRecipe(ConanFile):

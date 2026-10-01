@@ -2,7 +2,7 @@
 #
 # src/sim_estab_ext/conanfile.py reads this file too. The extension compiles the library's
 # module units again and links its shared dependencies, so it must resolve the same versions
-# and options.
+# and options; it takes the packages that libsim_estab-config.cmake looks for.
 #
 # After changing anything here, regenerate the lockfiles: script/update_conan_lock.sh
 requirements:
