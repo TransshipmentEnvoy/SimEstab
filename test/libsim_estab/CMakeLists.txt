@@ -1,8 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
 
-# Enable CTest support
-enable_testing()
-
 # Test build options
 option(TEST_ENABLE_LOGGING "Enable logging in test output" ON)
 

@@ -220,5 +220,7 @@ install(FILES
 
 # build tests if enabled
 if(BUILD_TESTS)
+    # here rather than in the test directory, so ctest also finds the tests from the build root
+    enable_testing()
     add_subdirectory(${project_path_prefix}/test/libsim_estab test)
 endif()
