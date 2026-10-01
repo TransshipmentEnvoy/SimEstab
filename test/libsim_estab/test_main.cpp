@@ -10,6 +10,8 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <cstdlib>
+
 // Import the main SimEstab module if needed
 import sim_estab;
 
@@ -26,6 +28,14 @@ struct GlobalFixture {
     GlobalFixture() {
         // Initialize test environment
         BOOST_TEST_MESSAGE("Global test setup started");
+
+#ifdef __linux__
+        // ComputeContext initializes SDL's video subsystem, which fails without a display, and
+        // SDL never picks offscreen on its own. Try the real drivers first, then offscreen.
+        // An SDL_VIDEO_DRIVER already set wins (no overwrite). Not an SDL hint: SDL_Quit clears
+        // hints, and every context shutdown calls it.
+        ::setenv("SDL_VIDEO_DRIVER", "wayland,x11,offscreen", 0);
+#endif
 
         // Add any global initialization code here
         // For example: initialize logging for tests

@@ -4,6 +4,7 @@
  *
  * These tests verify the headless GPU compute functionality.
  * Unlike viz tests, these do NOT require a display environment.
+ * Without one, SDL falls back to its offscreen driver (default set in test_main.cpp).
  */
 
 #include <boost/test/unit_test.hpp>
