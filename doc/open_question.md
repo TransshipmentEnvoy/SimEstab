@@ -462,3 +462,54 @@ storage, behind a sparse id-to-row table, would keep such a type dense. It costs
 lookup path and link patching on every move, and it must keep the rule that only full ids
 cross a boundary. Revisit when a profile shows scan time lost to dead lanes
 (`data_container` §1.4).
+
+### Q70. fmt or `std::format`
+
+fmt is a dependency that no code uses, and it is linked `PUBLIC`, so every consumer must
+provide it. Logging formats through Boost.Log streams. GCC 16 has `std::format` and
+`std::print`. Compare build time in module builds, the formatting features the code will
+need, and MSVC support (Q34).
+
+### Q71. range-v3 or `std::ranges`
+
+range-v3 is a dependency that no code uses, and it is linked `PUBLIC`. `std::ranges` in
+GCC 16 includes `views::concat` and `views::enumerate`. range-v3 still has actions (eager
+algorithms on containers), which have no standard counterpart. Its last release is from
+2022.
+
+### Q72. tl-function-ref or `std::function_ref`
+
+tl-function-ref is a dependency that no code uses. GCC 16 has `std::function_ref`. Check
+MSVC support before relying on the standard one (Q34).
+
+### Q73. magic_enum or reflection for enum names
+
+magic_enum is a dependency that no code uses. C++26 reflection lists enumerators directly
+(`std::meta::enumerators_of`), and the data container already relies on reflection
+(`data_container` §2). magic_enum only sees values in a fixed range (-128 to 127 by default)
+but also works on MSVC. Reflection has no such limit but needs GCC 16 (Q34).
+
+### Q74. scope-lite or Boost.Scope
+
+Every submit enters the endpoint lease, and a scope guard leaves it on every exit
+(`engine_core` §5.1). scope-lite and Boost.Scope both provide `scope_exit`, `scope_fail`,
+`scope_success` and `unique_resource`. Boost.Scope ships with the Boost already in the
+build. scope-lite is a dependency that no code uses.
+
+### Q75. tsl-robin-map or `boost::unordered_flat_map`
+
+tsl-robin-map is a dependency that no code uses, and it is linked `PUBLIC`.
+`boost::unordered_flat_map` ships with the Boost already in the build. Both are
+open-addressing maps without pointer stability. Compare them on the planned uses: lookups
+only, since state changes never come from iterating a hash map (`engine_core` §2.2), for
+example composite keys (Q32).
+
+### Q76. Keep indicators
+
+indicators draws progress bars in a terminal. It is a dependency that no code uses, and no
+doc plans a use for it.
+
+### Q77. boost-ext-ut or Boost.Test
+
+The C++ tests use Boost.Test through CTest. boost-ext-ut is a dependency that no code uses.
+It is worth keeping only if the tests move to it.
