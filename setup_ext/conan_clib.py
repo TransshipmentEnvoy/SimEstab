@@ -18,10 +18,17 @@ _logger_conan_clib = logging.getLogger("setup_ext.ConanClib")
 
 CONAN_SOURCE_FOLDER_ENVVAR_BASE = "SETUP_EXT__CONAN_SOURCE_FOLDER"
 
+# set to 1/true/yes/on: remove the cached package of a clib before its build, so it is rebuilt
+CONAN_REBUILD_ENVVAR = "SETUP_EXT__CONAN_REBUILD"
+
 
 def _log_subprocess_output(pipe):
     for line in iter(pipe.readline, b""):  # b'\n'-separated lines
         _logger_conan_clib.info("\t%s", safe_decode_stdout(line).rstrip("\n"))
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 class ConanClib:
@@ -103,6 +110,61 @@ def detect_conan_package(package_name: str, conan_home_dir: str = None) -> dict:
 
     status = package_name in result.get("Local Cache", {})
     return status
+
+
+def detect_conan_binary(package_name: str, package_id: str, conan_home_dir: str = None) -> bool:
+    env = os.environ.copy()
+    env_new = {}
+    if conan_home_dir is not None:
+        env_new["CONAN_HOME"] = os.path.normpath(os.path.abspath(os.path.expanduser(conan_home_dir)))
+    env.update(**env_new)
+
+    # like `conan cache path`, `conan list` resolves a reference without revision to the latest recipe revision
+    package_ref = f"{package_name}:{package_id}"
+    _logger_conan_clib.info("    exec conan cmd: %s", shlex.join(["conan", "list", package_ref, "--format", "json"]))
+    check_process = subprocess.Popen(
+        ["conan", "list", package_ref, "--format", "json"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    stdout, _ = check_process.communicate()
+    ret = check_process.returncode
+
+    if ret != 0:
+        raise DistutilsSetupError(f"failed to check conan package: {package_ref}")
+
+    try:
+        result = json.loads(safe_decode_stdout(stdout))
+    except json.JSONDecodeError as e:
+        raise DistutilsSetupError(f"failed to parse JSON output for conan package {package_ref}: {e}")
+
+    # a missing package ID is an "error" entry, not a nonzero exit code
+    revisions = result.get("Local Cache", {}).get(package_name, {}).get("revisions", {})
+    return any(package_id in revision.get("packages", {}) for revision in revisions.values())
+
+
+def remove_conan_package(package_name: str, conan_home_dir: str = None):
+    env = os.environ.copy()
+    env_new = {}
+    if conan_home_dir is not None:
+        env_new["CONAN_HOME"] = os.path.normpath(os.path.abspath(os.path.expanduser(conan_home_dir)))
+    env.update(**env_new)
+
+    # without "#*" conan removes only the latest recipe revision; an older one would still satisfy the cache check
+    package_pattern = f"{package_name}#*"
+    _logger_conan_clib.info("    exec conan cmd: %s", shlex.join(["conan", "remove", "-c", package_pattern]))
+    remove_process = subprocess.Popen(
+        ["conan", "remove", "-c", package_pattern],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    with remove_process.stdout:
+        _log_subprocess_output(remove_process.stdout)
+    ret = remove_process.wait()
+    if ret != 0:
+        raise DistutilsSetupError(f"failed to remove conan package: {package_name}")
 
 
 def install_conan_dependency(package_name: str,
@@ -410,9 +472,19 @@ def build_clib(
             conan_option=package_info.get("conan_option", None),
         )
 
-    # always create package
-    if detect_conan_package(clib.package_name, clib.conan_home_dir):
-        _logger_conan_clib.info("  conan package %s already exists, skipping creation.", clib.package_name)
+    # rebuild on request: drop every cached revision, so the check below misses
+    if _env_flag(CONAN_REBUILD_ENVVAR):
+        _logger_conan_clib.info("  %s is set, removing conan package %s.", CONAN_REBUILD_ENVVAR, clib.package_name)
+        remove_conan_package(clib.package_name, clib.conan_home_dir)
+
+    # create the package unless the cache holds its binary for the current profile, options and dependencies
+    # the ID is None when the graph needs the conan install of the build, e.g. on a fresh CONAN_HOME
+    package_id = extract_conan_package_id(recipe_path=conan_if.find_recipe(clib.sourcedir),
+                                          conan_home_dir=clib.conan_home_dir,
+                                          profile_path=conan_profile_path)
+    if package_id is not None and detect_conan_binary(clib.package_name, package_id, clib.conan_home_dir):
+        _logger_conan_clib.info("  conan package %s:%s already exists, skipping creation.", clib.package_name,
+                                package_id)
     else:
         create_conan_package(package_name=clib.package_name,
                              recipe_path=conan_if.find_recipe(clib.sourcedir),
@@ -424,9 +496,10 @@ def build_clib(
                              conan_option=clib.conan_option)
 
     # get package_id and filepath
-    package_id = extract_conan_package_id(recipe_path=conan_if.find_recipe(clib.sourcedir),
-                                          conan_home_dir=clib.conan_home_dir,
-                                          profile_path=conan_profile_path)
+    if package_id is None:
+        package_id = extract_conan_package_id(recipe_path=conan_if.find_recipe(clib.sourcedir),
+                                              conan_home_dir=clib.conan_home_dir,
+                                              profile_path=conan_profile_path)
     if package_id is None:
         raise DistutilsSetupError(f"failed to extract package ID for {clib.name}!")
     _logger_conan_clib.info("  conan package ID: %s", package_id)
