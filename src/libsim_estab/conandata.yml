@@ -23,13 +23,13 @@ requirements:
   # unittest
   boost-ext-ut: "2.3.1"
   # graphics
-  sdl: "3.4.12"
+  sdl: "3.4.16"
   # vulkan backend & shader tools
-  vulkan-loader: "1.4.350.0"
-  glslang: "1.4.350.0"
-  spirv-cross: "1.4.350.0"
+  vulkan-loader: "1.4.357.0"
+  glslang: "1.4.357.0"
+  spirv-cross: "1.4.357.0"
   # geometry (opencascade/7.9.1 waits for a custom recipe)
-  cgal: "6.2"
+  cgal: "6.2.1"
   # ecs
   flecs: "4.1.5"
 
