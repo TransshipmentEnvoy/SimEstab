@@ -497,6 +497,15 @@ take is that participant's only declaration. No reader has another: a logic mod 
 declares ready, because its commands name no tick (`design_modding.md` §3). So a mod is at
 most one participant, and no participant has two writers.
 
+**A paced reader takes between steps, never inside one.** A thread inside `step(n)` cannot
+take, whether it runs the ticks itself or waits for the sim thread to run them (§3.3). So
+when that thread is also the view's reader, a step that runs past the view's next publish
+leaves the gate waiting for a take that cannot come. The gate waits out the view's deadline
+and then applies its expiry policy, and under `FAIL` the session ends in `failed`. After
+taking the block of tick `t`, such a reader steps to `t + k` at most, then takes again. A
+reader on another thread has no such limit. The engine does not detect the case: a view's
+reader is whichever thread takes it (`design_python_api.md` §6).
+
 **Placement**, heap or shared memory, is not a v1 declaration. Every engine view is heap-allocated
 engine memory. Shared-memory placement comes back with `SHARED` and its split-permission
 interprocess ABI (Appendix A, `design_modding.md` §4.3).
@@ -889,7 +898,8 @@ blocker_for(t), in priority order:
 
 With no sim thread, `step(n)` runs this loop on the calling thread. Where the sim thread
 would park on the host's own grant (`HOST_PAUSE`) or stop, the calling thread returns
-instead.
+instead. It checks for signals at tick boundaries, and an interrupt ends the step there
+(`design_python_api.md` §4.3).
 
 A participant becomes ready, and a control call changes a host field, the same way:
 
@@ -1025,7 +1035,9 @@ Three kinds of call wait, and they wait only on the sim or on a deadline, never 
 something only the owner thread can do. `snapshot()` waits for the next tick boundary, at
 most one tick, and is served even while the sim is paused (§3.1). `step(n)` waits for the
 sim to run its ticks. If the next tick is blocked by a condition only the owner can clear,
-such as the event backlog (§5.2), it returns or raises instead of waiting. The shutdown
+such as the event backlog (§5.2), it returns or raises instead of waiting. A paced engine
+view that the stepping thread itself reads is such a condition too, but the engine does not
+see it, so that reader steps no further than its next publish (§3.1). The shutdown
 calls, `stop_sim_async()` and `close()`, wait under the shutdown deadline
 (`design_python_api.md` §2). Peers keep their waits, and a logic mod may wait for an
 outcome (§5.1). They run on their own threads, and the owner thread never waits for them.

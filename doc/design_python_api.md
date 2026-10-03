@@ -885,7 +885,11 @@ thread.
   - **The wait has no deadline, and Ctrl+C interrupts it.** The owner thread waits in short
     slices and checks for signals between them. A `KeyboardInterrupt` revokes the rest of
     the grant: under the gate mutex it sets `run_until = first_unexecuted`, so the sim
-    parks at the gate after the tick it is running, and the exception propagates. A long
+    parks at the gate after the tick it is running, and the exception propagates. With no
+    sim thread, the calling thread runs the ticks itself and has no wait to slice. It
+    checks for signals at tick boundaries instead, at least once per slice, and between
+    slices while it is parked at the gate. A `KeyboardInterrupt` there revokes the grant
+    the same way and ends the step at that boundary; no tick is cut short. A long
     tick is not a fault, and the host is not a participant whose lateness could be one. So
     nothing times the step out. A sim thread that never finishes its tick is caught at
     shutdown, by the staged join below. A `request_stop()` during a step returns the tick
@@ -967,9 +971,11 @@ thread.
     three places, and only on the sim or on a deadline: `snapshot()` (at most one tick,
     §7.2), `step(n)` (above) and the shutdown calls (§2). If a step's next tick is blocked
     by something only the owner can clear, the step raises instead of waiting. The one such
-    blocker is the event backlog under an owner drain: the step raises `EventBacklogError`,
-    naming the tick reached, and the caller drains and steps again
-    (`design_engine_core.md` §5.2).
+    blocker the engine sees is the event backlog under an owner drain: the step raises
+    `EventBacklogError`, naming the tick reached, and the caller drains and steps again
+    (`design_engine_core.md` §5.2). A paced engine view that the stepping thread itself
+    reads is one the engine does not see, so that reader steps no further than its next
+    publish (§7.2).
 
     That makes five declared waits in the whole system: the gate, admission, outcome, a
     step's wait for its ticks and a snapshot request's wait for a tick boundary
@@ -1579,6 +1585,13 @@ Rules:
   never run past a publish the reader has not taken (`design_engine_core.md` §3.1). The
   reader makes no other call. A paced engine view ignores cadence hints, because its cadence
   is part of what it declared.
+
+  **A paced reader takes between steps.** A thread inside `step(n)` cannot take. So a
+  reader that also steps the session steps no further than its view's next publish: it
+  takes, steps at most `cadence` ticks, and takes again. A longer step leaves the gate
+  waiting for a take that cannot come, until the view's deadline expires and its expiry
+  policy applies (`design_engine_core.md` §3.1). A reader on another thread has no such
+  limit.
 
   The default is `False`, and an engine view that is not paced cannot delay a tick, however slow it
   is. Pacing is the only way to guarantee no missed tick. A reader that only wants the core

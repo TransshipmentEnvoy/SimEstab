@@ -27,8 +27,10 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         ordered steps; every step that can fail runs before any step with a visible effect
         (`doc/design_engine_core.md` §2.4, `doc/design_python_api.md` §2)
   + [ ] the headless executor: `step(n)` runs the tick loop on the calling thread and
-        returns at its own grant or a stop. The executor role, which a snapshot copy also
-        takes while no tick runs (`doc/design_engine_core.md` §3.1, §3.3)
+        returns at its own grant or a stop. It checks for signals at tick boundaries, so
+        Ctrl+C ends the step (`doc/design_python_api.md` §4.3). The executor role, which a
+        snapshot copy also takes while no tick runs (`doc/design_engine_core.md` §3.1,
+        §3.3)
   + [ ] the gate: one `ready_through` per participant (only ever increases), the gate mutex
         with a condition variable for blocking and deadlines, and `first_unexecuted` as the
         next tick to run, stored under the mutex after each publish. Every gate input
