@@ -27,17 +27,13 @@ public:
 };
 
 /**
- * GPU backend type enumeration
+ * GPU device types, shared with ComputeContext
+ *
+ * Both contexts report the one shared GPU device, so the types are defined once,
+ * in sim_estab:gpu, and re-exposed here.
  */
-export enum class GPUBackend : int { Vulkan = 0, D3D12 = 1, Unknown = -1 };
-
-/**
- * GPU device information structure
- */
-export struct GPUDeviceInfo {
-    /// Graphics API backend being used (Vulkan, D3D12, etc.)
-    GPUBackend backend;
-};
+export using sim_estab::core::gpu::GPUBackend;
+export using sim_estab::core::gpu::GPUDeviceInfo;
 
 /**
  * VizContext manages SDL window and GPU device lifecycle

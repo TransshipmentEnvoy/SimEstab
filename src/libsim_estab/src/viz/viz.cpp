@@ -339,6 +339,7 @@ GPUDeviceInfo VizContext::device_info() const noexcept {
     // Get the backend driver name from SDL
     const char *driver_name = SDL_GetGPUDeviceDriver(impl_->gpu_device);
     if (driver_name) {
+        info.driver_name = driver_name;
         // Map driver name to backend enum
         std::string driver_str(driver_name);
         if (driver_str == "vulkan") {
