@@ -82,8 +82,8 @@ struct VizContext::Impl {
 // Constructor
 VizContext::VizContext(int width, int height, std::string_view title, bool resizable) {
     // Ensure our buffer is large enough
-    static_assert(sizeof(Impl) <= ImplSize, "Impl size exceeds SBO buffer size");
-    static_assert(alignof(Impl) <= ImplAlign, "Impl alignment exceeds SBO buffer alignment");
+    static_assert(sizeof(Impl) <= impl_size, "Impl size exceeds SBO buffer size");
+    static_assert(alignof(Impl) <= impl_align, "Impl alignment exceeds SBO buffer alignment");
 
     // Construct Impl in-place using placement new and cache the pointer
     impl_ = new (impl_buffer_) Impl();

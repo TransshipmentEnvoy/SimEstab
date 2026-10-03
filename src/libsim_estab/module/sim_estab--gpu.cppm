@@ -307,10 +307,10 @@ public:
 private:
     // Fast Pimpl implementation using Small Buffer Optimization (SBO)
     struct Impl;
-    static constexpr size_t ImplSize  = 512; // Sufficient for GPU resources + metadata
-    static constexpr size_t ImplAlign = alignof(void *);
+    static constexpr size_t impl_size  = 512; // Sufficient for GPU resources + metadata
+    static constexpr size_t impl_align = alignof(void *);
 
-    alignas(ImplAlign) unsigned char impl_buffer_[ImplSize];
+    alignas(impl_align) unsigned char impl_buffer_[impl_size];
     // Cached pointer to Impl - nullptr indicates Impl is not constructed
     Impl *impl_ = nullptr;
 

@@ -473,16 +473,16 @@ dtor: Impl::~Impl → cleanup(): release window claim → destroy window
 ```cpp
 private:
     struct Impl;                                   // defined in .cpp
-    static constexpr size_t ImplSize  = 512;       // headroom, not exact
-    static constexpr size_t ImplAlign = alignof(void *);
+    static constexpr size_t impl_size  = 512;      // headroom, not exact
+    static constexpr size_t impl_align = alignof(void *);
 
-    alignas(ImplAlign) unsigned char impl_buffer_[ImplSize];
+    alignas(impl_align) unsigned char impl_buffer_[impl_size];
     Impl *impl_ = nullptr;                         // cached; nullptr = not constructed
 
     void check_impl() const noexcept;              // aborts on null, even in release
 ```
 
-- Put `static_assert(sizeof(Impl) <= ImplSize)` (and the `alignof` check)
+- Put `static_assert(sizeof(Impl) <= impl_size)` (and the `alignof` check)
   **inside the constructor**. That is the only place where Impl is complete.
 - The cached `impl_` pointer avoids repeated `std::launder`.
 - `impl_` doubles as the "constructed" flag. The destructor does:
