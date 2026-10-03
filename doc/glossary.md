@@ -19,7 +19,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | time scale | Game speed: how fast ticks are run in wall-clock terms. A control call; never recorded. | python_api §4.3 |
 | control call | An API call that changes how the engine runs but never touches world state: pause, resume, `step(n)`, `set_time_scale`, log level. Never a command, never recorded. | python_api §3 |
 | session | The world from the freeze until `close()`. One per `Engine`. | engine_core §2.4 |
-| engine state | `created`, `configuring`, `running` (optionally with the sim thread), `closing`, `closed`, plus the terminal states `load_failed` and `failed`. | python_api §2 |
+| engine state | `created`, `configuring`, `running` (optionally with the sim thread), `stopped`, `closing`, `closed`, plus the terminal states `load_failed` and `failed`. | python_api §2 |
+| `stopped` | The engine state after `stop_sim_async()`: no tick runs again, but reads and `close()` still work. | python_api §2 |
 | freeze | The single call (`start_session()`) that moves the engine from `configuring` to `running`. It closes every set that must not change during a session, computes session identity, and publishes tick 0. | engine_core §2.4 |
 | session identity | What makes two sessions "the same": engine build, schema, content, mod set, every object type's cap, source ids and seed. Computed at the freeze and written to the replay header. | engine_core §2.3 |
 | schema identity | The schema part of session identity: the descriptor hash, mod-added columns and content hashes. | data_container §7.4 |
@@ -41,13 +42,14 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | core | The deterministic simulation: fixed-point, integer-only, the only holder of world state. Also called "the sim". | engine_core §1 |
 | peripheral | Anything outside the core: rendering, viz, AI, GPU compute, logic mods, network peers. Reads engine views and changes the world only by submitting commands. | engine_core §1 |
 | determinism boundary | The line between the core (plus content and core mods) and the peripherals. | engine_core §1 |
-| host | The application that owns the engine, usually the Python program. It is source 0 and always a participant. "Mod host" is a different thing (see Mods). | engine_core §3.3 |
+| host | The application that owns the engine, usually the Python program. It is source 0. In single-player it is not a participant: its commands name no tick. "Mod host" is a different thing (see Mods). | engine_core §3.3 |
 | owner thread | The thread that created the `Engine`. Only it may make lifecycle calls and pump the engine. | python_api §2 |
-| host endpoint | The host's own command endpoint: source 0, margin 0. | python_api §7.1 |
-| sim thread | The C++ thread that runs ticks in sim-thread mode. | python_api §4.3 |
-| inline mode | Ticks run inside `update()` on the owner thread. The default. | python_api §4.3 |
-| sim-thread mode | Ticks run on the sim thread, started by `run_sim_async()`. | python_api §4.3 |
-| participant | A peripheral the core waits for before each tick, up to that participant's deadline. Every command producer is one; others can opt in with `paced=True`. | engine_core §3.3 |
+| owner-thread rule | The frame loop never waits on the engine; it polls. Only `step(n)` and the shutdown calls wait, and only on the sim or a deadline. | engine_core §3.3 |
+| host endpoint | The host's own command endpoint: source 0. Its producer is the owner thread. Unpaced: its commands name no tick, and the first drain after a submit runs them. | python_api §7.1 |
+| unpaced | Of an endpoint: its commands name no tick, so the gate never waits for it. Only the host endpoint, in single-player. | engine_core §5.1 |
+| sim thread | The C++ thread that runs ticks in a windowed session. | python_api §4.3 |
+| sim-thread mode | How a windowed session runs: ticks on the sim thread, started by `run_sim_async()`, while the frame loop submits, drains and renders. A headless session has no sim thread and runs ticks in `step(n)`. | python_api §4.3 |
+| participant | A peripheral the core waits for before each tick, up to that participant's deadline. Every producer that names ticks is one; others can opt in with `paced=True`. | engine_core §3.3 |
 | recorder | A peripheral that submits nothing but must not miss a tick; it registers as a participant explicitly. | engine_core §3.3 |
 | conjunction | The set of active participants the gate waits for: a tick runs only when all of them are ready. | engine_core §3.3 |
 | observer | A peripheral the core never waits for. It only reads its engine view. | engine_core §3.3 |
@@ -93,12 +95,12 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | command ring | An endpoint's ring buffer. Its depth is `(margin + 1) × capacity`, computed at the freeze. | engine_core §5.1 |
 | capacity | The most commands one endpoint may hold for one tick. Default 64, maximum 256. Exceeding it returns `queue_full`. The only number an endpoint declares. | limits §2 |
 | stamp | The tick a command names. | engine_core §5.1 |
-| stamp margin | How far past the current tick an endpoint may stamp. 0 for local producers, the input delay for a peer. | engine_core §5.1 |
+| stamp margin | How far past the current tick an endpoint may stamp. 0 for mods and engine sources, the input delay for a peer. The unpaced host endpoint stamps nothing. | engine_core §5.1 |
 | admission | The immediate answer to a submit: `admitted` with a handle, or a rejection (`queue_full`, `too_late`, `out_of_order`, `over_margin`, `invalid`, `revoked`, `host_error`). | engine_core §5.1 |
 | admission wait | A submit that finds its ring full waits for space, for at most one tick. | engine_core §5.1 |
 | endpoint lease | An endpoint's lifecycle state, which every submit enters and which `revoke` closes. | engine_core §5.1 |
-| outcome | The second answer to a command: whether it was applied when its tick ran. Read from the handle after that tick. | engine_core §5.1 |
-| deadlock rule | A producer may wait only for outcomes of ticks it has already declared ready. Breaking it raises `CommandOrderError`. | engine_core §5.1 |
+| outcome | The second answer to a command: whether it was applied when its tick ran. Read from the handle after that tick. For a host command it also reports the tick, and reads `pending` until then. | engine_core §5.1 |
+| deadlock rule | A paced producer may wait only for outcomes of ticks it has already declared ready. Breaking it raises `CommandOrderError`. | engine_core §5.1 |
 | command drain | At the start of tick `t`, the sim takes every command stamped for `t` from every endpoint, in ascending source id. | engine_core §5.1 |
 | sequence | A command's position in the drain. With the source id it gives every command a total order, with no sort. | engine_core §5.1 |
 | C | Total commands the engine may run per tick: the sum of all endpoint capacities. Computed at the freeze, never configured. | limits §2 |
@@ -211,7 +213,7 @@ the replacement for the other senses.
 |---|---|---|
 | host | the host application (source 0) | "mod host" (where a mod runs); "the engine" (for Tier 3 mods); "owner thread" (the thread) |
 | owner | owner thread | "reader" (an engine view's single reader); "authority" (multiplayer) |
-| phase | a compute phase within a tick | "inline mode" / "sim-thread mode"; "shutdown step"; "engine state"; "registration" / "session start" (Tier 3 mods) |
+| phase | a compute phase within a tick | "sim-thread mode"; "shutdown step"; "engine state"; "registration" / "session start" (Tier 3 mods) |
 | tier | mod tiers | "server tier" / "client nodes" (multiplayer) |
 | admission | the answer to a submit | "endpoint lease"; "operation lease"; "id lookup" (resolving an id to a row) |
 | gate | the tick gate | "endpoint lease"; "operation lease" |

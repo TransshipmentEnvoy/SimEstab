@@ -29,10 +29,9 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         semaphore for blocking and deadlines, and `first_unexecuted` as the next tick to
         run. The host controls it with two independent atomics, `run_until` and
         `stop_requested`; the event backlog is a plain value owned by the sim. Pause,
-        resume and step serialize so one cannot overwrite another. When the host is the
-        only participant, the gate never blocks (`doc/design_engine_core.md` §3.3). How
-        the host is paced is open
-        ([Q1](doc/open_question.md#q1-how-is-the-host-paced))
+        resume and step serialize so one cannot overwrite another. The host is not a
+        participant. M1 runs headless: `step(n)` runs ticks on the calling thread, and with
+        no participant the gate only ends a step (`doc/design_engine_core.md` §3.3)
   + [ ] the engine view, `PRIVATE` only: 3 blocks and one `u32` exchange word, publish and take
         both `acq_rel`. The permutation invariant makes block reuse safe without
         reclamation. A due publish always has a writable block and is never skipped.
@@ -46,9 +45,11 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         world (`doc/design_engine_core.md` §3.5)
   + [ ] the command ring: one SPSC ring per endpoint, drained in ascending source id at the
         start of each tick; the sequence is the drain position, so there is no sort and no
-        ordering field a source could forge. Every command names the tick it applies to,
-        and each endpoint declares how far ahead it may name (0 for local producers, the
-        input delay for a peer). Depth is `(margin + 1) × capacity`. There is no drain
+        ordering field a source could forge. Every paced command names the tick it applies
+        to, and each paced endpoint declares how far ahead it may name (0 for mods and
+        engine sources, the input delay for a peer). The host endpoint is unpaced: its
+        commands name no tick, a full ring returns `queue_full`, and outcomes are polled.
+        Depth is `(margin + 1) × capacity`. There is no drain
         quota, so `queue_full` only means a producer exceeded its own per-tick capacity
         (`doc/design_engine_core.md` §5.1). Whether the admission wait is reachable is open
         ([Q8](doc/open_question.md#q8-can-the-admission-wait-ever-happen))
@@ -126,4 +127,7 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         stride change would corrupt every frame with no error
 + [ ] **M6: first system, renderer, sim-thread mode** (`doc/design_engine_core.md` §7 step 5,
       `doc/design_python_api.md` §4.3)
+  + [ ] the sim thread for windowed sessions: `run_sim_async()`, `stop_sim_async()` with
+        the staged join, and a frame loop that never waits on the engine
+        (`doc/design_python_api.md` §4.1, §4.3)
 + [ ] **M7: mod tiers** (`doc/design_modding.md`); process hosts ship without snapshots

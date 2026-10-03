@@ -14,18 +14,6 @@ so on).
 
 ## Blocks M1
 
-### Q1. How is the host paced?
-
-`engine_core` §3.3 treats the host as a run grant (`run_until`): in single-player the gate
-never waits for it. `python_api` §4.1 and §7.1 say the host must call `declare_ready(t)` for
-every tick, or the gate never opens.
-
-Both choices have a cost. If the host must declare ready, one declare releases one tick, so
-catch-up and fast-forward stop working, and the headless and replay loops (`python_api`
-§4.2) never declare at all. If the host is not paced, a host command in sim-thread mode can
-miss its tick's drain and cause a protocol error, which breaks "every producer is paced"
-(`engine_core` §5.1).
-
 ### Q2. Must every mod be paced every tick?
 
 `modding` §4.1 and §4.2 make every mod a participant that declares ready every tick, even
@@ -173,13 +161,12 @@ its owner and its place in the gate are decided; the value needs a measured drai
 ### Q65. Which `failed` paths does `on_failed_stop` cover?
 
 `python_api` §3 applies `on_failed_stop` to the sim-thread join timeout and an abandoned
-thread host, and §4.3 applies it to `step()`'s second expiry. `failed` has more entry paths
-(`python_api` §2): the host's gate deadline under `FAIL` (`engine_core` §3.3), an endpoint
+thread host. `failed` has more entry paths (`python_api` §2): a participant's gate deadline
+under `FAIL` (`engine_core` §3.3), an endpoint
 revocation timeout (`engine_core` §5.1, `modding` §6), the operation-lease wait timeout in
 `close()`, GPU device loss (`engine_core` §5) and a failed memory commit in the terminal
 commit (`data_container` §2.2). No doc says whether `"terminate"` aborts on these, or what
-`"raise"` means where no call can raise. The `step()` expiry and the host's `FAIL` expiry
-may also be the same path.
+`"raise"` means where no call can raise.
 
 ## Blocks M2
 
@@ -419,10 +406,16 @@ session formation, not an engine mechanism.
 
 ### Q55. The local player's source id
 
-On each machine the local player submits as the host (source 0, margin 0; `python_api`
-§7.1). On other machines the same player's commands arrive on that player's peer endpoint,
-with a different source id. Unless the local player also submits through its peer endpoint
-with the input-delay margin, machines drain in different orders (`multiplayer` §3.2, §4).
+In a networked session the local player submits through its own peer endpoint, with the
+input delay, so its commands carry the same source id and tick on every machine
+(`multiplayer` §3.2, §4). The unpaced host endpoint cannot carry them: each machine would
+drain a host command at a different tick (`engine_core` §3.3). Two things are open. First,
+who produces on the local peer endpoint. The frame loop cannot, because a paced producer may
+wait for ring space and the owner thread never waits on the engine (`engine_core` §3.3).
+The transport's receive thread can, if the local player's input takes the same route through
+the server tier as everyone else's. Second, whether the host endpoint is closed in a
+networked session, as it is in playback (`python_api` §4.2). Only the server tier may decide
+that a late player has dropped (`multiplayer` §4.1).
 
 ## Not tied to a milestone
 

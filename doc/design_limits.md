@@ -104,7 +104,7 @@ margin (below).
 |---|---|---|---|
 | — | endpoint capacity, default | **64** | Commands one endpoint may hold for one tick. Mods declare it in their manifest; this is the value when nothing is declared. Exceeding it is `queue_full`, the only capacity rejection in the engine |
 | — | endpoint capacity, engine cap | **256** | The ceiling a manifest may request |
-| — | host endpoint (source 0) capacity | **256** | The host gets the ceiling by default. It needs no reserve carved out of an engine-wide pool, because rings are per endpoint: no mod can use up the host's capacity, whatever it submits |
+| — | host endpoint (source 0) capacity | **256** | The host gets the ceiling by default. Its endpoint is unpaced, so the number counts the commands waiting for the next drain, which every drain empties (`design_engine_core.md` §5.1). It needs no reserve carved out of an engine-wide pool, because rings are per endpoint: no mod can use up the host's capacity, whatever it submits |
 | — | peer endpoint capacity | **256** | A peer's endpoint carries a whole remote player's turn, so it gets the ceiling for the same reason as the host |
 | `D` | maximum ticks between `drain_events()` calls | **8** | 267 ms at 30 Hz: about sixteen frames of slack at 60 fps for a host that drains every frame, and short enough to catch a host that stopped draining. A tolerance, not a promise |
 | `high_water` | event backlog at which the gate pauses the sim | **open on purpose** ([Q63](open_question.md#q63-what-is-high_water)) | The counter has a name, a home and one writer (`design_engine_core.md` §5.2). Its threshold is a separate question, and this document does not answer it with a number nothing supports |
@@ -113,13 +113,16 @@ margin (below).
 
 | Endpoint | Depth |
 |---|---|
-| margin 0: every local producer | `capacity` |
+| margin 0: mods and engine sources | `capacity` |
 | a peer at margin `m` | `(m + 1) × capacity` |
+| the host endpoint, unpaced | `capacity` |
 
 A margin-0 producer acts inside the tick it is about to release, so it never has more than
-one tick's worth outstanding. A peer legitimately has `m + 1` ticks in flight. Its margin
+one tick's worth outstanding. The host endpoint names no tick, and every drain empties it,
+so it holds at most what the frame loop submits between two drains
+(`design_engine_core.md` §5.1). A peer legitimately has `m + 1` ticks in flight. Its margin
 `m` is the input delay, which the transport owns and which is open on purpose
-([Q50](open_question.md#q50-input_delay_ticks)). The formula is decided; one of its terms is
+([Q50](open_question.md#q50-input_delay_ticks)). The formula is decided; that one term is
 not. The table says so rather than inventing a value.
 
 Three quantities are **derived** from these values. They are computed, never restated. An
@@ -128,7 +131,7 @@ implementation that hardcodes any of them has created a second source of truth:
 | Derived | Formula | Value at defaults | Where it binds |
 |---|---|---|---|
 | `C`: commands run per tick, engine-wide | `Σ capacity(endpoint)` | 256 + 64 × n_mod_endpoints | `design_engine_core.md` §5.1 |
-| endpoint ring depth | `(margin + 1) × capacity` | `capacity`, for every local producer | `design_engine_core.md` §5.1 |
+| endpoint ring depth | `(margin + 1) × capacity` | `capacity`, for every margin-0 producer and the host | `design_engine_core.md` §5.1 |
 | event ring size | `C × D` | `8 × C` | `design_python_api.md` §7.1, §7.3 |
 
 `C` is not a policy value. The drain assigns order by position and sorts nothing, so the
@@ -201,7 +204,7 @@ frame-time problem.
 | Cap | Value | Reasoning |
 |---|---|---|
 | Engine views per session | **64** | Publish cost is a sum over due engine views (`design_engine_core.md` §3.1), so the number of terms must be known at construction. 64 is chosen to be far from binding: render, GUI, the default engine view and a few analytics taps come nowhere near it. The cap closes the sum; it is not meant to restrain a design. Each engine view's row width is uncapped (§5); the cap is on how many terms there are. Raising it also raises the worst-case snapshot memory in proportion, because that is a sum over the same terms (§5) |
-| Paced participants | **256** | See §2.1. Each participant can add up to its declared deadline to a tick. They wait concurrently, so the worst case is `max(deadline)`, not the sum, which is why the count can be generous. The cap makes the participant set enumerable, scanned once per tick; it is not a restraint. The host is always one of them; in the simplest session it is the only one |
+| Paced participants | **256** | See §2.1. Each participant can add up to its declared deadline to a tick. They wait concurrently, so the worst case is `max(deadline)`, not the sum, which is why the count can be generous. The cap makes the participant set enumerable, scanned once per tick; it is not a restraint. The host is not one of them, so the simplest session has none |
 
 ## 3. Storage: chunk quantum
 

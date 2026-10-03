@@ -82,7 +82,7 @@ What follows from these rules:
   from the record even if the decision-maker is not reproducible (transition determinism,
   §2).
 - **A peripheral that crashes or lags cannot corrupt the simulation.** This holds in every
-  mode. Whether it can delay ticks depends on what it is. An observer cannot (§3.3). A
+  session. Whether it can delay ticks depends on what it is. An observer cannot (§3.3). A
   participant can, because the core waits for it. A peripheral that submits commands is a
   participant. One that only reads is an observer, unless it registers as a participant
   explicitly (§3.3).
@@ -147,8 +147,8 @@ specified:
 | Mechanism | Direction | Linearization point | Progress | Specified in |
 |---|---|---|---|---|
 | **Engine view** | sim → one reader; the reader's return header travels back on the same edge | publish: the release exchange of the engine view's control word (§3.2 (P2)); take: the release exchange at (T2), which also publishes the return header | publisher wait-free (1 exchange); reader wait-free (1 exchange) | §3.2, §3.5 |
-| **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it | drain wait-free (1 load); submit wait-free unless the ring is full, where it is a **bounded wait** of at most one tick | §5.1 |
-| **Command outcome** | sim → producer | the outcome's release publication at the end of the tick that consumed the command | reader **blocks, bounded** by the named tick running; refused outright if the reader still holds that tick | §5.1 |
+| **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it | drain wait-free (1 load); submit wait-free unless the ring is full, where a paced producer makes a **bounded wait** of at most one tick and the host gets `queue_full` | §5.1 |
+| **Command outcome** | sim → producer | the outcome's release publication at the end of the tick that consumed the command | a paced reader **blocks, bounded** by the named tick running, and is refused outright if it still holds that tick; the host polls and never blocks | §5.1 |
 | **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of `admission`; revocation: the `OPEN → REVOKING` exchange | submit side wait-free; revoker blocks under the shutdown deadline | §5.1 |
 | **Event ring** | sim → owner thread | enqueue: the release store of the ring's write index | wait-free | §5.2 |
 | **The gate** | participants and host controls → sim | a participant's `ready_through.store(t, seq_cst)`, or a `seq_cst` update of a host-control field; the sim's `seq_cst` loads. `gate_waiting` is armed before the sim re-reads, so a signal goes only to a sleeping sim | **the sim blocks, bounded** by each blocker's declared policy | §3.3 |
@@ -375,8 +375,8 @@ terminal state instead of a half-started session.
    its *parameters* do not. Parameters change how many rows match without changing the shape
    of the cost, so they arrive with each publish through the return header (§3.5). There is
    no engine view mode or placement to close: every v1 engine view is `PRIVATE` and heap-allocated, and
-   both return with the `SHARED` mode (Appendix A). The host is registered as a participant
-   in this step; in the simplest session it is the only one. This step comes after step 3
+   both return with the `SHARED` mode (Appendix A). The host is not a participant (§3.3), so
+   in the simplest session the participant set is empty. This step comes after step 3
    because a participant is identified by its source id.
 4. **Resolve the seed**: from config, or generated and then recorded, or from the replay
    header if a replay is loaded.
@@ -735,13 +735,14 @@ from a free choice at registration:
 | Reads | its engine view | its engine view |
 | Writes | commands | **nothing**; reading the world is not participation |
 | Costs | up to its deadline of tick latency | a projection copy |
-| Examples | the host, network peers, every mod that submits commands, the replay harness, a recorder that must not miss a tick | viz and GUI, analytics, an agent mind that only watches |
+| Examples | network peers, every mod that submits commands, a recorder that must not miss a tick | viz and GUI, analytics, an agent mind that only watches |
 
 **Submitting makes a peripheral a participant; reading does not.** A command names the tick
 it applies to (§5.1), and a tick cannot run until every source that acts in it has finished
-submitting. So every producer is paced, and **no producer anywhere in the engine is
-unpaced.** Reading gives no such standing: an observer may fall any distance behind, and the
-core never notices. One case is declared rather than implied: a peripheral that submits
+submitting. So every producer that names ticks is paced. **The one exception is the host in
+single-player**: its commands name no tick, so it has no tick to be late for (below).
+Reading gives no standing at all: an observer may fall any distance behind, and the core
+never notices. One case is declared rather than implied: a peripheral that submits
 nothing but must not miss a tick, such as a recorder or a training-data collector. It
 registers as a participant explicitly, with a paced engine view (§3.1). Whether mods that never
 submit must still be paced every tick is open
@@ -818,6 +819,10 @@ blocker_for(t), in priority order:
     first active p with p.ready_through.load(seq_cst) < t: p
     otherwise: NONE
 ```
+
+With no sim thread, `step(n)` runs this loop on the calling thread. Where the sim thread
+would park on the host's own grant (`HOST_PAUSE`) or stop, the calling thread returns
+instead.
 
 A participant becomes ready with two operations and no other coordination:
 
@@ -911,8 +916,10 @@ Participants wait at the same time, so the worst latency the gate adds to a tick
 largest deadline in the blocking set, not the sum. That is what makes several participants
 affordable.
 
-**The host is always a participant.** The freeze registers it. Its predicate is a
-combination of independent fields rather than one overloaded word:
+**The host is not a participant.** The gate never waits for it as a command producer:
+its commands name no tick (§5.1), so there is no tick it must finish submitting for. What
+the host controls is whether ticks run at all. Its predicate is a combination of
+independent fields rather than one overloaded word:
 
 | Host state | Representation |
 |---|---|
@@ -922,8 +929,37 @@ combination of independent fields rather than one overloaded word:
 | event backlog at its high-water mark (§5.2) | **not a host field at all**: `backlog` is a plain sim-local value, so a resume cannot race it and a drain cannot erase it |
 | `request_stop()` | `stop_requested.store(1, seq_cst)`; sticky and highest priority |
 
-`design_python_api.md` §4.1 describes host pacing differently, and the two are not yet
-reconciled ([Q1](open_question.md#q1-how-is-the-host-paced)).
+**A host command cannot miss its tick, because it names none.** The host endpoint is
+unpaced (§5.1). The engine applies each host command at the first tick whose drain finds
+it, and the command's outcome reports that tick. So the frame loop never holds the sim
+back: a slow frame, a breakpoint or a dragged window does not stop the simulation. The
+record stays exact, because commands are recorded as they are consumed, with the tick that
+ran them (§2.3). Which tick a live host command lands in depends on timing, which session
+reproducibility already allows (§2).
+
+This holds in single-player only. In a networked session every machine must run a player's
+command at the same tick. So the local player submits through its own peer endpoint, with
+the input delay, and that endpoint is paced like any other peer's (`design_multiplayer.md`
+§3.2). How that endpoint is produced is open
+([Q55](open_question.md#q55-the-local-players-source-id)).
+
+**The owner thread never waits on the engine; it polls.** The owner thread runs the frame
+loop, which drains events (§5.2) and presents frames. A call that parked it on the engine
+could wait for a sim that is itself waiting for a drain, or freeze the window while the sim
+is paused. So every call the frame loop makes returns at once:
+
+| Call | When it cannot complete now, it returns |
+|---|---|
+| host `submit` | `queue_full`: the host endpoint already holds `capacity` commands not yet drained (§5.1) |
+| `outcome(h)` | `pending`: the tick that drains the command has not run yet |
+| `drain_events()` | an empty batch; it never blocks |
+
+Two kinds of call wait, and they wait only on the sim or on a deadline, never on something
+only the owner thread can do. `step(n)` waits for the sim to run its ticks. If the next tick
+is blocked by a condition only the owner can clear, such as the event backlog (§5.2), it
+returns or raises instead of waiting. The shutdown calls, `stop_sim_async()` and `close()`,
+wait under the shutdown deadline (`design_python_api.md` §2). Mods and peers keep their
+waits (§5.1). They run on their own threads, and the owner thread never waits for them.
 
 Pause, single-step, backpressure and shutdown still form one gate predicate, but no two
 share storage, so concurrent controls cannot lose a stop or unblock a backed-up ring.
@@ -937,9 +973,14 @@ unsigned underflow: tick `t` may run exactly when `t < run_until`.
 
 `step(n)` records `start = first_unexecuted`, sets `run_until = start + n`, and returns when
 `first_unexecuted >= start + n`, waiting on `tick_epoch`. The host's own run grant then
-blocks the gate, so the sim is provably parked when the call returns. That makes
+blocks the gate, so a sim thread is provably parked when the call returns. That makes
 `checksum()` on the next line a well-defined read of quiet state rather than a race
-(`design_python_api.md` §4.3, §6).
+(`design_python_api.md` §4.3, §6). The wait has no deadline, and an interrupt ends it
+(`design_python_api.md` §4.3).
+
+**Stopping ends ticking for the session.** `stop_requested` is never cleared, so once the
+sim has met it at the gate, no tick runs again. A stopped session can still be read
+(`snapshot()`, `checksum()`) and closed (`design_python_api.md` §2).
 
 **Registration** happens before the freeze, which closes the set (§2.4 step 3a). It declares
 the deadline and the expiry policy. There is **no global default**. Registration is where
@@ -955,7 +996,7 @@ not a preference:
 
 | `on_expiry` | Behaviour | Use |
 |---|---|---|
-| `FAIL` | log `critical` naming the participant and tick, retry once, then the engine enters the terminal `failed` state | the host: a stuck owner thread is a defect, not a load condition |
+| `FAIL` | log `critical` naming the participant and tick, retry once, then the engine enters the terminal `failed` state | a participant whose lateness is a defect, not a load condition |
 | `CONTINUE_WITHOUT` | `active.store(0, release)`, so later readiness stores cannot re-enter the conjunction; emit a reliable-class event; keep ticking | a paced recorder or mod whose absence cannot change what the core computes |
 | `DROP` | **escalate to the server tier and accept its answer**; never remove the participant locally | a network peer |
 | `SUSPEND` | stop feeding it, keep its endpoint, and take it out of the conjunction until it drains; reversible | a mod that is not keeping up (`design_modding.md` §4.2) |
@@ -983,11 +1024,11 @@ submitting is what makes a peripheral a participant. `SUSPEND` is the answer for
 does change the command stream, so it is reported and the session sees it, but it is
 reversible and never ends the session.
 
-**When the host is the only participant, the conjunction has one term.** While the session
-runs, the host's run grant is `U64_MAX`, `stop_requested` is clear and the backlog is below
-its mark. So the gate costs two loads and one plain comparison per tick, and never blocks.
-The gate built for multiplayer costs only this at its default setting
-(`design_multiplayer.md` §6).
+**In single-player with no paced mod, the conjunction is empty.** While the session runs,
+the host's run grant is `U64_MAX`, `stop_requested` is clear and the backlog is below its
+mark. So the gate costs two loads and one plain comparison per tick, and it blocks only on a
+pause, the end of a step or the event backlog. The gate built for multiplayer costs only
+this at its default setting (`design_multiplayer.md` §6).
 
 ### 3.4 Row predicate (normative)
 
@@ -1486,8 +1527,8 @@ The only artifacts peripherals ever see:
 |---|---|
 | Endpoint | **one SPSC ring per endpoint**, single-producer by contract. A source with several producer threads takes one endpoint per thread, or serializes itself. Source 0 is the host. The drain order between two endpoints of the same source is not yet specified ([Q62](open_question.md#q62-in-what-order-are-two-endpoints-of-one-source-drained)) |
 | Submission | happens inside the submitting call, on the caller's thread. There is no relaying producer, no buffer-then-flush stage and no contention between sources: two endpoints never touch the same word |
-| Result | two per command. **Admission** is returned by the call (`admitted \| queue_full \| too_late \| out_of_order \| over_margin \| invalid \| revoked \| host_error`). The **outcome** is read later, for a tick already released. Neither is an event |
-| Tick | **the submitter always names it**, and the command runs at that tick or not at all. A local producer and a peer differ only in a declared stamp margin: 0, or the input delay |
+| Result | two per command. **Admission** is returned by the call (`admitted \| queue_full \| too_late \| out_of_order \| over_margin \| invalid \| revoked \| host_error`). The **outcome** is read later: a paced producer reads it for a tick already released, and the host polls it. Neither is an event |
+| Tick | **a paced submitter names it**, and the command runs at that tick or not at all. Paced endpoints differ only in a declared stamp margin: 0 for a mod or an engine source, or a peer's input delay. The host endpoint is unpaced: its commands name no tick and run at the first tick that drains them (§5.1) |
 | Capacity | the one number an endpoint declares: how many commands it may hold for **one tick**. There is no drain quota; a tick runs everything stamped for it, because pacing closed the set first |
 | Order | the sequence is the position in the drain, so `(source id, sequence)` is a total order **by construction**: assigned by the engine, impossible to forge, and needing no sort |
 | Record | recorded as consumed: exactly the commands the tick runs, so what is recorded is what was applied. Rejected commands never enter the record |
@@ -1550,12 +1591,18 @@ snapshot(N) = projection( state(N) )                          # derived, one-way
 
 This section specifies the command ring with the five items of §1.1.
 
-**Two facts support everything below, and they are one mechanism seen from two sides: every
-command names the tick it applies to, and every producer is paced.** The gate (§3.3) does
-not pass a tick until every source that acts in it has declared ready. No producer is
-unpaced, and there is no path where a caller submits and the engine picks a tick afterwards:
-a lower bound is the one answer a submitter cannot act on. How the host itself is paced is
-open ([Q1](open_question.md#q1-how-is-the-host-paced)).
+**Two facts support everything below, and they are one mechanism seen from two sides: a
+command names the tick it applies to, and its producer is paced.** The gate (§3.3) does not
+pass a tick until every source that acts in it has declared ready. A paced producer never
+submits and then lets the engine pick a tick: a lower bound is the one answer a submitter
+cannot act on.
+
+**The host endpoint is the one exception, and it is unpaced.** In single-player the host's
+commands name no tick. The drain gives each one the tick it runs in: the first tick whose
+drain finds it. A command with no tick cannot be late, so nothing has to wait for the host,
+and the frame loop never waits for the engine (§3.3). A networked session cannot run the
+local player this way, because every machine must run the command at the same tick
+(`design_multiplayer.md` §3.2).
 
 **An endpoint is single-producer.** That is a contract, not an observation. A source with
 several producer threads registers one endpoint per thread at the freeze, or serializes
@@ -1571,18 +1618,20 @@ peer is a number declared once, not a second API.
 
 | Margin | Who | A command stamped for a later tick is |
 |---|---|---|
-| **0** | every local producer: the host, mods that submit commands, engine and AI sources. Each acts inside the tick it is about to release | **a bug**, rejected when submitted |
+| **0** | mods that submit commands, engine and AI sources. Each acts inside the tick it is about to release | **a bug**, rejected when submitted |
 | the **input delay** | a peer, whose commands cross a network and are legitimately in flight across ticks | normal; this is why the margin exists (`design_multiplayer.md` §3.2) |
 
 The transport owns a peer's margin, and its value is open
 ([Q50](open_question.md#q50-input_delay_ticks)). The engine imposes no value and no bound.
+The host endpoint has no margin, because it stamps nothing.
 
 **State.** Per endpoint: two hot 8-byte ring atomics on separate cache lines, two cold
 4-byte lease atomics, one cold waiter count, a plain slot array, and three words touched
 only by the producer thread.
 
 ```
-struct Entry { payload…; u64 tick; };        // the tick this command acts on
+struct Entry { payload…; u64 tick; };        // the tick this command acts on; unused on
+                                             //   the unpaced host endpoint
 
 struct Endpoint {                            // one per producer, fixed at the freeze
     Entry            slot[DEPTH];            // DEPTH = (margin + 1) x capacity (design_limits.md §2)
@@ -1592,7 +1641,8 @@ struct Endpoint {                            // one per producer, fixed at the f
     std::atomic<u32>  active_submit;         // successful/validating calls in flight
     std::atomic<u32>  waiters;               // producers parked on the admission wait
     u32               capacity;              // commands this endpoint may hold for ONE tick
-    u32               margin;                // 0 for every local producer
+    u32               margin;                // 0 for mods and engine sources
+    bool              unpaced;               // the host endpoint in single-player
     u64               last_stamped;          // producer-thread-only
     u32               stamped_for_tick;      // producer-thread-only
 };
@@ -1670,6 +1720,23 @@ submit(cmd, t):
 Whether the admission wait (C3) can ever be reached is open
 ([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)).
 
+**The host endpoint's submit names no tick and never waits.** Its producer is the owner
+thread, which must not park (§3.3). So it has no stamp checks and no admission wait:
+
+```
+submit_unpaced(cmd):                                                   # the host endpoint
+    lease = try_enter(); if lease == revoked: return revoked           # (H0)
+    w = write.load(relaxed)
+    if w - read.load(acquire) == DEPTH: leave(); return queue_full     # (H1) never waits
+    slot[w % DEPTH] = cmd                                              # (H2) plain; no tick
+    write.store(w + 1, release)                                        # (H3) LINEARIZATION POINT
+    leave(); return admitted{ handle }
+```
+
+Its depth is its capacity: the most host commands that may wait between two drains. Every
+drain takes all of them, so a full host ring means the frame loop submitted more than
+`capacity` commands before the next tick ran.
+
 `submit_batch` is `k` submits and needs nothing else. An endpoint has one producer, so `k`
 entries from it are always contiguous in the ring, and ordering the array orders the
 commands.
@@ -1682,7 +1749,7 @@ seq = 0
 for e in endpoints (ascending source id):
     r = e.read.load(relaxed); w = e.write.load(acquire)       # (S1)
     while r != w:
-        st = slot[r % DEPTH].tick
+        st = e.unpaced ? t : slot[r % DEPTH].tick             # the host's entries run at t
         if st > t: break                                      # (S2) stamped for a later tick
         if st < t: protocol_error(e, st, t)                   # (S3) NEVER executed late
         emit(slot[r % DEPTH], source(e), seq++); ++r
@@ -1697,7 +1764,9 @@ count.** That is what makes the drain deterministic, not just bounded. Pacing cl
 before the drain runs. When the gate opens for `t`, every participant has already submitted
 its commands for `t` and declared ready. Anything submitted afterwards is stamped `t + 1` or
 later, because `first_unexecuted` has not moved. **The tick label makes the cut, not a
-count**, and a count is exactly what two machines could disagree about.
+count**, and a count is exactly what two machines could disagree about. The host endpoint
+has no label, so its cut is the index the drain loads at (S1): every host entry visible
+there runs at `t`, and a later one runs at the next tick.
 
 Five properties follow from the mechanism:
 
@@ -1705,16 +1774,18 @@ Five properties follow from the mechanism:
   published and stops there. The engine's wait for that producer is the gate's: declared,
   and finished before the drain ran (§3.3). No slot is ever reserved but unfilled, because a
   slot becomes visible and complete in the same operation, (C5).
-- **A producer waits only for space, never for a tick to finish.** (C3) is the only
+- **A paced producer waits only for space, never for a tick to finish.** (C3) is the only
   interaction, and it lasts at most one tick. The sim frees a tick's worth of entries every
   tick, and (C1d) has already confirmed that this producer is within its own allocation.
+  The host never waits at all: (H1) returns `queue_full` instead.
 - **Ordering is total, deterministic and cannot be forged.** The drain assigns `seq` in a
   fixed endpoint order over each endpoint's FIFO. So `(source id, sequence)` is a total
   order with no sort and no field a source could forge. Order within one source is the
   producer's own.
 - **A command runs at the tick it named, or not at all.** (S2) stops the drain at the first
   entry for a later tick. (S3) refuses to run one whose tick has passed. There is no third
-  outcome where a command silently moves.
+  outcome where a command silently moves. A host command names nothing, so it runs at the
+  tick that drains it.
 - **An entry stamped for the future keeps its place, and nothing behind it is pulled
   forward.** This needs stamps that never decrease, and (C1b) enforces that rather than
   trusting a well-behaved peer, because the failure would be invisible. A command stamped
@@ -1728,7 +1799,7 @@ command did answers another, and that answer does not exist until the tick runs.
 
 | | **Admission**: is it in the queue? | **Outcome**: what happened when it ran? |
 |---|---|---|
-| Who | every producer, peers included | every producer |
+| Who | every paced producer, peers included | every paced producer |
 | Why | the alternative is dropping a command, and for a peer a dropped command is a certain desync | feedback, and the only place a rejection at consumption is reported |
 | Length | until space frees: at most one tick | until the named tick has run |
 | Can it fail? | only if the producer breaks its own contract | **no.** It *reports* failures; it is not one |
@@ -1742,6 +1813,10 @@ outcome(h)                # what it did at t: applied, or a named application-ti
 For a peer the outcome is worth having even though it is identical on every machine: it
 shows trouble early, and it gives the transport a way to push back.
 
+**The host gets both answers without waiting for either.** A full host ring returns
+`queue_full` (H1). `outcome(h)` returns `pending` until the tick that drained the command has
+run, then the outcome together with that tick. The frame loop polls it (§3.3).
+
 **The deadlock rule.** A deadlock can happen only if something waits for the outcome of a
 tick it is itself holding up. The right order of operations removes it:
 
@@ -1752,11 +1827,11 @@ declare ready for tick t       # releases the tick
 read outcomes for tick t       # a tick already released
 ```
 
-**A producer may wait only for outcomes of ticks it has already released.** The engine
-enforces this rather than just documenting it. It knows which participant is asking and
-which tick that participant holds, so a wait for the outcome of an unreleased tick is
+**A paced producer may wait only for outcomes of ticks it has already released.** The
+engine enforces this rather than just documenting it. It knows which participant is asking
+and which tick that participant holds, so a wait for the outcome of an unreleased tick is
 refused at once, naming the tick. A clear error at the call site is far better than a frozen
-session.
+session. The host cannot break the rule, because its outcome read never waits.
 
 Admission cannot deadlock either, for a simpler reason. An endpoint's capacity is at least
 one tick's worth of its own commands, so a producer submitting within its allocation always
@@ -1770,13 +1845,16 @@ contract violation, a lifecycle state, or a transport failure, and none is a loa
 | Result | Class | Means |
 |---|---|---|
 | `admitted{handle}` | none | in the ring, for the tick you named. The handle reads the outcome |
-| `queue_full` | contract | more than `capacity` commands stamped for one tick on this endpoint |
+| `queue_full` | contract | more than `capacity` commands stamped for one tick on this endpoint. On the host endpoint: more than `capacity` commands waiting for the next drain |
 | `too_late` | contract | the named tick is **strictly** in the past |
 | `out_of_order` | contract | the named tick is earlier than one already named on this endpoint |
-| `over_margin` | contract | further ahead than this endpoint's declared margin; for a local producer, any tick but the current one |
+| `over_margin` | contract | further ahead than this endpoint's declared margin; for a margin-0 producer, any tick but the current one |
 | `invalid` | contract | malformed payload, or a capability the source does not hold |
 | `revoked` | lifecycle | this endpoint is not admitting: torn down, or the session is in playback |
 | `host_error` | transport | a process host's IPC round trip failed or exceeded `ipc_deadline`; process hosts only (`design_modding.md` §4.3) |
+
+The host endpoint names no tick, so `too_late`, `out_of_order` and `over_margin` cannot
+arise on it.
 
 Whether `session_paused` also belongs in this table is open
 ([Q7](open_question.md#q7-does-a-caller-ever-see-session_paused)).
@@ -1798,6 +1876,7 @@ for it. The ring depth follows:
 |---|---|
 | margin 0 | `capacity` |
 | a peer at margin `m` | `(m + 1) × capacity`: one tick's worth for each tick legitimately in flight |
+| the host endpoint, unpaced | `capacity`: every drain empties it |
 
 The engine-wide per-tick ceiling is `C = Σ capacity(e)` over registered endpoints
 (`design_limits.md` §2). It is a bound checked at the freeze, not an allocation, which is
@@ -1815,6 +1894,8 @@ event ring's size, `C × D`, follows from it (§5).
   total order rules out a lost wake-up in both directions.
 - (C1a)'s load of `first_unexecuted` is `acquire`, pairing with (S6).
 - (C2), (C4) and each side's load of its own index are relaxed or plain.
+- On the host endpoint, (H3) `release` pairs with (S1) like (C5), and (H1)'s `acquire` load
+  of `read` pairs with (S4). Nothing parks, so nothing needs a wake-up.
 
 **Progress.** An uncontended submit is wait-free: two lease loads, two active-count
 read-modify-writes, three bounded validity checks, one relaxed index load, one `seq_cst`
@@ -1823,7 +1904,8 @@ load, a copy and one release store, with no loop. A submit that finds the ring f
 the normal path. The only other ways out are the two named wake reasons, `session_paused`
 (retry) and `revoked` (leave). The drain is `O(commands stamped for this tick)` with no
 retries. The ring indices are never contended, since the producer owns `write` and the sim
-owns `read`. Revocation contends only on the separate endpoint lease.
+owns `read`. Revocation contends only on the separate endpoint lease. A host submit is
+wait-free in every case, full ring included.
 
 **Failure and deadline behaviour.** Every rejection in the table above is returned
 synchronously, and the command is not enqueued. The admission wait has no deadline of its
@@ -1971,9 +2053,9 @@ Rules that keep this sound:
   The gate makes this more than bookkeeping. Every instance waits for `t` rather than
   running past it (§3.3), so a named tick means the same tick everywhere. A lockstep peer
   needs this (`design_multiplayer.md` §3.2), and a local caller gets it for free. How far
-  ahead of the current tick an endpoint may name is its declared stamp margin: 0 for every
-  local producer, the input delay for a peer. The transport chooses that delay; the engine
-  imposes no value and no bound.
+  ahead of the current tick an endpoint may name is its declared stamp margin: 0 for a mod
+  or an engine source, the input delay for a peer (§5.1). The transport chooses that delay;
+  the engine imposes no value and no bound. The host names no tick at all (§5.1).
 - **Replay feeds commands in at consumption, not at submission.** The recorded stream is
   already ordered and already carries each command's tick (§2.3, §5). So a loaded replay
   hands each tick its commands directly and closes every endpoint while it runs: every live
@@ -1994,9 +2076,10 @@ Each step is labelled with the milestone it belongs to (see `glossary.md`).
 1. **M1: session lifecycle, tick loop, the gate, command rings and one engine view**, with no
    simulation content. The `configuring → freeze → running` sequence (§2.4) belongs here
    rather than later. Identity, column ids, source ids, engine views and participants are all fixed
-   at the freeze, so every later step is written against a session that already exists. When
-   the host is the only participant, the gate never blocks, so this step builds the gate at
-   its simplest setting.
+   at the freeze, so every later step is written against a session that already exists. M1
+   runs headless: `step(n)` runs ticks on the calling thread, and the host is an unpaced
+   source with no participant beside it. The gate then only ends a step (§3.3), so this step
+   builds the gate at its simplest setting.
 2. **M2: the `fixed<>` type, deterministic PRNG, the three checksum levels (§2.3), and
    replay record and playback.** The verification harness must exist before the first
    system does.
@@ -2006,7 +2089,8 @@ Each step is labelled with the milestone it belongs to (see `glossary.md`).
    declarations, the phase cut and its invariant check, staged buffers, fixed-order commit.
    Prove that 1 thread and N threads give the same checksums.
 5. **M5 and M6: the first real system, and a renderer reading an engine view with the `ALL`
-   predicate**; then grow. A row predicate (§3.4) is added when `publish bytes/second` calls
+   predicate**, with windowed sessions running their ticks on the sim thread
+   (`design_python_api.md` §4.3); then grow. A row predicate (§3.4) is added when `publish bytes/second` calls
    for one, not before.
 
 ## Appendix A. The `SHARED` engine view (deferred)

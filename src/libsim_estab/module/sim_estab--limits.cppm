@@ -202,7 +202,8 @@ static_assert(max_paced_participants <= max_sources,
               "participant, so the two sets nearly coincide");
 
 static_assert(max_views > 0, "the engine registers a default engine view, so zero is unrepresentable");
-static_assert(max_paced_participants > 0, "the host is always a participant, so zero is unrepresentable");
+static_assert(max_paced_participants > 0,
+              "every paced producer is a participant, so a cap of zero would forbid every mod and peer");
 
 static_assert(default_entity_capacity > 0, "a cap of zero admits no entity, so no type could exist");
 static_assert(default_entity_capacity <= max_entity_capacity,

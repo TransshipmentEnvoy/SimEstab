@@ -29,8 +29,8 @@ stamp. The server is a relay and an ordering point; it does not control time. Th
 
 Peers stamping their own commands has two consequences:
 
-- Submission works the same way over the network as locally: every command names its tick
-  (`design_python_api.md` §7.1). The submitting peer knows the tick because it picked it
+- Submission works the same way over the network as for a local paced producer: every
+  networked command names its tick (`design_python_api.md` §7.1). The submitting peer knows the tick because it picked it
   (§3.2). If the server stamped commands, the peer would not know the tick. The rule "a
   command runs at the tick it names, or not at all" would then have nothing to refer to.
 - **Every peer sends an input message for every turn, even an empty one.** The server closes
@@ -134,8 +134,8 @@ Four details make this work:
 
 ### 3.2 A peer differs only in its stamp margin
 
-The command path in `design_engine_core.md` §5.1 has no special case for peers: every
-submission names its tick, local or remote. A peer's endpoint differs from a local one in a
+The command path in `design_engine_core.md` §5.1 has no special case for peers: every paced
+submission names its tick, local or remote. A peer's endpoint differs from a mod's in a
 single declared number, its **stamp margin**: how many ticks ahead of the current tick it
 may stamp a command.
 
@@ -168,9 +168,17 @@ may stamp a command.
   - Above that, `margin ≈ ceil(RTT / tick period)`. Each extra tick of margin adds one tick
     of input latency.
   - The value itself is open ([Q50](open_question.md#q50-input_delay_ticks)).
-- **A local producer has a margin of 0, and the engine checks it.** A local producer acts
-  within the turn it is about to release, so it never has more than one turn in flight. A
-  local command stamped for a later tick is a bug and is rejected with `over_margin`.
+- **A mod or an engine source has a margin of 0, and the engine checks it.** It acts within
+  the turn it is about to release, so it never has more than one turn in flight. Its command
+  stamped for a later tick is a bug and is rejected with `over_margin`.
+- **The local player submits through its own peer endpoint, with the input delay.** In
+  single-player the host endpoint is unpaced: its commands name no tick, and each runs at
+  the first tick that drains it (`design_engine_core.md` §3.3, §5.1). That cannot work
+  across machines, which would each drain the command at a different tick. So in a
+  networked session the local player's commands are stamped and paced like every other
+  peer's, and carry the same source id on every machine. How that endpoint is produced, and
+  what the host endpoint does in a networked session, are open
+  ([Q55](open_question.md#q55-the-local-players-source-id)).
 
 ### 3.3 Pause, step and time scale apply to the whole session
 
@@ -212,7 +220,7 @@ authority only for commands from non-deterministic peripherals:
 
 | Command source | Needs an authority? | Why |
 |---|---|---|
-| Player input (source 0 and remote peers) | No | The gate is enough. The submitting peer names the tick and broadcasts it, and every other peer waits for that tick |
+| Player input (every player's peer endpoint, the local player's included) | No | The gate is enough. The submitting peer names the tick and broadcasts it, and every other peer waits for that tick |
 | Deterministic core mods, and agent minds inside the determinism boundary | No | Every peer computes the identical command from identical state (`design_engine_core.md` §6) |
 | Non-deterministic peripherals: float, GPU or LLM-based minds outside the boundary | Yes | Peers would compute *different* commands. Either one peer computes and broadcasts them, or the mind moves inside the boundary |
 
@@ -224,8 +232,9 @@ Which one, and whether per subsystem or globally, is open
 Source ids must be identical on every peer. They are `u32` values assigned at the freeze,
 with 0 reserved for the host. Session formation assigns them, and they become part of
 session identity, like the mod manifest hashes. The participant and endpoint sets close at
-the same freeze step, so a peer that joins later starts a new session (§1). How the local
-player's own commands get the same source id on every machine is open
+the same freeze step, so a peer that joins later starts a new session (§1). The local
+player's own commands use that player's peer endpoint, so they carry the same source id on
+every machine (§3.2). How that endpoint is produced is open
 ([Q55](open_question.md#q55-the-local-players-source-id)).
 
 ### 4.1 Two network tiers
@@ -285,15 +294,15 @@ M1:
 
 | Lockstep needs | M1 builds |
 |---|---|
-| A gate on tick advance | `design_engine_core.md` §3.3, with the host as its only participant |
+| A gate on tick advance | `design_engine_core.md` §3.3. In single-player it has no participant: the host is unpaced |
 | A command endpoint per peer | the per-endpoint SPSC ring of `design_engine_core.md` §5.1 |
-| A submit call that names the tick | the only submit call there is. Local producers are paced, so they name their tick for the same reason peers do |
+| A submit call that names the tick | the paced submit of `design_engine_core.md` §5.1, which mods use for the same reason peers do. The host's single-player submit names no tick, and a networked session does not run the local player through it (§3.2) |
 | Session-wide pause and step | independent host-control fields feeding the gate check (`design_engine_core.md` §3.3). The session protocol distributes the agreed change |
 
-In single-player, `run_until = U64_MAX`, `stop_requested = 0` and the message backlog is
-below its high-water mark. The gate check then costs two loads and one comparison per tick,
-and never blocks. `design_python_api.md` §4.1 describes the host's pacing differently, and
-the two are not yet reconciled ([Q1](open_question.md#q1-how-is-the-host-paced)).
+In single-player, `run_until = U64_MAX`, `stop_requested = 0`, the message backlog is below
+its high-water mark, and there is no participant: the host is unpaced. The gate check then
+costs two loads and one comparison per tick, and it blocks only on a pause, the end of a
+step or the backlog (`design_engine_core.md` §3.3).
 
 M1 must keep two rules:
 

@@ -35,11 +35,12 @@ How to read this doc:
 
 **TL;DR**
 
-- The main loop is written in Python. The engine is stepped like a library.
+- The main loop is written in Python. The engine is driven like a library.
 - All pacing-critical and heavy work happens inside coarse native calls that release the
   GIL.
-- Sim and mod execution can run apart from that loop (§4.3) behind the same call sites.
-  Render stays on the Python loop.
+- In a windowed session the ticks run on a C++ sim thread, apart from the Python frame loop
+  (§4.3). Headless runs step the engine on the calling thread. Render stays on the Python
+  loop, and mods run on their own threads.
 
 The alternatives, and why they lost:
 
@@ -47,7 +48,7 @@ The alternatives, and why they lost:
 |---|---|---|
 | Launcher: blocking C++ `run()` (openage) | C++ | Rejected. It locks Python out while running, which breaks REPL, pytest and replay-harness workflows |
 | Stepping: Python pumps the engine | Python | Chosen. It matches the convention of simulation libraries (MuJoCo, pybullet, gym `env.step`, the Panda3D task pump). It is the best fit for the verification harness of `design_engine_core.md` §2.3 |
-| Background engine thread plus a control plane | C++ | Deferred, not rejected. It is sim-thread mode (§4.3), built over the same primitives |
+| Background engine thread plus a control plane | C++ | Chosen for the tick loop of a windowed session: the sim thread (§4.3). Python keeps the frame loop, and the sim thread runs only ticks |
 | Callback framework (`app.run(on_tick=...)`) | C++ | Rejected as the primary API. It re-enters the GIL at tick rate, and exceptions cross the C++ loop. Mods consume events and snapshots at their own mod host's pace instead (`design_modding.md` §4). No per-frame or per-tick callbacks exist. Whether every mod must still be paced every tick is open ([Q2](open_question.md#q2-must-every-mod-be-paced-every-tick)) |
 
 A survey of openage, Panda3D, MuJoCo and Godot found one deciding factor. Engines that ship
@@ -75,7 +76,7 @@ src/sim_estab/
   command.py      # typed command builders, batch submit (§7.1)
   snapshot.py     # zero-copy snapshot views (§7.2)
   event.py        # event types, drain/dispatch bus (§7.3)
-  loop.py         # reference loops: windowed / headless / replay (§4)
+  loop.py         # reference loops: windowed (sim thread) / headless / replay (§4)
   mod/            # mod manager — see design_modding.md
   upkeep/         # process-wide subsystems that outlive any Engine:
                   #   log.py = refcounted acquire/release over the C++ triad (§2)
@@ -118,6 +119,8 @@ with sim_estab.Engine(config) as engine:             # ctor = acquire; state = c
                                                      #   the caller's, mods or no mods
     mods.start()                                     # spawn hosts; they may now read the
                                                      #   tick-0 snapshot in on_load
+    engine.run_sim_async()                           # windowed: ticks run on the sim
+                                                     #   thread from here on (§4.3)
     run_windowed(engine, mods)                       # §4
 # __exit__: mods.stop() -> stop_sim_async() -> close()
 #   mods.stop() does NOT end the session; close() does.
@@ -125,6 +128,7 @@ with sim_estab.Engine(config) as engine:             # ctor = acquire; state = c
 # with no mods, the two mod lines are simply absent:
 with sim_estab.Engine(config) as engine:
     engine.start_session()
+    engine.run_sim_async()
     run_windowed(engine, None)
 ```
 
@@ -162,7 +166,7 @@ Rules:
   | In `configuring` | Calls |
   |---|---|
   | legal | `load_content`, `load_native_mod`, `register_hosts`, `register_view`, `load_replay`, `poll_input`, control calls (§3), `state` |
-  | raises `EngineStateError` | `update`, `step`, `render`, `run_sim_async`, `submit*`, `declare_ready`, `outcome*`, `snapshot()`, `view()`, `checksum()`, `drain_events`, `ModBus.start` |
+  | raises `EngineStateError` | `step`, `render`, `run_sim_async`, `submit*`, `outcome*`, `snapshot()`, `view()`, `checksum()`, `drain_events`, `ModBus.start` |
 
   `start_session()` is owner-thread-only (§6). It runs the ordered freeze of
   `design_engine_core.md` §2.4. It raises `ModLoadError` or `ReplayIdentityError` (§8)
@@ -197,7 +201,9 @@ Rules:
      without closing the engine. How the stopped mods then leave the gate is open
      ([Q9](open_question.md#q9-how-does-a-stopped-participant-leave-the-gate)).
   2. **`stop_sim_async()`**: the staged native join (§4.3) and the error rendezvous. It may
-     raise. It runs with the GIL released.
+     raise. It runs with the GIL released. It ends ticking for the session: the engine is
+     `stopped`, and no tick runs again. A session with no sim thread has nothing to join;
+     the call only sets the stop.
   3. **`close()`**: close the operation lease and wait for running calls, detach retained
      `PRIVATE` engine view blocks, then release native resources. It never raises.
 
@@ -260,8 +266,11 @@ entry paths; the list below it has all of them.
 
 ```
 created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(run_sim_async)─► running+sim-async
-   ▲                  │                                 │  ◄─(stop_sim_async ok)───────────┘
-   │                  │                                 ├──(join timeout)──────────► failed
+   ▲                  │                                 │                                  │
+   │                  │                                 │                                  ├─(join timeout)─► failed
+   │                  │                                 │                                  │ (stop_sim_async ok)
+   │                  │                                 │                                  ▼
+   │                  │                                 ├──(stop_sim_async ok)────────► stopped
    │                  │                                 ├──(host abandoned at stop)► failed
    │                  ├─(load/freeze fails)─► load_failed   (terminal)
    │                  │                                 │
@@ -281,12 +290,17 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
   engine `configuring`, and `load_mods` can be retried. That whole stage runs before
   `register_hosts` (`design_modding.md` §6).
 
-- **`failed` is a terminal state with eight entry paths, in two classes.**
+- **`stopped` ends ticking, not the engine.** `stop_sim_async()` enters it, whether or not a
+  sim thread ran. No tick runs again in the session, so `step()` and `run_sim_async()` raise
+  `EngineStateError` (§8). Reads still work: `snapshot()`, `checksum()`, `drain_events()` and
+  `outcome()`. `close()` releases as usual. To inspect a live session without ending it,
+  pause and step instead (§4.3).
 
-  **Live execution that will not stop or finish safely.** Six paths:
+- **`failed` is a terminal state with seven entry paths, in two classes.**
+
+  **Live execution that will not stop or finish safely.** Five paths:
   - the sim-thread join timed out (§4.3);
-  - `step()`'s deadline expired a second time (§4.3);
-  - the host participant's gate deadline expired a second time under `on_expiry = FAIL`
+  - a participant's gate deadline expired a second time under `on_expiry = FAIL`
     (`design_engine_core.md` §3.3);
   - an endpoint revocation timed out while waiting for submits already admitted
     (`design_engine_core.md` §5.1, `design_modding.md` §6). What a process host does here is
@@ -333,7 +347,7 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
   | shared SDL and GPU reference counts | not dropped. A later acquire would hand a live device to a process that lost track of one (`design_patterns.md` §3) |
 
   `on_failed_stop` (§3) chooses between raising and terminating the process. Which of the
-  eight paths it covers is open
+  seven paths it covers is open
   ([Q65](open_question.md#q65-which-failed-paths-does-on_failed_stop-cover)). `closed` is
   reachable only through a clean shutdown. The API never reports `closed` to mean "gave up".
 
@@ -520,8 +534,8 @@ Rules:
     for example a mod that slows time in the world. Model it then as core state changed by a
     real command. Never smuggle control calls into the input stream.
 - `on_failed_stop` chooses what a `failed` entry path (§2) does next. It covers the
-  sim-thread join timeout and an abandoned thread host, and §4.3 also applies it to
-  `step()`'s second expiry. Which of the other paths it covers is open
+  sim-thread join timeout and an abandoned thread host. Which of the other paths it covers
+  is open
   ([Q65](open_question.md#q65-which-failed-paths-does-on_failed_stop-cover)).
   - `"raise"` (the default) raises `EngineFailedError` and enters the terminal `failed`
     state. This suits interactive hosts that want to save unrelated work first.
@@ -554,31 +568,33 @@ Rules:
   snapshot, with no interpolation (`design_engine_core.md` §3). The accumulator and the wall
   clock live in C++, not in Python.
 - The loop crosses the boundary O(1) times per frame.
-- Threading has two modes, inline mode and sim-thread mode (§4.3), behind the same call
-  sites. User and mod code must not be able to tell which mode is running.
+- A windowed session runs its ticks on the C++ sim thread. The Python frame loop submits,
+  drains events, feeds the mod bus and renders, and never runs a tick (§4.1). A headless run
+  advances with `step(n)` on the calling thread (§4.2). §4.3 gives the rules for both.
+- **The frame loop never waits on the engine; it polls** (§4.3).
 
-### 4.1 Pattern: the reference windowed loop (inline mode)
+### 4.1 Pattern: the reference windowed loop
 
-The reference loop runs in inline mode, on the owner thread. Once per frame it pumps input,
-commands, events, ticks and rendering.
+The windowed loop runs on the owner thread, while the sim thread runs ticks beside it. Once
+per frame it pumps input, commands, events and rendering.
 
 ```python
-# pseudo-code — loop.run_windowed()
+# pseudo-code — loop.run_windowed(); the caller started the sim thread (§2)
 def run_windowed(engine, mods):              # `mods`: the engine-registered bus (§2),
                                              #   or None when no mods are loaded
+    open_handles = []                        # host-app commands whose tick has not run
     while not engine.stop_requested():
         inputs = engine.poll_input()         # SDL input/window events; owner thread
-        t = engine.next_tick()               # the tick the host is about to release
-        hs = engine.submit_batch(app.on_input(inputs), t)   # host-APP code, not engine: the
-                                             #   app's own commands, on the host endpoint,
-                                             #   named for t. Margin 0 (§7.1)
-        engine.declare_ready(t)              # the host is a participant like any other
+        open_handles += engine.submit_batch(app.on_input(inputs))
+                                             # host-APP code, not engine: the app's own
+                                             #   commands, on the host endpoint. No tick:
+                                             #   the next drain takes them (§7.1)
         events = engine.drain_events()       # ALWAYS drained, bus or no bus (§7.3)
         if mods:                             # engine domain events -> per-mod inboxes;
             mods.publish(events)             #   non-blocking fan-out
-        engine.update()                      # withdraws 0..n whole fixed ticks
-                                             #   (C++ clock + accumulator; GIL released)
-        app.on_outcomes(engine.outcomes(hs)) # ticks the host already released (§7.1)
+        open_handles = app.on_outcomes(engine.outcomes(open_handles))
+                                             # polls: `pending` until the command's tick
+                                             #   has run; the app keeps those handles
         engine.render()                      # presents the latest published snapshot;
                                              #   blocks on vsync (GIL released)
                                              #   -> paces loop at 60
@@ -589,17 +605,16 @@ Rules:
 - `app` in the sketch is the host application, not an engine object. Translating input into
   commands is application code. The sketch only shows *where* it crosses the boundary:
   `engine.submit_batch`, on the host endpoint.
-- **The four command lines are in this order for a reason**: the deadlock rule of §7.1.
-  Submit for `t`, release `t`, let the engine run, *then* read outcomes. Reading outcomes
-  before `declare_ready(t)` would wait for the tick the loop itself is holding up. The
-  engine raises `CommandOrderError` instead of letting the frame hang (§8). `outcomes()` is
-  read after `update()`, so it collects whatever has run. A frame that ran no tick simply
-  has nothing to report yet.
-- **The host is a participant**, so `declare_ready` is required: without it the gate never
-  opens. In exchange, the engine can never run past the loop. A command the app submitted
-  for `t` is in `t`. `design_engine_core.md` §3.3 describes the host's pacing as a run grant
-  instead, and the two are not yet reconciled
-  ([Q1](open_question.md#q1-how-is-the-host-paced)).
+- **The frame loop never waits on the engine; it polls.** Every call in the sketch except
+  `render()` returns at once, and `render()` waits only for vsync. A full host endpoint
+  returns `queue_full`. `outcomes()` reports `pending` for a command whose tick has not run
+  yet, and the app reads it again on a later frame (§7.1). So a slow frame, a breakpoint or
+  a dragged window delays only the frame. The sim keeps ticking, and nothing the loop calls
+  can park the owner thread while the sim waits for it (`design_engine_core.md` §3.3).
+- **The host names no tick.** The app submits on the host endpoint without one, and the
+  first drain after the submit takes the commands (§7.1). Each outcome reports the tick its
+  command ran in. The host is not a participant, so the sim never waits for the frame loop
+  (`design_engine_core.md` §3.3).
 - **There are two event streams, with different names.** `poll_input()` returns SDL input
   and window events. `drain_events()` empties the engine's own event ring (§7.3). They have
   different producers. The loop pumps both, and the mod bus fans out only the second.
@@ -613,18 +628,18 @@ Rules:
   commands on the host application's endpoint. That would tie capacity, capability checks,
   attribution and revocation to the wrong principal. It would also put a paced producer's
   tick behind another thread's scheduling (§7.1).
-- `engine.update()` reads the steady clock and takes whole ticks from the accumulator in
-  C++. Python never computes `dt`. So Python timing jitter, GC pauses and scheduler noise
-  can never make a run diverge from the recorded command stream, and transition determinism
+- The sim thread reads the steady clock and takes whole ticks from the accumulator in C++.
+  Python never computes `dt`. So Python timing jitter, GC pauses and scheduler noise can
+  never make a run diverge from the recorded command stream, and transition determinism
   (`design_engine_core.md` §2) is untouched. They *can* shift when live commands are
   submitted and which tick drains them. That changes the live stream itself, which is
   allowed, because session reproducibility is not promised. The record captures whatever
   actually happened.
-- Pacing comes from the vsync block inside `render()`, never from `time.sleep`.
-- Sim rate and frame rate are independent as *timesteps*. The accumulator separates the
-  fixed step from the frame's `dt`, and 30 Hz ticks under a 60 fps render is the normal
-  case. In inline mode their execution stays coupled: no tick runs while `render()` blocks
-  on vsync. Sim-thread mode separates execution too (§4.3).
+- Pacing of the frame loop comes from the vsync block inside `render()`, never from
+  `time.sleep`.
+- Sim rate and frame rate are independent, as timesteps and in execution. The accumulator
+  separates the fixed step from the frame's `dt`, and 30 Hz ticks under a 60 fps render is
+  the normal case. Ticks run on the sim thread while `render()` blocks on vsync.
 - `render()` takes from its engine view once per frame. That is one atomic exchange, which also
   carries its return header back (`design_engine_core.md` §3.5). It then copies the chunks
   it needs, on the CPU, into the renderer-owned upload ring, which fences guard. GPU uploads
@@ -633,8 +648,8 @@ Rules:
   identical. The frame still presents, because camera and UI are per-frame float state, but
   work derived from the tick may be cached or skipped.
 - Stopping: a quit command or a window-close event sets the stop flag, and `request_stop()`
-  sets it from code. A `KeyboardInterrupt` between pump calls unwinds through `__exit__` and
-  releases cleanly.
+  sets it from code. The loop then returns, and `__exit__` runs the shutdown sequence (§2).
+  A `KeyboardInterrupt` between pump calls unwinds through `__exit__` and releases cleanly.
 - The loop borrows the mod bus and never owns it. Host lifetime belongs to the engine's set
   of registered dependants (§2). So leaving this function, by return, exception or
   `KeyboardInterrupt`, cannot leave mod hosts running against a closing engine. A loop that
@@ -654,13 +669,16 @@ with Engine(replace(config, headless=True)) as engine:
                                              #   (design_engine_core.md §2.3)
     sim_estab.mod.load_mods(engine, policy)  # only what the header names; omit if none
     engine.start_session()                   # freeze: verifies identity vs the header
-    engine.step(n_ticks)                     # exact ticks: no clock, no render,
-                                             #   GIL released
+    engine.step(n_ticks)                     # exact ticks on this thread: no clock, no
+                                             #   render, GIL released
     assert engine.checksum() == golden
 ```
 
-- `step(n)` is the primitive under `update()`. CI, golden replays and notebooks use it, so
-  it must exist from the first build.
+- `step(n)` is the headless primitive. CI, golden replays and notebooks use it, so it must
+  exist from the first build. It runs `n` ticks on the calling thread and returns the tick
+  reached. The host is not paced, so a headless loop makes no per-tick call: commands the
+  host submitted before `step(n)` run in its first tick.
+
 - **A loaded replay puts the engine in `playback`, which closes every endpoint.** Every
   `submit*`, from every source including the host endpoint, returns `revoked`. `playback` is
   a mode, not an engine state. It is independent of §2's diagram: a replayed session goes
@@ -697,27 +715,33 @@ with Engine(replace(config, headless=True)) as engine:
   their endpoints closed, for debugging (`design_modding.md` §3.1). That is a selection
   choice and invisible to the record, since the endpoints are closed either way. A replay
   that never spawns them pays nothing and registers no participant. That is also why a
-  replay's gate has one term.
+  replay's gate has no participant at all.
 
-### 4.3 Threading modes
+### 4.3 Threading: the sim thread and `step(n)`
 
 The API commits to the artifacts (commands in, snapshots and events out) and to the pump
-call sites. It never commits to a threading model. Either mode can be swapped in without
-changing the API.
+call sites. Where ticks run follows from the kind of session:
 
-| Mode | Sim ticks | Render | The Python main loop does |
+| Session | Sim ticks | Render | The Python main loop does |
 |---|---|---|---|
-| inline mode (built first) | inline in `update()` | inline in `render()` | events → mod bus → update → render |
-| sim-thread mode | on the C++ sim thread (`run_sim_async()`) | inline in `render()` | events → mod bus → render |
+| windowed | on the C++ sim thread, started by `run_sim_async()` | inline in `render()` | submit → events → mod bus → outcomes → render |
+| headless (CI, golden replays, notebooks) | in `step(n)`, on the calling thread | none | submit → `step(n)` → read |
 
-- **Sim-thread mode is the important one.** A long sim tick cannot drop frames, and
-  fast-forward and pause become independent of render. It costs nothing in the API, because
-  the boundary mechanisms stay bounded and never block the sim (`design_engine_core.md`
-  §3.2, §5.1). An engine view publishes with one exchange and cannot fail. A submit into a full ring
+- **Why a windowed session runs a sim thread.** A long sim tick cannot drop frames, and a
+  slow frame cannot slow the sim. Fast-forward and pause become independent of render.
+  Games that run a real-time simulation under a frame loop make the same split: Factorio,
+  OpenTTD, Paradox's Clausewitz engine, Dwarf Fortress and Cities: Skylines all tick apart
+  from the loop that presents frames. It costs nothing in the API, because the boundary
+  mechanisms stay bounded and never block the sim (`design_engine_core.md` §3.2, §5.1). An
+  engine view publishes with one exchange and cannot fail. A paced submit into a full ring
   waits for space, for at most one tick, and the sim never waits for it
   (`design_engine_core.md` §5.1). Whether that wait can happen at all is open
   ([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)).
-- In sim-thread mode the sim thread is an implementation detail behind unchanged artifacts:
+- **Why a headless session has none.** CI, golden replays and notebooks want exact ticks, not
+  a clock. `step(n)` on the calling thread gives exactly `n` ticks, with no second thread to
+  start, wait for or join. So a headless session has no sim thread, and `run_sim_async()`
+  raises `EngineStateError` there.
+- The sim thread is an implementation detail behind unchanged artifacts:
   - **Ownership.** The sim thread alone owns the steady clock, the accumulator, the tick
     loop and all core state. Every other thread touches only the three artifacts: commands,
     engine views and events. This is the same one-way boundary as the Python/C++ split, one level
@@ -725,8 +749,8 @@ changing the API.
     owns core state while it runs. The two operations that read core state from the owner
     thread are the freeze's tick-0 publish and `checksum()`. Both happen at moments when the
     sim thread is provably not running a tick.
-  - **One gate predicate, fed by independent fields.** The host is a participant. Its
-    control state (`design_engine_core.md` §3.3) is:
+  - **One gate predicate, fed by independent fields.** The host is not a participant
+    (`design_engine_core.md` §3.3). Its control state is:
 
     | Field | Meaning |
     |---|---|
@@ -746,29 +770,25 @@ changing the API.
     independent store. So a concurrent resume cannot erase a stop, and draining the backlog
     cannot resume a sim the operator paused. **A backed-up event ring pauses the
     simulation.** It does not time the application out and does not end the session (§7.3).
-  - **Pump modes exclude each other.** While sim-thread mode runs, `update()` raises, and so
-    does `step()`, **with one exception: `step(n)` is legal while the sim thread runs and
-    the engine is paused.** A paused sim thread runs zero ticks, so a manual step is not
-    concurrent with anything. The rule exists to stop two pumps running at once, not to
-    forbid stepping a stopped clock.
+  - **`step(n)` on a running sim thread is legal only while paused.** A paused sim thread
+    runs zero ticks, so a manual step is not concurrent with anything. A `step()` while the
+    sim thread runs unpaused raises `EngineStateError`. The rule exists to stop two things
+    advancing the sim at once, not to forbid stepping a stopped clock.
 
-    Without the exception, pause-and-single-step, the ordinary way to inspect a live
-    session, would mean tearing down the sim thread and rebuilding it. That changes nothing
-    about the sim and everything about what else is running. `resume()` while a `step()` is
-    in flight is refused with `EngineStateError`, so the exception cannot become a second
-    pump. The replay and verification harness still uses the synchronous path, with the
-    thread stopped.
-  - **`step(n)` has two executors, and the threading mode decides which one runs**, not an
-    argument. With no sim thread (inline mode, headless, replay, CI), the owner thread runs
-    the ticks itself. In sim-thread mode, while paused, the sim thread runs them, and the
-    owner thread only grants and waits. The caller never runs a tick behind the sim thread's
-    back. Both return once tick `t+n` has published, and both return the tick reached. That
-    keeps this section's promise that user code cannot tell which mode is running.
+    Pause-and-single-step is the ordinary way to inspect a live session. Without it,
+    inspection would mean tearing down the sim thread and rebuilding it. That changes
+    nothing about the sim and everything about what else is running. `resume()` while a
+    `step()` is in flight is refused with `EngineStateError`, so the step cannot race a
+    resume.
+  - **`step(n)` has two executors, and whether a sim thread runs decides which one**, not an
+    argument. With no sim thread (headless, replay, CI), the calling thread runs the ticks
+    itself. With a sim thread, while paused, the sim thread runs them, and the owner thread
+    only grants and waits. The caller never runs a tick behind the sim thread's back. Both
+    return once tick `t+n` has published, and both return the tick reached.
   - **The return guarantee needs no bookkeeping of its own.** `step(n)` records `start =
     first_unexecuted` and sets the exclusive `run_until = start + n`, after checking for
-    overflow. It then waits while `first_unexecuted.load(acquire) < start + n`. It sleeps on
-    `tick_epoch`, a 4-byte atomic the sim increments after each tick's publish. It is 4
-    bytes because libstdc++ routes a futex wait through a shared proxy for any other size.
+    overflow. It then waits while `first_unexecuted.load(acquire) < start + n`, woken by the
+    sim after each tick's publish (`tick_epoch`, `design_engine_core.md` §3.3).
     `first_unexecuted` only ever increases, so nothing new is needed to make the wait
     correct. The release/acquire pair orders the sim thread's tick and its publish before
     `step()` returns. That makes `checksum()` on the next line well-defined, instead of a
@@ -777,24 +797,24 @@ changing the API.
     Two properties of this design are required. First, the waited-on condition is a counter
     that only increases, never a flag. `atomic::wait` is specified against transient values
     and may miss a condition that is true only briefly. Second, the gate's semaphore is
-    never the condition. Suppose `step(n)` acquired it `n` times instead. A deadline expiry
-    would leave the abandoned tick's release behind. The next `step(1)` would consume it and
-    report success after advancing the sim by zero ticks: a debugger that silently lies
-    about having stepped.
+    never the condition. Suppose `step(n)` acquired it `n` times instead. An abandoned wait
+    would leave a release behind. The next `step(1)` would consume it and report success
+    after advancing the sim by zero ticks: a debugger that silently lies about having
+    stepped.
   - **Quiescence needs no separate rendezvous.** After `step(n)` returns, `run_until` equals
     `first_unexecuted`, so the gate blocks the sim thread by the same predicate that
-    released it. The sim is provably parked. That is why `checksum()`, and any future state
-    inspector, is legal on the owner thread at that point; §6 files them as
-    owner-thread-only and quiescent. `pause()` remains a non-blocking control call. The
-    gate, not the call, makes the sim stand still.
-  - **Deadline.** The host participant registers with `on_expiry = FAIL`
-    (`design_engine_core.md` §3.3) and with the sim thread's response deadline. It is the
-    same number and the same escalation as the staged join below, since the failure is the
-    same: a thread that does not answer. On expiry, `step()` revokes the outstanding grant,
-    logs `critical` with the current tick and system name, and retries once. On a second
-    expiry the engine enters the terminal `failed` state. The call then raises
-    `EngineFailedError`, or hard-aborts, depending on `on_failed_stop`. A `request_stop()`
-    during a step returns the tick actually reached: stopping is not a failure.
+    released it. The sim is provably parked. With no sim thread, nothing runs between calls
+    at all. That is why `checksum()`, and any future state inspector, is legal on the owner
+    thread at that point; §6 files them as owner-thread-only and quiescent. `pause()`
+    remains a non-blocking control call. The gate, not the call, makes the sim stand still.
+  - **The wait has no deadline, and Ctrl+C interrupts it.** The owner thread waits in short
+    slices and checks for signals between them. A `KeyboardInterrupt` revokes the rest of
+    the grant: under the transition mutex it sets `run_until = first_unexecuted`, so the sim
+    parks at the gate after the tick it is running, and the exception propagates. A long
+    tick is not a fault, and the host is not a participant whose lateness could be one. So
+    nothing times the step out. A sim thread that never finishes its tick is caught at
+    shutdown, by the staged join below. A `request_stop()` during a step returns the tick
+    actually reached: stopping is not a failure.
   - **A stepped tick forces every due publication.** Cadence (§7.2) is a fast-forward
     optimization and never suppresses it. An engine view always has a writable block, so every due
     publication succeeds, and a stepped tick cannot silently drop one. `step()`'s return
@@ -803,11 +823,11 @@ changing the API.
     snapshot exists; pacing guarantees someone took it. Whether a stepped tick publishes
     engine views that are not due by their cadence is open
     ([Q12](open_question.md#q12-does-step-publish-every-engine-view-regardless-of-cadence)).
-  - **The wait releases the GIL** (§5 rule 2), for a stronger reason than in `update()`. The
-    owner thread blocks for up to the deadline, and every Python thread host would stall
-    behind it. On a GIL build, holding the GIL here also makes `KeyboardInterrupt`
-    undeliverable, because signal handlers run on the main thread at bytecode boundaries.
-    The deadline would become the only way out.
+  - **The wait releases the GIL** (§5 rule 2). The owner thread may wait a long time, and
+    every Python thread host would stall behind it. Releasing it between slices also lets
+    the signal check run. On a GIL build, signal handlers run only on the main thread at
+    bytecode boundaries, so a wait that held the GIL throughout would make
+    `KeyboardInterrupt` undeliverable.
   - **Pause and time scale are control calls** (§3), never thread suspension. Pause sets
     `run_until = first_unexecuted`. The time scale is a separate loop-level atomic. The
     thread keeps looping while it runs zero ticks, or a scaled number. Neither is recorded:
@@ -816,14 +836,9 @@ changing the API.
     wall-clock accumulator and no catch-up clamp: as fast as the core runs. Publication and
     event emission are unchanged, so render simply sees fewer of the states in between. The
     frame rate does not rise; the sim rate does. This is the windowed equivalent of headless
-    `step(n)`. It gives a fast-forward button without touching `tick_rate`.
-
-    **The two modes bound it differently, and must.** In sim-thread mode the sim thread
-    really runs free, because nothing waits on it. In inline mode, `update()` is called
-    *from* the frame loop, so "continuously" would mean never returning and never
-    presenting. There, unbounded means no *pacing*. A per-frame limit on ticks still
-    applies, and the loop stays responsive. Same call, same sequence of observable states,
-    different ceiling.
+    `step(n)`. It gives a fast-forward button without touching `tick_rate`. The frame loop
+    is not involved: the host declares nothing, so nothing it does per frame bounds the
+    speed.
   - **"Unbounded" means unpaced, not free of every limit.** The event ring is sized `C × D`.
     `D` is the drain interval the ring is sized for: the ticks between two `drain_events()`
     calls (§7.1). A sim running free runs more ticks per drain, so a literally unbounded
@@ -834,7 +849,7 @@ changing the API.
     This is the ordinary backlog pause of `design_engine_core.md` §5.2, not a special case.
     Like a `pause()`, it has no deadline. A host that stops draining altogether pauses the
     simulation and is reported; it is never timed out into `failed` (`design_engine_core.md`
-    §3.3). `D` therefore keeps its meaning in every mode, and the ring's size still holds
+    §3.3). `D` therefore keeps its meaning in every session, and the ring's size still holds
     under fast-forward. The backlog is checked only at the gate, so whether the ring can
     fill within one tick is open
     ([Q10](open_question.md#q10-can-the-event-ring-fill-within-one-tick)). The value of
@@ -843,12 +858,11 @@ changing the API.
     most publishes are never looked at, and publishing every tick is O(projection) of pure
     waste. Lowering an engine view's cadence during fast-forward costs nothing observable, since
     every reader reads the latest publish either way.
-  - **Command submission in sim-thread mode.** Every submission names its tick, in either
-    mode. The engine either runs it at that tick or refuses it. Nothing is moved to a later
-    tick, so there is no stale-stamp window to close (`design_engine_core.md` §5.1).
-    Sim-thread mode changes only how fast the named tick arrives. A producer in sim-thread
-    mode is paced like any other. It submits for a tick, releases it, and reads outcomes for
-    ticks it has already released.
+  - **Stopping ends ticking.** `stop_sim_async()` ends ticking for the session, and the
+    engine is `stopped` (§2). `stop_requested` is sticky, so a stopped sim thread is never
+    restarted: `run_sim_async()` and `step()` raise `EngineStateError` once the session
+    has stopped. `snapshot()`, `checksum()` and `close()` still work. To look at a live
+    session, pause it and step it; to end it, stop it.
   - **Loop discipline.** Sleep to absolute deadlines, so the loop does not drift. Limit
     catch-up with the **catch-up clamp**, the most ticks one wake may run after falling
     behind. A stall then degrades into slow motion instead of a spiral of death, and a
@@ -865,15 +879,25 @@ changing the API.
     ring hold it with no deadline, because nothing in a paused session can be late. Callers
     have two more waits. Both are declared, and both are bounded by structure rather than by
     a timer: admission (at most one tick) and outcome (until the named tick runs), §7.1.
-    That makes three waits in the whole system. Anything else that waits is a defect, and so
-    is any operation in this table that ever waits:
+    Both belong to paced producers, mods and peers, on their own threads.
+
+    **The owner thread waits for neither: the frame loop never waits on the engine; it
+    polls** (`design_engine_core.md` §3.3). A full host endpoint returns `queue_full`, and
+    `outcome(h)` returns `pending` until its tick has run. The owner thread waits in only
+    two places, and only on the sim or on a deadline: `step(n)` (above) and the shutdown
+    calls (§2). If a step's next tick is blocked by something only the owner can clear, the
+    step returns or raises instead of waiting.
+
+    That makes three waits on another party in the whole system. Anything else that waits
+    is a defect, and so is any operation in this table that ever waits:
 
     | Operation | Why it never waits |
     |---|---|
     | publish | one `acq_rel` exchange, with no wait for the reader. It may commit pages of its reserved block before filling it; that is budgeted tick work, not part of the atomic step, and the block's address never changes (`design_engine_core.md` §3.1, §3.2) |
     | Engine view take | one `acq_rel` exchange, which also hands the reader's return header to the publisher (`design_engine_core.md` §3.5) |
     | the command drain | reads whatever index each producer has made visible and stops there. A command submitted a moment later is drained at the next tick (`design_engine_core.md` §5.1) |
-    | `submit` into a ring with room | an operation lease, an endpoint lease, three bounded validity checks, then one release store. It never raises, and `queue_full` is a returned result (§6, §7.1). A *full* ring is the admission wait, which is declared above rather than absent here |
+    | `submit` into a ring with room | an operation lease, an endpoint lease, three bounded validity checks, then one release store. It never raises, and `queue_full` is a returned result (§6, §7.1). A *full* ring is the admission wait for a paced producer, which is declared above rather than absent here, and `queue_full` for the host |
+    | `outcome(h)` on the owner thread | returns `pending` until the tick that drained the command has run (§7.1) |
     | `drain_events` | never blocks. *Not* calling it is what pauses the sim (§7.3) |
 
     The join is `stop_sim_async()`, and it is staged:
@@ -894,16 +918,16 @@ changing the API.
     staged join releases the GIL** (§5 rule 2). Holding it would freeze every thread host
     for the join window. That is safe only because shutdown step 1 has already stopped the
     mod hosts (§2).
-- Render stays on the Python main loop in both modes, as checked against SDL3: **window =
-  event pump = swapchain present = Python main thread.** SDL3 GPU forbids swapchain
-  acquisition off the window's thread, and there are no plans to lift that restriction.
+- Render stays on the Python main loop, as checked against SDL3: **window = event pump =
+  swapchain present = Python main thread.** SDL3 GPU forbids swapchain acquisition off the
+  window's thread, and there are no plans to lift that restriction.
 - Known limit: a stall on the Python main thread (GC, or a rogue mod on the main thread) can
-  delay the *presentation* of an otherwise finished frame. Full render independence would
-  need a raw-Vulkan viz backend, which can present from any thread. That stays a possible
-  future backend swap behind the C++ viz interface, with no change to the Python API. It is
-  not planned until frame-pacing measurements demand it.
-- Window lifecycle (create, destroy, resize handling) stays on the main thread in every
-  mode.
+  delay the *presentation* of an otherwise finished frame. It never holds the sim, because
+  the host is not a participant. Full render independence would need a raw-Vulkan viz
+  backend, which can present from any thread. That stays a possible future backend swap
+  behind the C++ viz interface, with no change to the Python API. It is not planned until
+  frame-pacing measurements demand it.
+- Window lifecycle (create, destroy, resize handling) always stays on the main thread.
 
 ## 5. Boundary and performance rules
 
@@ -915,8 +939,7 @@ boundary, or how long a crossing holds the GIL. Rule 5 sets which thread may mak
    *loop's* crossings, which is why no mod command crosses in it (§7.1). A large mod batch
    costs that mod's thread, never the frame.
 2. **Every native call that may run long releases the GIL**
-   (`nb::call_guard<nb::gil_scoped_release>` on `update`, `step`, `render` and replay
-   operations). On GIL builds this keeps other Python threads, such as mod hosts, running.
+   (`nb::call_guard<nb::gil_scoped_release>` on `step`, `render` and replay operations). On GIL builds this keeps other Python threads, such as mod hosts, running.
    On free-threaded builds it detaches the thread state, so long native work never blocks
    stop-the-world GC. The same annotation is correct on both. **Blocking joins are
    included.** The staged join under `stop_sim_async()` and `close()` is the longest
@@ -990,9 +1013,9 @@ Rules:
 
 - The thread contract, per API family:
   - **Lifecycle and pump** (`Engine` constructor, `start_session`, `load_replay`,
-    `load_content`, `load_native_mod`, `register_hosts`, `close`, `update`, `step`,
-    `render`, `poll_input`, `drain_events`, `run_*_async`): externally synchronized, with
-    exactly one driving thread, the owner thread of §2. An always-on check raises
+    `load_content`, `load_native_mod`, `register_hosts`, `close`, `step`, `render`,
+    `poll_input`, `drain_events`, `run_*_async`): externally synchronized, with exactly one
+    driving thread, the owner thread of §2. An always-on check raises
     `EngineThreadError` (§2). The C++ layer below keeps its abort-on-invariant behaviour.
     `close()` is in this family but never raises; how the two combine is open
     ([Q13](open_question.md#q13-can-close-be-called-from-another-thread)).
@@ -1004,6 +1027,10 @@ Rules:
     Two threads sharing one endpoint is a usage error. Two threads on two endpoints never
     interact. Each call holds the operation lease above, and the endpoint lease of
     `design_engine_core.md` §5.1, until it has finished touching the ring.
+  - **The host endpoint's producer is the owner thread.** `engine.submit`,
+    `engine.submit_batch` and the host's `outcome` calls belong to it. None of them parks:
+    a full host endpoint returns `queue_full`, and `outcome(h)` returns `pending` until its
+    tick has run (§4.3).
   - **`engine.snapshot()`**: specified as thread-safe from any thread, on any build. It
     copies out of the default engine view under the owner thread's take, and touches no per-caller
     state. Its operation lease encloses the copy. This family matters because mods call
@@ -1020,8 +1047,8 @@ Rules:
     (§7.2). That is a lifetime consequence, not a thread-safety one.
   - **`checksum()`**: owner thread and quiescent. It is its own family, and the only one
     with a second condition. It reads core state, which the sim thread alone owns (§4.3). So
-    it is legal only while that thread stands still: sim-thread mode is not running, or it
-    is paused with no step in flight. The call confirms quiescence itself (§4.3) instead of
+    it is legal only while that thread stands still: no sim thread runs, or it is paused
+    with no step in flight, or the session has stopped. The call confirms quiescence itself (§4.3) instead of
     making the caller arrange it, so `step(1); checksum()` is correct as written. Calling it
     while the sim runs raises `EngineStateError`. Filing it anywhere else would make the
     verification harness's own idiom a contract violation.
@@ -1070,32 +1097,43 @@ Python bindings.
 
 ### 7.1 Commands (inbound, the only write path)
 
-Commands are the only way to change the world. Every command names its tick, gets two
-answers, and runs at that tick or not at all.
+Commands are the only way to change the world. Every command gets two answers. A paced
+command names its tick and runs at that tick or not at all. A host command names no tick
+and runs at the first tick that drains it.
 
 ```python
 # pseudo-code
 cmd = commands.spawn_unit(pos=(q, r), owner=player_id)   # typed builder -> packed struct
-h   = engine.submit(cmd, tick)          # host endpoint; ADMISSION for the named tick
-hs  = engine.submit_batch(cmds, tick)   # one crossing (§5 rule 1); one handle per command,
+h   = engine.submit(cmd)                # host endpoint; ADMISSION. No tick: the next
+                                        #   drain takes it
+hs  = engine.submit_batch(cmds)         # one crossing (§5 rule 1); one handle per command,
                                         #   in array order
-engine.declare_ready(tick)              # releases the tick (design_engine_core.md §3.3)
 ...
-res = engine.outcome(h)                 # what it DID at that tick — read after releasing it
+res = engine.outcome(h)                 # never waits: `pending` until the tick that drained
+                                        #   it has run, then what it DID and at which tick
+
+# a paced producer (a mod, design_modding.md §4.1) names its tick and releases it
+h   = ctx.submit(cmd, t)                # ADMISSION for the named tick
+ctx.declare_ready(t)                    # releases t
+res = ctx.outcome(h)                    # waits until t has run; t is already released
 ```
 
-**Every submission names its tick.** There is no unstamped call and no peer-only variant. A
-local caller and a network peer use the same function. What differs is one number their
-endpoint declared at the freeze, its **stamp margin**: 0, or the input delay. Nothing
-returns a lower bound and then chooses, because a lower bound is the one answer a submitter
-cannot act on.
+**A paced submission names its tick.** There is no unstamped paced call and no peer-only
+variant. A mod and a network peer use the same function. What differs is one number their
+endpoint declared at the freeze, its **stamp margin**: 0 for a mod, or a peer's input delay
+(`design_engine_core.md` §5.1). Nothing returns a lower bound and then chooses, because a
+lower bound is the one answer a submitter cannot act on.
 
-**Every producer is paced.** Submitting makes a caller a participant
-(`design_engine_core.md` §3.3): the tick does not advance until every source that acts in it
-has had its say. So waiting is how this API works, not a blocking mode with a non-blocking
-alternative. There is no unpaced submission path, because a producer the engine does not
-wait for is a producer whose commands can be dropped. How the host itself is paced is open
-([Q1](open_question.md#q1-how-is-the-host-paced)).
+**Every paced producer is a participant.** Submitting for a named tick makes a caller a
+participant (`design_engine_core.md` §3.3): the tick does not advance until every source
+that acts in it has had its say. So waiting is how this API works for mods and peers, not a
+blocking mode with a non-blocking alternative. A producer that named a tick the engine did
+not wait for would be a producer whose commands can be dropped.
+
+**The host is the one unpaced producer.** In single-player its commands name no tick, so
+none of them can be late, and nothing has to wait for the host. The frame loop never waits
+on the engine; it polls (§4.3). In a networked session the local player submits through its
+own peer endpoint instead (`design_multiplayer.md` §3.2).
 
 **One endpoint per producer, and an endpoint is single-producer.** A command is submitted by
 the call that submits it, on the calling thread, through an endpoint bound to its
@@ -1103,7 +1141,7 @@ the call that submits it, on the calling thread, through an endpoint bound to it
 
 | Principal | Endpoint | Margin | Call |
 |---|---|---|---|
-| host application (player input, tools) | the **host endpoint**, source id 0. Allocated at the freeze, opened when the session starts, revoked at shutdown after its running submits finish | 0 | `engine.submit` / `engine.submit_batch` |
+| host application (player input, tools) | the **host endpoint**, source id 0. Allocated at the freeze, opened when the session starts, revoked at shutdown after its running submits finish. Its producer is the owner thread (§6) | none: unpaced. Its commands name no tick, and the first drain after a submit takes them | `engine.submit` / `engine.submit_batch` |
 | logic mod (Tier 2) | the mod's stable endpoint, allocated at the freeze and bound to its assigned source id. Opened at `mods.start()` or on retry; revoked at shutdown step 1 after its running submits finish (`design_modding.md` §6) | 0 | `ctx.submit` / `ctx.submit_batch` |
 | network peer | one endpoint per peer, bound at the freeze, with its own receive thread | the input delay | the transport's `submit` |
 
@@ -1126,12 +1164,12 @@ Rules:
   |---|---|---|
   | Who | every producer, peers included | every producer |
   | Why | the alternative is dropping a command, and for a peer a dropped command is a certain desync | feedback, and the only place a rejection at application time is reported |
-  | Length | until space frees: at most one tick | until the named tick has run |
+  | Length | a paced producer: until space frees, at most one tick. The host: none; a full ring returns `queue_full` | a paced producer: until the named tick has run. The host: none; `pending` until its tick has run |
   | Can it fail? | only if the producer breaks its own contract (the table below) | no. It *reports* failures; it is not one |
 
-- **Admission is a wait, not a coin flip.** `submit` blocks until the ring has room. The
-  wait is bounded by one tick, because the sim frees a tick's worth of entries every tick.
-  It cannot deadlock. An endpoint's capacity is by definition at least one tick's worth of
+- **For a paced producer, admission is a wait, not a coin flip.** `submit` blocks until the
+  ring has room. The wait is bounded by one tick, because the sim frees a tick's worth of
+  entries every tick. It cannot deadlock. An endpoint's capacity is by definition at least one tick's worth of
   its own commands, so a producer inside its own allocation always fits. Whether the wait
   can happen at all is open ([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)).
   A pause wakes every waiter with `session_paused`, which means *retry*, never *failed*
@@ -1151,7 +1189,8 @@ Rules:
   **You may only wait for outcomes of ticks you have already released.** The engine knows
   who is paced and which tick each one holds. So a wait that breaks the rule raises
   `CommandOrderError` (§8) at once, naming the tick. The result is a loud error at the call
-  site, not a frozen session.
+  site, not a frozen session. The rule binds paced producers only. The host's `outcome(h)`
+  never waits, so it has nothing to deadlock on.
 
 - **One capacity rejection, and only one.** `queue_full` means *more than you allocated for
   this tick*: a producer breaking its own declaration, not a busy engine. An engine that is
@@ -1162,13 +1201,16 @@ Rules:
   | Result | Class | Meaning |
   |---|---|---|
   | `admitted{handle}` | none | in the ring for the tick you named; the handle reads the outcome |
-  | `queue_full` | contract | more than `capacity` commands stamped for one tick on this endpoint |
+  | `queue_full` | contract | more than `capacity` commands stamped for one tick on this endpoint. On the host endpoint: more than `capacity` commands waiting for the next drain |
   | `too_late` | contract | the named tick is strictly in the past |
   | `out_of_order` | contract | the named tick is earlier than one already named on this endpoint. Stamps never decrease, and this result enforces it |
-  | `over_margin` | contract | further ahead than this endpoint's declared margin; for a local producer, any tick but the current one |
+  | `over_margin` | contract | further ahead than this endpoint's declared margin; for a margin-0 producer, any tick but the current one |
   | `invalid` | contract | a malformed payload, or a capability the source does not hold |
   | `revoked` | lifecycle | this endpoint is not admitting: it is torn down, or the session is in playback (§4.2). Terminal for the caller |
   | `host_error` | transport | the submitter's own transport failed or timed out; process hosts only (`design_modding.md` §4.3) |
+
+  The host endpoint names no tick, so it never returns `too_late`, `out_of_order` or
+  `over_margin`.
 
   Results are returned, never delivered, and they never raise. A return value has no size
   limit, no second recipient and no overflow policy. So an outcome cannot be dropped, split
@@ -1568,10 +1610,10 @@ Rules:
 - Every C++ subsystem exception is bound (`nb::exception<x_error>(mod, "x_error",
   PyExc_RuntimeError)`, `design_patterns.md` §8) and surfaced under a Python-style name
   (`sim_estab.GpuError`, ...). No C++ exception ever crosses the boundary untranslated.
-- **Async errors** (sim-thread mode): an error on the C++ sim thread is captured, and the
-  sim thread stops safely. The exception is raised again at the next **rendezvous point** on
-  the driving thread: any pump call, `stop_sim_async()`, or an explicit
-  `engine.raise_if_failed()`. **The handoff is a three-state publication**
+- **Async errors** (the sim thread of a windowed session): an error on the C++ sim thread
+  is captured, and the sim thread stops safely. The exception is raised again at the next
+  **rendezvous point** on the driving thread: any pump call, `stop_sim_async()`, or an
+  explicit `engine.raise_if_failed()`. **The handoff is a three-state publication**
   (`design_engine_core.md` §1.1), never a Boolean that can become visible before its
   payload:
 
@@ -1605,20 +1647,21 @@ Rules:
   | Raised when | Type | Retryable? |
   |---|---|---|
   | Any new call once closing has linearized, or any call on a closed engine or handle (§2, §6, §7.2) | `EngineClosedError` | no; terminal for that engine |
-  | Any call once the engine is `failed`; `stop_sim_async()` on the final join timeout; `step()` when its deadline expires a second time (§2, §4.3) | `EngineFailedError` | no; terminal, and the process is poisoned |
+  | Any call once the engine is `failed`; `stop_sim_async()` on the final join timeout (§2, §4.3) | `EngineFailedError` | no; terminal, and the process is poisoned |
   | `view.take()` while an array view on the previous snapshot is alive (§7.2) | `ViewBusyError` | yes: drop the array views, or copy |
   | Any lifecycle or pump call off the owner thread (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
-  | `update()` while sim-thread mode runs; `step()` while sim-thread mode runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `checksum()` while the sim thread is not quiescent (§6); any pump call in a mode that forbids it (§4.3); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, stop the sim thread, use the right pump, or start the session first |
+  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `run_sim_async()` in a headless session; `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
   | `snap.column(...)` for a column outside the caller's capabilities (`design_modding.md` §4.1) | `ColumnNotGrantedError` | no; capabilities are fixed at load |
   | `load_mods` failing: a mod fails discovery, verification, handshake or column registration. Or `start_session` failing at the freeze's `on_session_start` (`design_modding.md` §6) | `ModLoadError` | only before the engine is touched. A policy-stage failure leaves the engine `configuring`, and `load_mods` may be retried. From `register_hosts` on, the engine is `load_failed`, and recovery is a new `Engine` |
-  | `outcome(h)` for a tick the caller has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang |
+  | A paced producer's `outcome(h)` for a tick it has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang. The host's `outcome(h)` never raises it: it returns `pending` |
   | The computed session identity differs from a loaded replay header (§4.2) | `ReplayIdentityError` | no; the artifact does not describe this build, schema or mod set |
 
   Neither of a command's two answers is in this table. Admission is `submit`'s return value,
   and the outcome is read from its handle. They are never exceptions and never events
-  (§7.1), and that includes `queue_full`. `CommandOrderError` is the one nearby raise, and
-  it is not an outcome. It reports that the *call itself* was made in an order the model
+  (§7.1), and that includes `queue_full`. `pending` is not in it either: it is an outcome
+  that does not exist yet, returned like any other. `CommandOrderError` is the one nearby
+  raise, and it is not an outcome. It reports that the *call itself* was made in an order the model
   forbids.
 
   `ViewBusyError` is one of the retryable types, which is why it is a distinct type rather
