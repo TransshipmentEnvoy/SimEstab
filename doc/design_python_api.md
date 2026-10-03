@@ -40,8 +40,8 @@ How to read this doc:
 - All pacing-critical and heavy work happens inside coarse native calls that release the
   GIL.
 - In a windowed session the ticks run on a C++ sim thread, apart from the Python frame loop
-  (§4.3). Headless runs step the engine on the calling thread. Render stays on the Python
-  loop, and mods run on their own threads.
+  (§4.3). Headless runs step the engine on the calling thread, or start the sim thread when
+  they want real time. Render stays on the Python loop, and mods run on their own threads.
 
 The alternatives, and why they lost:
 
@@ -633,7 +633,8 @@ Rules:
 - The loop crosses the boundary O(1) times per frame.
 - A windowed session runs its ticks on the C++ sim thread. The Python frame loop submits,
   drains events, feeds the mod bus and renders, and never runs a tick (§4.1). A headless run
-  advances with `step(n)` on the calling thread (§4.2). §4.3 gives the rules for both.
+  advances with `step(n)` on the calling thread (§4.2), or starts the sim thread when it
+  wants real time. §4.3 gives the rules for both executors.
 - **The frame loop never waits on the engine; it polls** (§4.3).
 
 ### 4.1 Pattern: the reference windowed loop
@@ -789,12 +790,15 @@ with Engine(replace(config, headless=True, event_drain="sink")) as engine:
 ### 4.3 Threading: the sim thread and `step(n)`
 
 The API commits to the artifacts (commands in, snapshots and events out) and to the pump
-call sites. Where ticks run follows from the kind of session:
+call sites. Where ticks run follows from one call, not from the kind of session:
+`run_sim_async()` starts the sim thread, and without it `step(n)` runs ticks on the calling
+thread.
 
-| Session | Sim ticks | Render | The Python main loop does |
+| Run | Sim ticks | Render | The Python main loop does |
 |---|---|---|---|
-| windowed | on the C++ sim thread, started by `run_sim_async()` | inline in `render()` | submit → events → mod bus → outcomes → render |
-| headless (CI, golden replays, notebooks) | in `step(n)`, on the calling thread | none | submit → `step(n)` → read |
+| windowed | on the C++ sim thread; the reference loop starts it with `run_sim_async()` | inline in `render()` | submit → events → mod bus → outcomes → render |
+| headless, stepped (CI, golden replays, notebooks) | in `step(n)`, on the calling thread | none | submit → `step(n)` → read |
+| headless, real time (a server node, a soak test, a recorder at 30 Hz) | on the C++ sim thread, started by `run_sim_async()` | none | submit → events → mod bus → outcomes, at its own pace |
 
 - **Why a windowed session runs a sim thread.** A long sim tick cannot drop frames, and a
   slow frame cannot slow the sim. Fast-forward and pause become independent of render.
@@ -805,10 +809,14 @@ call sites. Where ticks run follows from the kind of session:
   engine view publishes with one exchange and cannot fail. A paced submit into a full ring
   waits for space until the oldest tick in it has run, and the sim never waits for it
   (`design_engine_core.md` §5.1).
-- **Why a headless session has none.** CI, golden replays and notebooks want exact ticks, not
-  a clock. `step(n)` on the calling thread gives exactly `n` ticks, with no second thread to
-  start, wait for or join. So a headless session has no sim thread, and `run_sim_async()`
-  raises `EngineStateError` there.
+- **Why a stepped run has none.** CI, golden replays and notebooks want exact ticks, not a
+  clock. `step(n)` on the calling thread gives exactly `n` ticks, with no second thread to
+  start, wait for or join.
+- **A headless session may still run the sim thread.** Nothing in it needs a window: the
+  gate, the drains and the snapshot service work the same. A headless run that wants real
+  time calls `run_sim_async()`, as a windowed one does, instead of stepping in a Python loop
+  that would compute `dt` itself. Its owner thread then drains events in its own loop, or the
+  session declares a sink drain (§3). The rest of this section applies unchanged.
 - The sim thread is an implementation detail behind unchanged artifacts:
   - **Ownership.** The sim thread alone owns the steady clock, the accumulator, the tick
     loop and all core state. Every other thread touches only the three artifacts: commands,
@@ -1734,8 +1742,8 @@ Rules:
 - Every C++ subsystem exception is bound (`nb::exception<x_error>(mod, "x_error",
   PyExc_RuntimeError)`, `design_patterns.md` §8) and surfaced under a Python-style name
   (`sim_estab.GpuError`, ...). No C++ exception ever crosses the boundary untranslated.
-- **Async errors** (the sim thread of a windowed session): an error on the C++ sim thread
-  is captured, and the sim thread stops safely. The exception is raised again at the next
+- **Async errors** (whenever a sim thread runs): an error on the C++ sim thread is
+  captured, and the sim thread stops safely. The exception is raised again at the next
   **rendezvous point** on the driving thread: any pump call, `stop_sim_async()`, or an
   explicit `engine.raise_if_failed()`. **The handoff is a three-state publication**
   (`design_engine_core.md` §1.1), never a Boolean that can become visible before its
@@ -1778,7 +1786,7 @@ Rules:
   | `step()` under an owner drain when the event backlog reaches `high_water` (§4.3, §7.3) | `EventBacklogError` | yes: drain with `drain_events()`, then step again. The error names the tick reached |
   | Any lifecycle or pump call off the owner thread, `close()` included (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread. Nothing was touched |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
-  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `run_sim_async()` in a headless session; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
+  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
   | `snap.column(...)` for a column outside the caller's capabilities (`design_modding.md` §4.1) | `ColumnNotGrantedError` | no; capabilities are fixed at load |
   | `load_mods` failing: a mod fails discovery, verification, handshake or column registration. Or `start_session` failing at the freeze's `on_session_start` (`design_modding.md` §6) | `ModLoadError` | only before the engine is touched. A policy-stage failure leaves the engine `configuring`, and `load_mods` may be retried. From `register_hosts` on, the engine is `load_failed`, and recovery is a new `Engine` |
   | A paced producer's `outcome(h)` for a tick it has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang. The host's `outcome(h)` never raises it: it returns `pending` |

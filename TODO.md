@@ -148,9 +148,10 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         stride change would corrupt every frame with no error
 + [ ] **M6: first system, renderer, sim-thread mode** (`doc/design_engine_core.md` §7 step 5,
       `doc/design_python_api.md` §4.3)
-  + [ ] the sim thread for windowed sessions: `run_sim_async()`, and `stop_sim_async()`
-        with the staged join into `stopped`. The frame loop never waits on the engine; it
-        polls (`doc/design_python_api.md` §4.1, §4.3)
+  + [ ] the sim thread: `run_sim_async()`, and `stop_sim_async()` with the staged join into
+        `stopped`. Every windowed session runs it; a headless one may, for real time. The
+        frame loop never waits on the engine; it polls (`doc/design_python_api.md` §4.1,
+        §4.3)
   + [ ] `step(n)` on a paused sim thread: no deadline, waiting in slices that check for
         signals, so Ctrl+C revokes the grant (`doc/design_python_api.md` §4.3)
   + [ ] async error handoff: state `EMPTY → WRITING → READY`; claim before writing the slot,

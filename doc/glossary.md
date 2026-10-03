@@ -47,8 +47,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | owner-thread rule | The frame loop never waits on the engine; it polls. Only `snapshot()`, `step(n)` and the shutdown calls wait, and only on the sim or a deadline. | engine_core §3.3 |
 | host endpoint | The host's own command endpoint: source 0. Its producer is the owner thread. Unpaced: its commands name no tick, and the first drain after a submit runs them. | python_api §7.1 |
 | unpaced | Of an endpoint: its commands name no tick, so the gate never waits for it. Only the host endpoint, in single-player. | engine_core §5.1 |
-| sim thread | The C++ thread that runs ticks in a windowed session. | python_api §4.3 |
-| sim-thread mode | How a windowed session runs: ticks on the sim thread, started by `run_sim_async()`, while the frame loop submits, drains and renders. A headless session has no sim thread and runs ticks in `step(n)`. | python_api §4.3 |
+| sim thread | The C++ thread that runs ticks once `run_sim_async()` starts it: always in a windowed session, and in a headless one that wants real time. | python_api §4.3 |
+| sim-thread mode | Ticks run on the sim thread, started by `run_sim_async()`, while the owner thread submits, drains and, when windowed, renders. Every windowed session runs this way; a headless one does when it wants real time, and otherwise runs ticks in `step(n)`. | python_api §4.3 |
 | participant | A peripheral the core waits for before each tick, up to that participant's deadline. Every producer that names ticks is one; others can opt in with `paced=True`. | engine_core §3.3 |
 | recorder | A peripheral that submits nothing but must not miss a tick; it registers as a participant explicitly. | engine_core §3.3 |
 | conjunction | The set of active participants the gate waits for: a tick runs only when all of them are ready. | engine_core §3.3 |
