@@ -840,8 +840,8 @@ mapping `fixed<> → float` applied. There is one container *mechanism*, never o
   snapshots. Identity travels as the id column, which publish synthesizes from slot and
   generation. Snapshot rows are in slot order, so the id column is sorted ascending for
   every object type. A reader reads row `r`, takes `id[r]`, and names *that* id in any
-  command. Whether every engine view carries the id column is open
-  ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
+  command. Every engine view carries the id column unless it declares `identity=False`,
+  and every on-demand snapshot carries it (`design_engine_core.md` §3.1, §3.4).
 
   **Ids stay aligned across the boundary**: the id read from a tick-N snapshot is the id a
   command targets. The core resolves it when the command is consumed, at the tick it names.

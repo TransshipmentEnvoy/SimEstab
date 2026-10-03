@@ -206,7 +206,7 @@ frame-time problem.
 
 | Cap | Value | Reasoning |
 |---|---|---|
-| Engine views per session | **64** | Publish cost is a sum over due engine views (`design_engine_core.md` §3.1), so the number of terms must be known at construction. 64 is chosen to be far from binding: render, GUI, the default engine view and a few analytics taps come nowhere near it. The cap closes the sum; it is not meant to restrain a design. Each engine view's row width is uncapped (§5); the cap is on how many terms there are. Raising it also raises the worst-case snapshot memory in proportion, because that is a sum over the same terms (§5) |
+| Engine views per session | **64** | Publish cost is a sum over due engine views (`design_engine_core.md` §3.1), so the number of terms must be known at construction. 64 is chosen to be far from binding: render, GUI and a few analytics taps come nowhere near it. The cap closes the sum; it is not meant to restrain a design. Each engine view's row width is uncapped (§5); the cap is on how many terms there are. Raising it also raises the worst-case snapshot memory in proportion, because that is a sum over the same terms (§5) |
 | Paced participants | **256** | See §2.1. Each participant can add up to its declared deadline to a tick. They wait concurrently, so the worst case is `max(deadline)`, not the sum, which is why the count can be generous. The cap makes the participant set enumerable, scanned once per tick; it is not a restraint. The host is not one of them, so the simplest session has none |
 
 ## 3. Storage: chunk quantum

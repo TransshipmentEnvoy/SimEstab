@@ -201,7 +201,7 @@ static_assert(max_paced_participants <= max_sources,
               "participants share the source ceiling: submitting makes a peripheral a "
               "participant, so the two sets nearly coincide");
 
-static_assert(max_views > 0, "the engine registers a default engine view, so zero is unrepresentable");
+static_assert(max_views > 0, "a cap of zero would forbid the renderer's engine view, so no window could draw");
 static_assert(max_paced_participants > 0,
               "every paced producer is a participant, so a cap of zero would forbid every mod and peer");
 

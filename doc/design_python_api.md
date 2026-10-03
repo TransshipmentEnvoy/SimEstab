@@ -11,8 +11,9 @@ decided M0 values. `bind.cpp` still exposes the placeholder top-level `init`, `d
 and "session management".
 
 Scope of v1: every engine view is `PRIVATE`. The multi-reader `SHARED` mode is deferred to
-`design_engine_core.md` Appendix A, together with process-host engine views. So `engine.snapshot()`
-copies from the default engine view (§7.2), and a process host has no engine view.
+`design_engine_core.md` Appendix A, together with process-host engine views. So
+`engine.snapshot()` is a copy the engine makes on request (§7.2), and a process host has no
+engine view.
 
 Terms are defined in [glossary.md](glossary.md). Companion docs:
 
@@ -823,14 +824,13 @@ call sites. Where ticks run follows from the kind of session:
     nothing times the step out. A sim thread that never finishes its tick is caught at
     shutdown, by the staged join below. A `request_stop()` during a step returns the tick
     actually reached: stopping is not a failure.
-  - **A stepped tick forces every due publication.** Cadence (§7.2) is a fast-forward
-    optimization and never suppresses it. An engine view always has a writable block, so every due
-    publication succeeds, and a stepped tick cannot silently drop one. `step()`'s return
-    guarantee covers the completed core tick and its publication. A reader that must
-    *observe* every stepped tick still registers a paced engine view. Publication guarantees the
-    snapshot exists; pacing guarantees someone took it. Whether a stepped tick publishes
-    engine views that are not due by their cadence is open
-    ([Q12](open_question.md#q12-does-step-publish-every-engine-view-regardless-of-cadence)).
+  - **A stepped tick publishes exactly what any tick publishes.** Every engine view due by
+    its cadence (§7.2) is published, and no other. An engine view always has a writable
+    block, so every due publication succeeds, and a stepped tick cannot silently drop one.
+    `step()`'s return guarantee covers the completed core tick and its publication. A reader
+    that must *observe* every stepped tick registers a paced engine view at cadence 1.
+    Publication guarantees the snapshot exists; pacing guarantees someone took it. A reader
+    that wants the state after a step without registering anything calls `snapshot()`.
   - **The wait releases the GIL** (§5 rule 2). The owner thread may wait a long time, and
     every Python thread host would stall behind it. Releasing it between slices also lets
     the signal check run. On a GIL build, signal handlers run only on the main thread at
@@ -893,8 +893,8 @@ call sites. Where ticks run follows from the kind of session:
     **The owner thread waits for neither: the frame loop never waits on the engine; it
     polls** (`design_engine_core.md` §3.3). A full host endpoint returns `queue_full`, and
     `outcome(h)` returns `pending` until its tick has run. The owner thread waits in only
-    two places, and only on the sim or on a deadline: `step(n)` (above) and the shutdown
-    calls (§2). If a step's next tick is blocked by something only the owner can clear, the
+    three places, and only on the sim or on a deadline: `snapshot()` (at most one tick,
+    §7.2), `step(n)` (above) and the shutdown calls (§2). If a step's next tick is blocked by something only the owner can clear, the
     step returns or raises instead of waiting.
 
     That makes three waits on another party in the whole system. Anything else that waits
@@ -966,9 +966,8 @@ boundary, or how long a crossing holds the GIL. Rule 5 sets which thread may mak
    copy, and that is the right default for them.
 5. **Thread contract** (§6). The `Engine`'s pump and lifecycle calls are externally
    synchronized. `submit*` is single-producer per endpoint. `view.take()` belongs to the
-   engine view's single reader. Array views are freely shared. Whether `snapshot()` may be called
-   from any thread is open
-   ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)).
+   engine view's single reader. Array views are freely shared. `snapshot()` may be called
+   from any thread.
 
 ## 6. Normal + free-threaded Python
 
@@ -1041,14 +1040,16 @@ Rules:
     `engine.submit_batch` and the host's `outcome` calls belong to it. None of them parks:
     a full host endpoint returns `queue_full`, and `outcome(h)` returns `pending` until its
     tick has run (§4.3).
-  - **`engine.snapshot()`**: specified as thread-safe from any thread, on any build. It
-    copies out of the default engine view under the owner thread's take, and touches no per-caller
-    state. Its operation lease encloses the copy. This family matters because mods call
-    `ctx.snapshot()` from their own mod host threads (`design_modding.md` §4.1). Filing it
-    under "lifecycle and pump, externally synchronized" would make every mod snapshot a
-    contract violation. The default engine view is `PRIVATE`, with one reader, so whether other
-    threads can really call it is open
-    ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)).
+  - **`engine.snapshot()`**: thread-safe from any thread, on any build. It reads no engine
+    view. It posts a request and waits for the thread that runs ticks to make the copy at
+    its next tick boundary, or makes the copy itself when nobody runs ticks
+    (`design_engine_core.md` §3.1). Its operation lease encloses the wait and the copy. This
+    family matters because mods call `ctx.snapshot()` from their own mod host threads
+    (`design_modding.md` §4.1). Filing it under "lifecycle and pump, externally
+    synchronized" would make every mod snapshot a contract violation. On the owner thread it
+    is one of the three waits the owner-thread rule allows: at most one tick, and served even
+    while the sim is paused (§4.3). The request mechanism has a row in the mechanism register
+    (`design_engine_core.md` §1.1).
   - **`view.take()`**: only the `PRIVATE` engine view's single reader thread, whichever thread that
     is. A `PRIVATE` engine view has one reader by definition (`design_engine_core.md` §3.2). Two
     threads taking from one engine view is the same usage error as two producers on one endpoint.
@@ -1331,20 +1332,21 @@ Rules:
 
 ### 7.2 Snapshots (outbound state)
 
-State leaves the core through an engine view (`design_engine_core.md` §3.1). Python sees two
-surfaces over it, and which one you use decides which cost you pay. Every engine view is `PRIVATE`
-in v1.
+State leaves the core in two ways: a copy the engine makes when asked, or an engine view a
+reader registered (`design_engine_core.md` §3.1). Which one you use decides which cost you
+pay. Every engine view is `PRIVATE` in v1.
 
 ```python
 # pseudo-code
 
-# 1. The default: a copy out of the engine's default engine view. Any number, any thread,
-#    outlives everything. No registration, no lifetime rules, no refusals.
-snap = engine.snapshot()                     # process-owned copy
+# 1. The default: a copy made on request. Any number, any thread, outlives everything.
+#    No registration, no lifetime rules, no refusals. Waits at most one tick.
+snap = engine.snapshot()                     # process-owned copy, with the id column
 print(snap.tick, snap.column("pop.position")[0])
 
-# 2. Opt-in zero-copy: an engine view, registered before the freeze.
-engine.register_view("ui", columns=["pop.id", "pop.position"], cadence=1)
+# 2. Opt-in zero-copy: an engine view, registered before the freeze. Every engine view
+#    projects the id column unless it declines it with identity=False.
+engine.register_view("ui", columns=["pop.position"], cadence=1)
 ...
 view = engine.view("ui")                     # the handle; one owner, for the session
 
@@ -1360,7 +1362,7 @@ tick, watched, x = sample(view)              # only scalars escaped
 # 3. Row filtering: declare the predicate KIND at registration, steer its
 #    PARAMETERS per frame. The parameters ride the same exchange as the take.
 engine.register_view("render", columns=["pop.position", "pop.kind"],
-                     cadence=1, predicate="sphere")
+                     cadence=1, predicate="sphere", identity=False)   # draws; never looks up
 rv = engine.view("render")
 rv.set_predicate(centre=cam.pos, radius=cam.far * 1.5)   # conservative, on purpose
 with rv.take() as snap:                      # publishes the params, takes the block
@@ -1370,20 +1372,19 @@ print(rv.lag)                                # ticks behind; 0 means keeping up
 
 Rules:
 
-- **`engine.snapshot()` returns a copy.** It reads the default engine view: the full `[[=viz]]`
-  projection at cadence 1, with predicate `ALL`. That engine view is `PRIVATE`, and its reader is
-  the owner thread. `snapshot()` copies out of the block that thread holds, then returns
-  process-owned memory. Its operation lease encloses the copy (§6), so shutdown cannot free
-  the engine view under it.
+- **`engine.snapshot()` returns a copy, made on request.** It copies every `[[=viz]]` column
+  of every live row, with the `id` column, into process-owned memory. The thread that runs
+  ticks makes the copy at its next tick boundary, or at once if the sim is parked at the
+  gate, so a paused session answers too. When nobody runs ticks, the calling thread makes it
+  (`design_engine_core.md` §3.1). So the call waits at most one tick, plus the copy. Its
+  operation lease encloses the wait and the copy (§6), so shutdown cannot free anything under
+  it.
 
-  Because it copies instead of retaining, the owner thread's block is free again when the
-  call returns. So the default engine view never needs a retention rule, and no caller can cause a
-  refusal in another. It does not interact with any other reader and never returns a torn
-  snapshot. Most code should use this call. Making it the default keeps the ordinary
-  retained value free of engine lifetime rules. Its cost at large world sizes is open
-  ([Q4](open_question.md#q4-can-the-default-engine-view-afford-to-publish-everything-every-tick)),
-  and so is calling it from threads other than the owner thread
-  ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)).
+  No engine view stands behind it, so nothing is published for a reader who never asks, and
+  a session nobody inspects pays nothing. Calls that are pending at the same tick boundary
+  share one copy. The copy is immutable, so no caller can cause a refusal in another, and it
+  never returns a torn snapshot. Most code should use this call. Making it the default keeps
+  the ordinary retained value free of engine lifetime rules. Any thread may call it.
 - **Zero-copy needs a registered `PRIVATE` engine view.** Zero-copy means holding engine memory,
   and only a single-reader engine view can promise that the publisher will not write it
   (`design_engine_core.md` §3.2). Registration happens before the freeze
@@ -1429,9 +1430,9 @@ Rules:
   wherever a snapshot is, including `ModContext` (`design_modding.md` §4.1).
 - **Track ids, never snapshot rows.** A row of a tick-N snapshot means nothing at N+k:
   publish gathers only live rows, so an erase or create shifts every later row
-  (`design_data_container.md` §5.1). The `id` column is present in every projection, so
-  re-resolving is always possible. Whether it really is in every projection is open
-  ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)). One rule holds for every
+  (`design_data_container.md` §5.1). The `id` column is in every projection unless the
+  engine view declined it with `identity=False` (below), and in every `snapshot()` copy, so
+  re-resolving is always possible where a reader may need it. One rule holds for every
   object type: snapshot rows are in slot order, and an id's high half is its slot, so the
   `id` column is sorted ascending (`design_data_container.md` §2.2). `np.searchsorted` is
   therefore correct everywhere, and `snap.find` is the convenience built on it:
@@ -1444,12 +1445,13 @@ Rules:
 
   `snap.find` returns the row whose id equals `watched`, or `None`. The equality check
   matters: an id whose entity was erased has the same slot as any later occupant, but a
-  different generation, so a search for it finds a neighbour and the check rejects it.
-- **Cadence is per engine view**, declared at registration. There is no global snapshot-cadence
-  control call. An analytics engine view at `cadence=30` costs a thirtieth of a render engine view. A tick
-  under a `step()` grant attempts every engine view regardless of cadence, and every attempt
-  succeeds (§4.3). Whether `step()` really publishes engine views that are not due is open
-  ([Q12](open_question.md#q12-does-step-publish-every-engine-view-regardless-of-cadence)).
+  different generation, so a search for it finds a neighbour and the check rejects it. On a
+  snapshot from an engine view that declared `identity=False`, `snap.find` raises
+  `ValueError` (§8): there is nothing to look up.
+- **Cadence is per engine view**, declared at registration. There is no global
+  snapshot-cadence control call. An analytics engine view at `cadence=30` costs a thirtieth
+  of a render engine view. A tick under a `step()` grant publishes the same engine views as
+  any other tick: those due by their cadence (§4.3).
 - **The predicate kind is declared at registration; its parameters are set at run time.**
   `predicate=` takes one of `"all"` (the default), `"aabb"`, `"sphere"`, `"frustum"` or
   `"tag"` (`design_engine_core.md` §3.4). `view.set_predicate(**params)` writes the
@@ -1463,14 +1465,15 @@ Rules:
   - **`set_predicate` without a later `take()` does nothing.** It is not a control call and
     never enters the command ring. It can never affect the simulation, only which rows this
     engine view contains.
-- **A filtered engine view projects `pop.id` implicitly.** Row 3 of a filtered snapshot is not
-  entity 3. So any predicate other than `"all"` adds the `id` column, at 8 bytes per matched
-  row, whether or not it was requested. A renderer that only draws may declare
-  `identity=False` to decline it. GPU state must not key on a snapshot row across frames
-  anyway (`design_data_container.md` §5). Per-entity GPU state would key on slot and
-  generation instead, and how an engine view projects them is open
-  ([Q57](open_question.md#q57-gpu-per-entity-state-across-frames)). How `identity=False` fits with the `id` column being in
-  every projection is open ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
+- **Every engine view projects the `id` column unless it declines it.** Row 3 of a snapshot
+  is not entity 3. So every projection adds the `id` column, at 8 bytes per matched row,
+  whether or not it was listed. A renderer that only draws declares `identity=False` at
+  registration to decline it, and the freeze closes that declaration
+  (`design_engine_core.md` §2.4 step 3a, §3.4). GPU state must not key on a snapshot row
+  across frames anyway (`design_data_container.md` §5). Per-entity GPU state would key on
+  slot and generation instead, and how an engine view projects them is open
+  ([Q57](open_question.md#q57-gpu-per-entity-state-across-frames)). `snapshot()` always
+  carries `id`.
 - **`view.lag` and `view.matched_rows`** are the two counters the return header provides.
   `lag` is how many ticks behind the reader is, computed from the `last_consumed_tick` that
   the return header carries back. A single-reader engine view never skips a publish, so without
@@ -1665,6 +1668,7 @@ Rules:
   | Any new call once closing has linearized, or any call on a closed engine or handle (§2, §6, §7.2) | `EngineClosedError` | no; terminal for that engine |
   | Any call once the engine is `failed`; `stop_sim_async()` on the final join timeout (§2, §4.3) | `EngineFailedError` | no; terminal, and the process is poisoned |
   | `view.take()` while an array view on the previous snapshot is alive (§7.2) | `ViewBusyError` | yes: drop the array views, or copy |
+  | `snap.find(...)` on a snapshot from an engine view that declared `identity=False` (§7.2) | `ValueError` | no; the declaration is closed at the freeze. Use `snapshot()`, which always carries `id` |
   | Any lifecycle or pump call off the owner thread (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
   | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `run_sim_async()` in a headless session; `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |

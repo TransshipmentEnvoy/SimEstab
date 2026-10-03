@@ -70,7 +70,9 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | engine view | The only way data leaves the core. A channel from the sim to one reader, made of three blocks and one atomic word. Registered before the freeze. `EngineView` in C++; in Python, the object `engine.view()` returns. | engine_core §3.1, §3.2 |
 | `PRIVATE` mode | The only engine view mode in v1: one trusted reader, three blocks, no copying. | engine_core §3.1 |
 | `SHARED` mode | A deferred engine view mode for many readers, where each reader copies. Designed but not built. | engine_core Appendix A |
-| default engine view | The engine's own `PRIVATE` engine view, read by the host. `engine.snapshot()` copies from it. | engine_core §3.1 |
+| on-demand snapshot | What `snapshot()` returns: a copy of every `[[=viz]]` column of every live row, with `id`, made at the next tick boundary by the thread that runs ticks. It waits at most one tick, and calls pending at one boundary share one copy. No engine view stands behind it. | engine_core §3.1 |
+| executor | The thread that runs ticks: the sim thread, or the thread inside `step(n)`. Only it reads core state. A snapshot request with no executor makes its own copy, holding the executor role. | engine_core §3.1 |
+| `identity=False` | An engine view's declaration that it does not carry the `id` column. Closed at the freeze. | engine_core §3.4 |
 | block | One of an engine view's three payload buffers. The publisher, the reader and the "latest" slot each hold one at a time. | engine_core §3.2 |
 | publish | After a tick, the sim fills its writable block for each due engine view and swaps it in. Never waits, never skipped. | engine_core §3.2 |
 | take | The reader swaps its old block for the newest published one. | engine_core §3.2 |
@@ -223,7 +225,7 @@ the replacement for the other senses.
 | capacity | per-endpoint capacity, when unqualified. The prefixed API name `entity_capacity` (`EngineConfig.entity_capacity`, `default_entity_capacity`) sets an object type's cap | "cap" (object type, in prose); "event ring size"; "inbox size" |
 | generation | a slot's reuse counter, the low half of an id | "epoch" (the `SHARED` engine view's published word) |
 | `commands_per_tick` | only the manifest field | "C" (engine-wide total); "commands executed per tick" (the metric) |
-| shared | the `SHARED` engine view mode, and the OS term "shared memory" | "default engine view" (the host's `PRIVATE` engine view) |
+| shared | the `SHARED` engine view mode, and the OS term "shared memory" | "one copy" (what one boundary's snapshot requests receive) |
 | engine view | the engine mechanism. Never shortened to "view" in prose | "array view" (NumPy); "column span" |
 | publish | engine view publish, and the release-store "publication" idiom of engine_core §1.1 | "fan out" (mod bus); "submit" (commands) |
 | drain | command drain, `drain_events()`, inbox drain, per-worker log buffer drain | "wait for running calls" (leases at shutdown) |

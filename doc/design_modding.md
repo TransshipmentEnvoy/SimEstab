@@ -135,8 +135,9 @@ private_view      = false                   # true = a dedicated PRIVATE engine 
                                             #   granted columns; costs one projection
                                             #   copy per publish (§4.1). "paced" = the
                                             #   same, and the gate waits until the mod has
-                                            #   taken each publish. Default: copy from the
-                                            #   engine's default engine view.
+                                            #   taken each publish. Default: none; the
+                                            #   mod reads ctx.snapshot(), a copy made on
+                                            #   request.
 inbox_size        = 256                     # per-subscriber inbox capacity (§4.2);
                                             #   overflow behaviour is not declared —
                                             #   it follows the event's delivery class
@@ -169,7 +170,7 @@ The example requests `commands_per_tick = 4096`, above the endpoint capacity cap
 (`design_limits.md` §2). Both numbers stay as they are until the field's meaning is settled
 ([Q44](open_question.md#q44-what-commands_per_tick-in-a-manifest-means)). When
 `private_view` is false, a thread-host mod reads the world through `ctx.snapshot()`, a copy
-out of the default engine view (§4.1). A process host has no snapshot in v1.
+the engine makes on request (§4.1). A process host has no snapshot in v1.
 
 Rules:
 
@@ -313,7 +314,7 @@ class TrafficMod:
     def on_unload(self, ctx): ...
 
     def _pick_target(self, ctx):                 # own frame: views die on return
-        with ctx.snapshot() as snap:             # a copy out of the engine's default engine view
+        with ctx.snapshot() as snap:             # a copy made on request
             ids = snap.column("vehicle.id")
             return int(ids[0])
 
@@ -375,10 +376,9 @@ outcomes of the commands the mod submitted for that tick (§4.2).
   tick the mod is itself holding up raises `CommandOrderError` at once, instead of hanging
   the session (`design_engine_core.md` §5.1). So the natural order is submit, then
   `declare_ready`, then outcome. The loop in §4.2 follows it.
-- `snapshot()`: a copy out of the engine's default engine view (`design_python_api.md` §7.2). A mod
-  may take any number of them, from any thread
-  ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)), and a snapshot
-  outlives everything. There is no lifetime rule and no refusal, though the call still
+- `snapshot()`: a copy the engine makes on request, at the next tick boundary
+  (`design_python_api.md` §7.2). It waits at most one tick. A mod may take any number of
+  them, from any thread, and a snapshot outlives everything. There is no lifetime rule and no refusal, though the call still
   raises the normal engine lifecycle errors. It is the ordinary way a thread-host mod reads
   the world, and its cost is the copy. A process host has no snapshot in v1 (§4.3).
   - **A snapshot is already a copy**, so carrying state from one tick to the next needs
@@ -565,7 +565,7 @@ first.
 
 | Aspect | Thread host (default) | Process host (opt-in, by manifest or policy) |
 |---|---|---|
-| Snapshot access | an engine view in engine memory: the default engine view through `ctx.snapshot()`, or a dedicated `PRIVATE` engine view if the manifest asks for one | **none in v1.** A `PRIVATE` engine view cannot face a sandbox, so process-host snapshots wait for the `SHARED` mode (`design_engine_core.md` Appendix A). Their design is below |
+| Snapshot access | `ctx.snapshot()`, a copy made on request, or a dedicated `PRIVATE` engine view in engine memory if the manifest asks for one | **none in v1.** A `PRIVATE` engine view cannot face a sandbox, so process-host snapshots wait for the `SHARED` mode (`design_engine_core.md` Appendix A). Their design is below |
 | Commands | submitted in-process, straight into the endpoint's ring | IPC, using the canonical command payload schema (identical to replay files) inside a transport-specific envelope |
 | Events | delivered in-process, into the inbox | IPC, using the canonical **event** payload schema: the same encoding rules, but **not** in replay files (below) |
 | `ctx.submit_batch` | a direct call; the call returns admission | one frame out and one reply frame back from the supervisor; the call returns admission |

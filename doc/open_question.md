@@ -14,28 +14,6 @@ so on).
 
 ## Blocks M1
 
-### Q3. Can `engine.snapshot()` be called from any thread?
-
-`python_api` §6 and §7.2, and `modding` §4.1, say yes. But it copies from the default engine view,
-which is `PRIVATE`: one reader only (`engine_core` §3.1, §3.2). A second thread either races
-the reader's take or copies a block the publisher is about to overwrite. Allowing it needs a
-lock or pin on the reader side, which is a new cross-thread mechanism missing from the
-mechanism register (`engine_core` §1.1).
-
-### Q4. Can the default engine view afford to publish everything every tick?
-
-The default engine view projects every `[[=viz]]` column of every row, every tick (`engine_core`
-§3.1). At 10⁷ rows that is about 320 MB per publish, or 9.6 GB/s at 30 Hz (`limits` §5), and
-the cost is paid even when nobody calls `snapshot()`. Options: make the default engine view
-opt-out, lazy, less frequent or filtered. Also blocks M5.
-
-### Q5. Is the `id` column in every projection?
-
-`python_api` §7.2 and `data_container` §5.1 say yes. `engine_core` §3.4 says an unfiltered
-engine view need not carry it, and `python_api` §7.2 also offers `identity=False`. If `id` can be
-left out, it must become one of the declarations closed at the freeze (`engine_core` §2.4),
-and snapshot lookups by id cannot work on such an engine view. Also blocks M5.
-
 ### Q10. Can the event ring fill within one tick?
 
 The event ring is sized `C × D`, which assumes events are bounded by commands (`engine_core`
@@ -53,11 +31,6 @@ mutex and notify a parked sim, and the sim must recompute the backlog inside its
 re-check (`engine_core` §3.3's wake-up rule). §5.2 requires the wake-up but does not give the
 drain's exact steps, and its pseudo-code recomputes the backlog "before the gate". The
 mechanism register (§1.1) has no row for it.
-
-### Q12. Does `step()` publish every engine view regardless of cadence?
-
-`python_api` §4.3 and §7.2 say a stepped tick publishes every engine view. `engine_core` §3.1 and
-`limits` §1 publish only engine views that are due by their cadence.
 
 ### Q13. Can `close()` be called from another thread?
 

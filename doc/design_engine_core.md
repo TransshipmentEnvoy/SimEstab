@@ -157,13 +157,14 @@ specified:
 | **Tick progress** | sim → threads waiting for a tick to run | the sim's store of `first_unexecuted` under `gate.m` after each tick's publish (G5) | the sim takes a short lock per tick; a waiter blocks until the tick runs, the owner thread in interruptible slices | §3.3 |
 | **Operation lease** | any-thread API caller ↔ owner's `close()` | successful lease: the second acquire load of the access state; close: the `OPEN → CLOSING` CAS | call side wait-free; close drains under the shutdown deadline | `design_python_api.md` §2, §6 |
 | **Async error handoff** | sim → owner thread | `error_state.store(READY, release)` after the winning producer fills the slot | wait-free; read at the next rendezvous | `design_python_api.md` §8 |
+| **Snapshot request** | any thread → the thread that runs ticks, and back | request: the increment of `gate.snapshot_requests` under `gate.m`; serve: handing the copy to the pending requests under `gate.m` | the requester blocks for at most one tick plus one copy; the executor never waits for a requester | §3.1 |
 | **Staged join** | owner thread → sim | `stop_requested` stored under `gate.m`, with a notify if the sim is parked (§3.3); `std::thread::join` | owner blocks under a deadline | `design_python_api.md` §4.3 |
 
-That is ten mechanisms. Most of their steady-state work is a few atomic operations and, on
-the sim, one short lock per tick. Four contain a declared wait, and all four are the same
+That is eleven mechanisms. Most of their steady-state work is a few atomic operations and,
+on the sim, one short lock per tick. Five contain a declared wait, and all five are the same
 kind of wait. The core waits for a participant; a producer waits for ring space; a producer
-waits for a tick it has already released; and the owner thread waits for the ticks a step
-granted. Every park in the engine follows the one wake-up rule of §3.3. How an event drain
+waits for a tick it has already released; the owner thread waits for the ticks a step
+granted; and a snapshot request waits for the next tick boundary. Every park in the engine follows the one wake-up rule of §3.3. How an event drain
 wakes a sim parked on the event backlog has no row yet
 ([Q11](open_question.md#q11-how-does-draining-events-wake-the-sim)).
 
@@ -370,9 +371,8 @@ terminal state instead of a half-started session.
    and a host that fails to start renumbers nobody.
 
    3a. **Close the engine view and participant registries** (§3.1, §3.3). Each engine view's declarations
-   are now final: its projection spec, its row predicate kind (§3.4), its cadence, and
-   whether it is paced. Whether an engine view may leave out the id column is open
-   ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)). The participant set,
+   are now final: its projection spec, whether it carries the `id` column (§3.4), its row
+   predicate kind, its cadence, and whether it is paced. The participant set,
    and each participant's deadline and expiry policy, are final too. Both registries close
    here for the same reason: they set the per-tick cost. Publish cost is a sum over engine views,
    and latency is the largest deadline over participants. A cost that can change during a
@@ -477,9 +477,7 @@ registry (§2.4 step 3a). Each engine view declares:
 | **row predicate kind**: which rows | This decides whether 10⁷ live rows are affordable at all (§3.4). The kind is fixed here so the cost model is closed; its parameters change per publish through the return header (§3.5) |
 | **cadence**: publish every `k` ticks | An analytics engine view at `k = 30` costs a thirtieth of a render engine view. Cadence is per engine view; there is no global cadence setting |
 | **paced**, with a deadline | A reader that must see every tick registers a paced engine view and becomes a participant (§3.3) |
-
-Whether an engine view may leave out the id column is open
-([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
+| **identity**: whether the `id` column is projected | On unless declined. A reader that never needs to know which entity a row is, such as a renderer, declares `identity=False` and saves 8 bytes per matched row (§3.4) |
 
 **A paced engine view's take is its declaration.** Taking the block of tick `t` declares the
 reader ready through `t + k`, where `k` is the view's cadence: up to and including its next
@@ -501,15 +499,9 @@ Three rules follow from this:
   block-state words that the publisher reads as availability and never dereferences
   (Appendix A, `design_modding.md` §4.3). A thread-host mod is trusted and registers
   normally.
-- **The engine holds one default engine view.** It is `PRIVATE` and owned by the host thread. It
-  projects every `[[=viz]]` column at cadence 1 with the `ALL` predicate.
-  `engine.snapshot()` copies from it (`design_python_api.md` §7.2), and a reader with no
-  declared needs gets it. Nobody has to register anything to see the world. `snapshot()`
-  copies instead of retaining, so the owner's block is free again before the call returns,
-  and the default engine view needs no retention rule. Its cost at large world sizes is open
-  ([Q4](open_question.md#q4-can-the-default-engine-view-afford-to-publish-everything-every-tick)),
-  and so is calling `snapshot()` from other threads
-  ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)).
+- **A snapshot nobody registered for is made on request.** `engine.snapshot()` and a mod's
+  `ctx.snapshot()` need no engine view (`design_python_api.md` §7.2). Nobody has to register
+  anything to see the world, and nothing is published for a reader who never asks. Below.
 - **The number of engine views is capped** (`design_limits.md` §2.3), because publish cost is a sum
   over them. The cap bounds the number of terms in that sum. Projection width and matched
   rows are measured, not capped.
@@ -519,9 +511,9 @@ Three rules follow from this:
 - For each engine view due this tick by its cadence, the sim does four things. It reads the
   reader's return header (§3.5) and evaluates the row predicate to a mask. It gathers the
   declared columns of the matched rows into the writable block. Then it publishes the block
-  with one exchange. §3.4 covers the predicate and §3.2 the mechanism. Whether `step()`
-  publishes engine views that are not due is open
-  ([Q12](open_question.md#q12-does-step-publish-every-engine-view-regardless-of-cadence)).
+  with one exchange. §3.4 covers the predicate and §3.2 the mechanism. A tick under a
+  `step()` grant publishes exactly the same engine views as any other tick: those due by
+  their cadence (`design_python_api.md` §4.3).
 - **Publishing never waits.** It may commit memory: a block commits pages as this tick's
   matched rows reach them (see block memory below).
 - **A `PRIVATE` engine view always has a writable block**, so a due publish always happens and is
@@ -551,6 +543,35 @@ Three rules follow from this:
   semaphore. A reader that must receive every tick registers a paced engine view, becomes a
   participant (§3.3), and pays for that guarantee at the gate. A reader that only wants to
   shed load sends a cadence hint (§3.5) and stays out of the gate.
+
+**On-demand snapshots.** `snapshot()` is a request, not a read, and any thread may make it.
+It touches no engine view. The thread that runs ticks makes the copy, at a moment when no
+tick is running:
+
+| When the request arrives | Who copies, and when |
+|---|---|
+| the sim thread is running a tick | the sim thread, right after that tick's publish, before the next gate check |
+| the sim thread is parked at the gate: paused, or held by the backlog or a participant | the sim thread, at once. The request wakes it; it copies and parks again |
+| a `step(n)` is running ticks on its calling thread | that thread, at its next tick boundary |
+| nobody runs ticks: a headless session between steps, before `run_sim_async()`, or a stopped session | the requesting thread itself, holding the executor role (below) while it copies |
+
+- **What it copies.** Every `[[=viz]]` column of every live row, with the `id` column,
+  converted to float as a publish converts (§3.4, `design_data_container.md` §5.1). A mod
+  sees only the columns in its capabilities (`design_modding.md` §4.1).
+- **One copy per serve.** Every request pending when the copy is made shares it. The copy is
+  immutable, so sharing costs nothing, and many callers in one tick cost one projection.
+- **The wait is at most one tick, plus the copy.** A paused session serves requests too,
+  because a parked sim wakes for them. A request never delays the sim and never changes core
+  state.
+- **The executor role.** Only the thread that runs ticks reads core state (§3.3). When
+  nobody runs ticks, the requester holds that role for the length of one copy. A `step(n)`
+  or `run_sim_async()` that starts meanwhile waits for that one copy to finish.
+- **Mechanism.** A request increments `gate.snapshot_requests` under `gate.m`, notifies a
+  parked sim, and waits on `gate.progress_cv` until it is served. The executor copies outside
+  the mutex. It then hands the copy to every pending request and notifies, under `gate.m`. So
+  the wait follows the wake-up rule of §3.3. Its register row is in §1.1.
+- **Cost.** One projection per serve, charged to the tick budget below. A session nobody
+  inspects pays nothing.
 
 **CPU/GPU lifetime boundary: the GPU never reads engine view memory.** `render()` copies the
 `[[=gpu]]` columns on the CPU into a **staging transfer buffer**, then unmaps it. Under the
@@ -644,6 +665,7 @@ endpoint to narrow, just as the per-engine-view figure does for publish.
 | Terminal commit | O(erases + creates + links into erased entities), sequential | the tick's staged creates and erases. No step is O(rows): rows never move (`design_data_container.md` §2.2) |
 | Checksum | tick digest: O(types + commands), every tick. Rolling checksum: 1/N of a full pass per tick, when enabled. Full checksum: a full pass per tick | the level in use (§2.3). The full checksum runs only in CI, certification and desync bisecting, never in a shipped session |
 | Upload bytes per frame | the render engine view's spec over its matched rows, whole columns | same treatment as publish |
+| On-demand snapshot | one projection of every `[[=viz]]` column over every live row, once per serve, shared by every request it serves | the requests; measured like publish, and paid only when someone asks (above) |
 | Command drain and execution | O(commands stamped for this tick) | `C = Σ capacity(endpoint)` over the registered endpoints (§5.1, `design_limits.md` §2). Only a session that registers that many endpoints, each at full capacity, reaches it |
 | System execution | the actual simulation work | not yet measured |
 
@@ -789,6 +811,7 @@ struct Gate {
     std::condition_variable progress_cv;  // threads waiting for a tick to run park here
     Blocker                 parked;     // why the sim is parked; NONE while it runs
     u32                     progress_waiters;
+    u32                     snapshot_requests;  // pending snapshot() calls (§3.1)
 };
 Participant       participants[N_PARTICIPANTS];   // fixed at the freeze
 HostControl       host;
@@ -823,9 +846,11 @@ for (;;) {
         if (blocker == STOP) return;
         std::unique_lock lk(gate.m);
         if (blocker_for(t) != blocker) continue;             # (G2) re-check under the mutex
+        if (gate.snapshot_requests) { lk.unlock(); serve_snapshots(); continue; }  # (G6)
         gate.parked = blocker;
         woke = gate.sim_cv.wait_until(lk, absolute_deadline(blocker, t),
-                                      [&] { return blocker_for(t) != blocker; });
+                                      [&] { return blocker_for(t) != blocker
+                                                || gate.snapshot_requests; });
                                                              # THE ONE WAIT; releases gate.m
         gate.parked = NONE;
         lk.unlock();
@@ -837,7 +862,9 @@ for (;;) {
     {   std::lock_guard lk(gate.m);
         first_unexecuted.store(t + 1, release);              # (G5) the tick has run
         if (gate.progress_waiters) gate.progress_cv.notify_all();
+        requested = gate.snapshot_requests;
     }
+    if (requested) serve_snapshots();                        # (G6) at the tick boundary
     ++t;
 }
 
@@ -983,11 +1010,13 @@ is paused. So every call the frame loop makes returns at once:
 | `outcome(h)` | `pending`: the tick that drains the command has not run yet |
 | `drain_events()` | an empty batch; it never blocks |
 
-Two kinds of call wait, and they wait only on the sim or on a deadline, never on something
-only the owner thread can do. `step(n)` waits for the sim to run its ticks. If the next tick
-is blocked by a condition only the owner can clear, such as the event backlog (§5.2), it
-returns or raises instead of waiting. The shutdown calls, `stop_sim_async()` and `close()`,
-wait under the shutdown deadline (`design_python_api.md` §2). Mods and peers keep their
+Three kinds of call wait, and they wait only on the sim or on a deadline, never on
+something only the owner thread can do. `snapshot()` waits for the next tick boundary, at
+most one tick, and is served even while the sim is paused (§3.1). `step(n)` waits for the
+sim to run its ticks. If the next tick is blocked by a condition only the owner can clear,
+such as the event backlog (§5.2), it returns or raises instead of waiting. The shutdown
+calls, `stop_sim_async()` and `close()`, wait under the shutdown deadline
+(`design_python_api.md` §2). Mods and peers keep their
 waits (§5.1). They run on their own threads, and the owner thread never waits for them.
 
 Pause, single-step, backpressure and shutdown still form one gate predicate, but no two
@@ -1134,12 +1163,15 @@ rows that passed. This split has three benefits:
 - the parameters stay small, so the return header can be a fixed struct rather than a
   variable-length message.
 
-**A filtered engine view carries the id column; an unfiltered one need not.** Rows 3, 17 and 902
-mean nothing to a reader without the id column. So an engine view whose predicate is not `ALL`
-includes `id` automatically, at 8 bytes per matched row. The render engine view is the exception.
-The GPU may not key on a snapshot row across frames anyway (`design_data_container.md` §5),
-so a renderer that only draws needs no id and does not pay for one. Whether an engine view may leave out the id column at all, and how it declares that, is
-open ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
+**Every engine view carries the id column unless it declines it.** Rows 3, 17 and 902 mean
+nothing to a reader without the id column. So every projection includes `id`, at 8 bytes per
+matched row, whatever its predicate. A reader that never needs to know which entity a row is
+declares `identity=False` at registration, and the freeze closes that declaration with the
+rest (§2.4 step 3a). The render engine view is the usual case. The GPU may not key on a
+snapshot row across frames anyway (`design_data_container.md` §5), so a renderer that only
+draws needs no id and does not pay for one. Looking an entity up by id in such an engine
+view's snapshot raises (`design_python_api.md` §7.2). An on-demand snapshot always carries
+`id` (§3.1).
 
 **Filtering is turned on by measurement.** `ALL` is the default, and it is right at 10⁵ live
 rows, where a full projection is a few megabytes and a predicate would add complexity for no
