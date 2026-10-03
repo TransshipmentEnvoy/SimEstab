@@ -28,9 +28,8 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         (`doc/design_engine_core.md` §2.4, `doc/design_python_api.md` §2)
   + [ ] the headless executor: `step(n)` runs the tick loop on the calling thread and
         returns at its own grant or a stop. It checks for signals at tick boundaries, so
-        Ctrl+C ends the step (`doc/design_python_api.md` §4.3). The executor role, which a
-        snapshot copy also takes while no tick runs (`doc/design_engine_core.md` §3.1,
-        §3.3)
+        Ctrl+C ends the step (`doc/design_engine_core.md` §3.3,
+        `doc/design_python_api.md` §4.3)
   + [ ] the gate: one `ready_through` per participant (only ever increases), the gate mutex
         with a condition variable for blocking and deadlines, and `first_unexecuted` as the
         next tick to run, stored under the mutex after each publish. Every gate input
@@ -51,9 +50,10 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         (`doc/design_engine_core.md` §3.1, §3.2). A stepped tick publishes only the views
         due by cadence. The multi-reader `SHARED` mode is specified but not built (Appendix
         A)
-  + [ ] the on-demand snapshot: `snapshot()` from any thread posts a request; the executor
-        copies every `[[=viz]]` column with `id` at its next tick boundary, and requests
-        pending at one boundary share the copy (`doc/design_engine_core.md` §3.1)
+  + [ ] the on-demand snapshot: `snapshot()` on the owner thread, while no tick can run,
+        refills the one snapshot buffer with every `[[=viz]]` column and `id` in one pass;
+        a call while array views of the previous result are alive raises `ViewBusyError`
+        (`doc/design_engine_core.md` §3.1)
   + [ ] the return header: a fixed `ret[3]` next to the blocks, written by the reader and
         read by the publisher, carrying predicate parameters, `last_consumed_tick` and a
         cadence hint. It needs no new atomic: the take exchange already publishes it. The
@@ -98,9 +98,9 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         any-thread API; and every `admitted` command appearing exactly once in drain order.
         A functional test cannot tell a correct implementation from a broken one on x86-64
   + [ ] stress tests for every park under a watchdog timeout: the gate against
-        declarations and control calls, tick progress against the executor, the admission
-        wait against the drain, and snapshot requests. Lost wake-ups are hangs, not data
-        races (`doc/design_engine_core.md` §3.3)
+        declarations and control calls, tick progress against the executor, and the
+        admission wait against the drain. Lost wake-ups are hangs, not data races
+        (`doc/design_engine_core.md` §3.3)
   + [ ] a test that the defaults in `config.py` and `sim_estab:limits` agree
 + [ ] **M2: fixed-point, PRNG, checksum, replay** (`doc/design_engine_core.md` §2, §7 step 2)
   + [ ] the `fixed<>` type ([Q25](doc/open_question.md#q25-the-fixed-specification))
@@ -163,4 +163,6 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         parked on the backlog (`doc/design_engine_core.md` §5.2)
   + [ ] the catch-up clamp, `catch_up_clamp_seconds = 0.25` in `sim_estab:limits`, and
         `sim.behind` (`doc/design_limits.md` §1.2)
-+ [ ] **M7: mod tiers** (`doc/design_modding.md`); process hosts ship without snapshots
++ [ ] **M7: mod tiers** (`doc/design_modding.md`); process hosts ship without snapshots.
+      How a mod host thread gets a snapshot on request is open
+      ([Q84](doc/open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads))

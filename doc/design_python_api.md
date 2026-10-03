@@ -12,8 +12,8 @@ and "session management".
 
 Scope of v1: every engine view is `PRIVATE`. The multi-reader `SHARED` mode is deferred to
 `design_engine_core.md` Appendix A, together with process-host engine views. So
-`engine.snapshot()` is a copy the engine makes on request (§7.2), and a process host has no
-engine view.
+`engine.snapshot()` is an owner-thread call that fills one engine-owned buffer (§7.2), and
+a process host has no engine view.
 
 Terms are defined in [glossary.md](glossary.md). Companion docs:
 
@@ -106,8 +106,9 @@ Rules:
   refuses new leases and waits, under the shutdown deadline, for running calls to finish.
   Only then does it release native memory.
 - Everything that can outlive a tick and still touch engine memory is **registered with the
-  engine**: mod hosts, and engine view blocks held by live array views. `close()` unwinds these
-  registrations before it releases anything native. It alone decides the shutdown order.
+  engine**: mod hosts, and the engine view blocks and snapshot buffer held by live array
+  views. `close()` unwinds these registrations before it releases anything native. It alone
+  decides the shutdown order.
 
 ### Pattern
 
@@ -206,8 +207,8 @@ Rules:
      `stopped`, and no tick runs again. A session with no sim thread has nothing to join;
      the call only sets the stop.
   3. **`close()`**: close the operation lease and wait for running calls, detach retained
-     `PRIVATE` engine view blocks, then release native resources. It never raises because
-     shutdown failed.
+     `PRIVATE` engine view blocks and a retained snapshot buffer, then release native
+     resources. It never raises because shutdown failed.
 
   Steps 1 and 2 cannot swap. The step that stops mod hosts needs the GIL to make progress,
   and the join step must release it. Joining first would starve every thread host for the
@@ -823,10 +824,8 @@ thread.
     engine views and events. This is the same one-way boundary as the Python/C++ split, one level
     down. It holds because of *when*, not because of which threads exist: the sim thread
     owns core state while it runs. Three operations read core state from another thread:
-    the freeze's tick-0 publish, `checksum()`, and a `snapshot()` copy that the requesting
-    thread makes while nobody runs ticks, holding the executor role
-    (`design_engine_core.md` §3.1). All three happen at moments when no tick can be
-    running.
+    the freeze's tick-0 publish, `checksum()` and `snapshot()` (`design_engine_core.md`
+    §3.1). The owner thread makes all three, at moments when no tick can be running.
   - **One gate predicate, fed by independent fields.** The host is not a participant
     (`design_engine_core.md` §3.3). Its control state is:
 
@@ -968,19 +967,18 @@ thread.
     **The owner thread waits for neither: the frame loop never waits on the engine; it
     polls** (`design_engine_core.md` §3.3). A full host endpoint returns `queue_full`, and
     `outcome(h)` returns `pending` until its tick has run. The owner thread waits in only
-    three places, and only on the sim or on a deadline: `snapshot()` (at most one tick,
-    §7.2), `step(n)` (above) and the shutdown calls (§2). If a step's next tick is blocked
-    by something only the owner can clear, the step raises instead of waiting. The one such
-    blocker the engine sees is the event backlog under an owner drain: the step raises
-    `EventBacklogError`, naming the tick reached, and the caller drains and steps again
-    (`design_engine_core.md` §5.2). A paced engine view that the stepping thread itself
-    reads is one the engine does not see, so that reader steps no further than its next
-    publish (§7.2).
+    two places, and only on the sim or on a deadline: `step(n)` (above) and the shutdown
+    calls (§2). `snapshot()` does not wait: the owner thread makes the copy itself, while
+    no tick can run (§7.2). If a step's next tick is blocked by something only the owner
+    can clear, the step raises instead of waiting. The one such blocker the engine sees is
+    the event backlog under an owner drain: the step raises `EventBacklogError`, naming the
+    tick reached, and the caller drains and steps again (`design_engine_core.md` §5.2). A
+    paced engine view that the stepping thread itself reads is one the engine does not see,
+    so that reader steps no further than its next publish (§7.2).
 
-    That makes five declared waits in the whole system: the gate, admission, outcome, a
-    step's wait for its ticks and a snapshot request's wait for a tick boundary
-    (`design_engine_core.md` §1.1). Anything else that waits is a defect, and so is any
-    operation in this table that ever waits:
+    That makes four declared waits in the whole system: the gate, admission, outcome and a
+    step's wait for its ticks (`design_engine_core.md` §1.1). Anything else that waits is a
+    defect, and so is any operation in this table that ever waits:
 
     | Operation | Why it never waits |
     |---|---|
@@ -1043,12 +1041,12 @@ boundary, or how long a crossing holds the GIL. Rule 5 sets which thread may mak
    view's take holds the gate (`design_modding.md` §3, §4.1).
 4. **Per-frame snapshot access is zero-copy** (§7.2), through a registered `PRIVATE` engine view.
    Copying a full projection every frame would dwarf every other cost in this document. That
-   is why render owns an engine view instead of calling `engine.snapshot()`. Occasional readers
-   copy, and that is the right default for them.
+   is why render owns an engine view instead of calling `engine.snapshot()`. An occasional
+   look at a quiescent session calls `snapshot()`, and that is the right default for it.
 5. **Thread contract** (§6). The `Engine`'s pump and lifecycle calls are externally
    synchronized. `submit*` is single-producer per endpoint. `view.take()` belongs to the
-   engine view's single reader. Array views are freely shared. `snapshot()` may be called
-   from any thread.
+   engine view's single reader. Array views are freely shared. `snapshot()` belongs to the
+   owner thread, while no tick can run.
 
 ## 6. Normal + free-threaded Python
 
@@ -1123,29 +1121,30 @@ Rules:
     `engine.submit_batch` and the host's `outcome` calls belong to it. None of them parks:
     a full host endpoint returns `queue_full`, and `outcome(h)` returns `pending` until its
     tick has run (§4.3).
-  - **`engine.snapshot()`**: thread-safe from any thread, on any build. It reads no engine
-    view. It posts a request and waits for the thread that runs ticks to make the copy at
-    its next tick boundary, or makes the copy itself when nobody runs ticks
-    (`design_engine_core.md` §3.1). Its operation lease encloses the wait and the copy. This
-    family matters because mods call `ctx.snapshot()` from their own mod host threads
-    (`design_modding.md` §4.1). Filing it under "lifecycle and pump, externally
-    synchronized" would make every mod snapshot a contract violation. On the owner thread it
-    is one of the three waits the owner-thread rule allows: at most one tick, and served even
-    while the sim is paused (§4.3). The request mechanism has a row in the mechanism register
-    (`design_engine_core.md` §1.1).
+  - **`engine.snapshot()`**: owner thread and quiescent, like `checksum()` below. It reads
+    core state into the engine's snapshot buffer, so it is legal only while no tick can
+    run: no sim thread runs, or it is paused with no step in flight, or the session has
+    stopped (`design_engine_core.md` §3.1). Off the owner thread it raises
+    `EngineThreadError`, and while the sim thread runs it raises `EngineStateError`. A
+    snapshot on request from another thread, such as a mod host thread calling
+    `ctx.snapshot()`, is open
+    ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)).
   - **`view.take()`**: only the `PRIVATE` engine view's single reader thread, whichever thread that
     is. A `PRIVATE` engine view has one reader by definition (`design_engine_core.md` §3.2). Two
     threads taking from one engine view is the same usage error as two producers on one endpoint.
   - **Array views and drained events**: immutable, and freely shared across threads without
     locks. Sharing an array view keeps its block alive, and so delays the next `take()`
     (§7.2). That is a lifetime consequence, not a thread-safety one.
-  - **`checksum()`**: owner thread and quiescent. It is its own family, and the only one
-    with a second condition. It reads core state, which the sim thread alone owns (§4.3). So
-    it is legal only while that thread stands still: no sim thread runs, or it is paused
-    with no step in flight, or the session has stopped. The call confirms quiescence itself (§4.3) instead of
-    making the caller arrange it, so `step(1); checksum()` is correct as written. Calling it
-    while the sim runs raises `EngineStateError`. Filing it anywhere else would make the
-    verification harness's own idiom a contract violation.
+  - **`checksum()`**: owner thread and quiescent. `snapshot()` shares this family, the only
+    one with a second condition. It reads core state, which the sim thread alone owns
+    (§4.3). So it is legal only while that thread stands still: no sim thread runs, or it
+    is paused with no step in flight, or the session has stopped. The call confirms
+    quiescence itself (§4.3) instead of making the caller arrange it, so `step(1);
+    checksum()` is correct as written. Calling it while the sim runs raises
+    `EngineStateError`. Filing it anywhere else would make the verification harness's own
+    idiom a contract violation. Opening it to other threads is open, together with
+    `snapshot()`
+    ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)).
   - **Control calls** (`pause`, `resume`, `set_time_scale`, `request_stop`,
     `stop_requested`, `set_log_level`): thread-safe from any thread, on any build.
     - `pause`, `resume` and `step` serialize their compound grant changes under the gate
@@ -1428,17 +1427,19 @@ Rules:
 
 ### 7.2 Snapshots (outbound state)
 
-State leaves the core in two ways: a copy the engine makes when asked, or an engine view a
-reader registered (`design_engine_core.md` §3.1). Which one you use decides which cost you
-pay. Every engine view is `PRIVATE` in v1.
+State leaves the core in two ways: a snapshot the engine makes when the owner thread asks,
+or an engine view a reader registered (`design_engine_core.md` §3.1). Which one you use
+decides which cost you pay. Every engine view is `PRIVATE` in v1.
 
 ```python
 # pseudo-code
 
-# 1. The default: a copy made on request. Any number, any thread, outlives everything.
-#    No registration, no lifetime rules, no refusals. Waits at most one tick.
-snap = engine.snapshot()                     # process-owned copy, with the id column
+# 1. The default: a snapshot made on request, with no registration. Owner thread only,
+#    while no tick can run. It fills the engine's one snapshot buffer, so the next call is
+#    refused while array views of this one are alive.
+snap = engine.snapshot()                     # every [[=viz]] column, with the id column
 print(snap.tick, snap.column("pop.position")[0])
+kept = snap.copy()                           # process-owned; outlives everything
 
 # 2. Opt-in zero-copy: an engine view, registered before the freeze. Every engine view
 #    projects the id column unless it declines it with identity=False.
@@ -1468,21 +1469,25 @@ print(rv.lag)                                # ticks behind; 0 means keeping up
 
 Rules:
 
-- **`engine.snapshot()` returns a copy, made on request.** It copies every `[[=viz]]` column
-  of every live row, with the `id` column, into process-owned memory. The thread that runs
-  ticks makes the copy at its next tick boundary, or at once if the sim is parked at the
-  gate, so a paused session answers too. When nobody runs ticks, the calling thread makes it
-  (`design_engine_core.md` §3.1). So the call waits at most one tick, plus the copy. Its
-  operation lease encloses the wait and the copy (§6), so shutdown cannot free anything under
-  it.
+- **`engine.snapshot()` fills the engine's snapshot buffer, on request.** It copies every
+  `[[=viz]]` column of every live row, with the `id` column, in one pass. No second copy
+  follows. The owner thread makes the call and the copy, and only while no tick can run: no
+  sim thread runs, or it is paused with no step in flight, or the session has stopped (§6,
+  `design_engine_core.md` §3.1). In a headless session that is any moment between steps.
+  In a windowed session, pause first, or read an engine view.
 
   No engine view stands behind it, so nothing is published for a reader who never asks, and
-  a session nobody inspects pays nothing. Calls that are pending at the same tick boundary
-  share one copy. The copy is immutable, so no caller can cause a refusal in another, and it
-  never returns a torn snapshot. Most code should use this call. Making it the default keeps
-  the ordinary retained value free of engine lifetime rules. Any thread may call it.
-- **Zero-copy needs a registered `PRIVATE` engine view.** Zero-copy means holding engine memory,
-  and only a single-reader engine view can promise that the publisher will not write it
+  a session nobody inspects pays nothing. There is one snapshot buffer, reserved at the
+  freeze and refilled by every call. So **`snapshot()` is refused while array views on the
+  previous result are alive**, with `ViewBusyError`, exactly as `take()` is (below). Bound
+  the array views in a function frame, and keep what must outlive the next call with
+  `snap.copy()`. It never returns a torn snapshot, because no tick runs during the copy.
+
+  A snapshot on request from another thread, or while the sim thread runs, is open
+  ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)).
+- **Zero-copy while ticks run needs a registered `PRIVATE` engine view.** It means holding
+  engine memory, and only a single-reader engine view can promise that the publisher will
+  not write it
   (`design_engine_core.md` §3.2). Registration happens before the freeze
   (`design_engine_core.md` §2.4 step 3a). It declares the column subset and the cadence, so
   the cost the engine view adds to every publish is visible where it is chosen.
@@ -1520,14 +1525,14 @@ Rules:
     `ViewBusyError` in the very code that follows it.
   - `__exit__` does not revoke array views, and must not. Array views stay valid when shared
     with other threads because scope exit cannot pull memory out from under them.
-- **Retention and archiving use a copy**: `engine.snapshot()`, or `snap.copy()` inside a
-  `take()`. Copies may exist in any number and outlive everything, including `close()`. The
-  copy is the pressure valve that makes the one-block rule workable. It is available
+- **Retention and archiving use a copy**: `snap.copy()`, on the result of a `take()` or of
+  `snapshot()`. Copies may exist in any number and outlive everything, including `close()`.
+  The copy is the pressure valve that makes the one-block rule workable. It is available
   wherever a snapshot is, including `ModContext` (`design_modding.md` §4.1).
 - **Track ids, never snapshot rows.** A row of a tick-N snapshot means nothing at N+k:
   publish gathers only live rows, so an erase or create shifts every later row
   (`design_data_container.md` §5.1). The `id` column is in every projection unless the
-  engine view declined it with `identity=False` (below), and in every `snapshot()` copy, so
+  engine view declined it with `identity=False` (below), and in each `snapshot()` result, so
   re-resolving is always possible where a reader may need it. One rule holds for every
   object type: snapshot rows are in slot order, and an id's high half is its slot, so the
   `id` column is sorted ascending (`design_data_container.md` §2.2). `np.searchsorted` is
@@ -1609,8 +1614,8 @@ Rules:
 
   | At close | Outcome |
   |---|---|
-  | an in-progress `snapshot()` or other native API call | admitted before `CLOSING`; allowed to finish under the shutdown deadline |
-  | a block held by a live array view | detached from its engine view, and freed when the last array view on it is dropped |
+  | an in-progress native API call | admitted before `CLOSING`; allowed to finish under the shutdown deadline |
+  | a block, or the snapshot buffer, held by a live array view | detached from the engine, and freed when the last array view on it is dropped |
   | Engine views, rings, contexts, devices | released normally |
   | the handle | raises `EngineClosedError` on anything that re-enters the engine |
   | the array memory | stays valid and frozen. Nothing observable changes, since it was immutable anyway |
@@ -1627,8 +1632,8 @@ Rules:
     pages as matched rows reach them (`design_engine_core.md` §3.1).
   - Remaining cost, stated so it is not discovered later: a caller that parks an array view
     in a global keeps that memory until interpreter exit. The cost is bounded: one block per
-    `PRIVATE` engine view, once per process, since one engine is closed once and an engine view holds one
-    block. It can neither recur nor grow.
+    `PRIVATE` engine view and the one snapshot buffer, once per process, since one engine is
+    closed once and an engine view holds one block. It can neither recur nor grow.
 - Fixed-point to float conversion happened at publish, by a core rule. Python sees floats
   and may do anything with them. Nothing flows back except commands.
 - Column names, dtypes and extents come from the generated snapshot container instance
@@ -1801,13 +1806,13 @@ Rules:
   |---|---|---|
   | Any new call once closing has linearized, or any call on a closed engine or handle (§2, §6, §7.2) | `EngineClosedError` | no; terminal for that engine |
   | Under `on_failed_stop = "raise"`: the call that hit a `failed` entry path, such as `stop_sim_async()` on the final join timeout, and any call after it; `close()` logs instead (§2, §3) | `EngineFailedError` | no; terminal, and the process is poisoned |
-  | `view.take()` while an array view on the previous snapshot is alive (§7.2) | `ViewBusyError` | yes: drop the array views, or copy |
+  | `view.take()` or `snapshot()` while an array view on the previous result is alive (§7.2) | `ViewBusyError` | yes: drop the array views, or copy |
   | `snap.find(...)` on a snapshot from an engine view that declared `identity=False` (§7.2) | `ValueError` | no; the declaration is closed at the freeze. Use `snapshot()`, which always carries `id` |
   | `start_session()` while `EngineConfig.event_drain` is `None` (§3) | `ValueError` | no for this `Engine`: the config is frozen. Construct one that declares `"owner"` or `"sink"` |
   | `step()` under an owner drain when the event backlog reaches `high_water` (§4.3, §7.3) | `EventBacklogError` | yes: drain with `drain_events()`, then step again. The error names the tick reached |
-  | Any lifecycle or pump call off the owner thread, `close()` included (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread. Nothing was touched |
+  | Any lifecycle or pump call off the owner thread, `close()` and `snapshot()` included (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread. Nothing was touched |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
-  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
+  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` or `snapshot()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
   | `snap.column(...)` for a column outside the caller's capabilities (`design_modding.md` §4.1) | `ColumnNotGrantedError` | no; capabilities are fixed at load |
   | `load_mods` failing: a mod fails discovery, verification, handshake or column registration. Or `start_session` failing at the freeze's `on_session_start` (`design_modding.md` §6) | `ModLoadError` | only before the engine is touched. A policy-stage failure leaves the engine `configuring`, and `load_mods` may be retried. From `register_hosts` on, the engine is `load_failed`, and recovery is a new `Engine` |
   | A paced producer's `outcome(h)` for a tick it has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang. The host's `outcome(h)` never raises it: it returns `pending` |

@@ -429,3 +429,20 @@ smallest fallback: it adds `libalsa`, and SDL tries ALSA when PipeWire fails. Ch
 Conan-built `libalsa` finds the system's ALSA configuration and plugins. The `pulseaudio`
 option adds the `pulseaudio` package instead. Both are SDL options in
 `src/libsim_estab/conandata.yml`.
+
+### Q84. How are `snapshot()` and `checksum()` opened to other threads?
+
+Both calls belong to the owner thread, and both are legal only while no tick can run
+(`python_api` §6). `snapshot()` also refills one engine-owned buffer (`engine_core` §3.1;
+`python_api` §7.2). So three callers have neither call: a mod host thread, though
+`ctx.snapshot()` is meant to be a mod's default way to read the world (`modding` §4.1); any
+other thread of the application; and the owner thread itself while the sim thread runs.
+
+Serving them needs a request to the executor. For `snapshot()` it also needs a way for
+several readers to share what the executor makes. That is the many-reader problem of the
+`SHARED` engine view (Q60), and it needs a design of its own. Also open for `snapshot()`:
+which columns and rows it projects, where the copy runs and what it is charged to, how many
+results may be alive at once, and who makes the copy when no executor runs.
+
+The milestone is not chosen: both calls open to other threads in the one they fit best.
+Logic mods (M7) are the first known caller.

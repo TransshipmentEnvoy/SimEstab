@@ -20,8 +20,9 @@ Scope of v1:
   `PRIVATE` engine view cannot face a sandbox. A process host keeps its commands, events and
   lifecycle. How `SHARED` returns is open
   ([Q60](open_question.md#q60-reviving-the-shared-engine-view)).
-- Thread hosts are trusted, so `ctx.snapshot()` and an opt-in `PRIVATE` engine view both work as
-  described here.
+- Thread hosts are trusted, so an opt-in `PRIVATE` engine view works as described here. How
+  `ctx.snapshot()` is made for a mod host thread is open
+  ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)).
 
 How to read this doc:
 
@@ -134,8 +135,8 @@ private_view      = false                   # true = a dedicated PRIVATE engine 
                                             #   copy per publish (§4.1). "paced" = the
                                             #   same, and the gate waits until the mod has
                                             #   taken each publish. Default: none; the
-                                            #   mod reads ctx.snapshot(), a copy made on
-                                            #   request.
+                                            #   mod reads ctx.snapshot(), whose mechanism
+                                            #   is open (Q84).
 deadline_ms       = 50                      # only with private_view = "paced": how long
                                             #   the gate waits for the take before it
                                             #   continues without this view. Optional:
@@ -177,8 +178,10 @@ every peer through the turn stream like a player's (`design_multiplayer.md` §4.
 The example requests `commands_per_tick = 4096`, above the endpoint capacity cap of 256
 (`design_limits.md` §2). Both numbers stay as they are until the field's meaning is settled
 ([Q44](open_question.md#q44-what-commands_per_tick-in-a-manifest-means)). When
-`private_view` is false, a thread-host mod reads the world through `ctx.snapshot()`, a copy
-the engine makes on request (§4.1). A process host has no snapshot in v1.
+`private_view` is false, a thread-host mod reads the world through `ctx.snapshot()` (§4.1),
+whose mechanism is open
+([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)). A
+process host has no snapshot in v1.
 
 Rules:
 
@@ -322,7 +325,7 @@ class TrafficMod:
     def on_unload(self, ctx): ...
 
     def _pick_target(self, ctx):                 # own frame: views die on return
-        with ctx.snapshot() as snap:             # a copy made on request
+        with ctx.snapshot() as snap:             # how it is made is open (Q84)
             ids = snap.column("vehicle.id")
             return int(ids[0])
 
@@ -361,14 +364,12 @@ outcomes of the commands the mod submitted for that tick (§4.2).
   tick runs. A mod may poll it, or wait for it. A mod holds no tick, so the wait can never
   deadlock, and a pause leaves it parked: it continues when the session does. Only
   revocation wakes it early, with `revoked`.
-- `snapshot()`: a copy the engine makes on request, at the next tick boundary
-  (`design_python_api.md` §7.2). It waits at most one tick. A mod may take any number of
-  them, from any thread, and a snapshot outlives everything. There is no lifetime rule and no refusal, though the call still
-  raises the normal engine lifecycle errors. It is the ordinary way a thread-host mod reads
-  the world, and its cost is the copy. A process host has no snapshot in v1 (§4.3).
-  - **A snapshot is already a copy**, so carrying state from one tick to the next needs
-    nothing special. There is no pin to hold and no quota to split. What one mod reads never
-    affects what another can read.
+- `snapshot()`: the ordinary way a thread-host mod reads the world, with no engine view to
+  declare. The engine's own `snapshot()` belongs to the owner thread and runs only while no
+  tick can (`design_python_api.md` §7.2), so a mod host thread cannot call it. How a mod
+  host thread gets a snapshot on request, what it costs, and what several mods share is open
+  ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)). A
+  process host has no snapshot in v1 (§4.3).
   - **Zero-copy is opt-in and declared.** A mod that reads a large slice every tick may
     declare a `PRIVATE` engine view in its manifest. It is registered at the freeze and costs one
     projection copy per publish. The manifest shows that cost, and the mod that asked for it
@@ -548,7 +549,7 @@ first.
 
 | Aspect | Thread host (default) | Process host (opt-in, by manifest or policy) |
 |---|---|---|
-| Snapshot access | `ctx.snapshot()`, a copy made on request, or a dedicated `PRIVATE` engine view in engine memory if the manifest asks for one | **none in v1.** A `PRIVATE` engine view cannot face a sandbox, so process-host snapshots wait for the `SHARED` mode (`design_engine_core.md` Appendix A). Their design is below |
+| Snapshot access | `ctx.snapshot()`, whose mechanism is open ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)), or a dedicated `PRIVATE` engine view in engine memory if the manifest asks for one | **none in v1.** A `PRIVATE` engine view cannot face a sandbox, so process-host snapshots wait for the `SHARED` mode (`design_engine_core.md` Appendix A). Their design is below |
 | Commands | submitted in-process, straight into the endpoint's ring | IPC, using the canonical command payload schema (identical to replay files) inside a transport-specific envelope |
 | Events | delivered in-process, into the inbox | IPC, using the canonical **event** payload schema: the same encoding rules, but **not** in replay files (below) |
 | `ctx.submit_batch` | a direct call; the call returns admission | one frame out and one reply frame back from the supervisor; the call returns admission |
@@ -980,8 +981,8 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   the freeze runs only after every load has succeeded.
 - **Mod hosts spawn after the freeze**, in `mods.start()`, not during the load loop. There
   are three independent reasons, each enough on its own:
-  - `on_load` is where a mod reads its starting picture of the world (§4.1). That means
-    `ctx.snapshot()`, which cannot work before a tick-0 snapshot exists.
+  - `on_load` is where a mod reads its starting picture of the world (§4.1). That picture
+    is tick 0, which does not exist before the freeze.
   - Source ids are assigned at the freeze, from load order (`design_engine_core.md` §2.4
     step 3). So a failed spawn renumbers nobody.
   - The step most likely to fail then has the cheapest failure. A spawn failure is an
@@ -1110,8 +1111,9 @@ New **logic mod** (for mod authors):
    your source, and it is one IPC round trip instead of many. Reads are snapshots and events
    and may be stale; design for reaction latency.
 4. **`on_unload` may not submit.** Your endpoint is revoked before it runs (§6).
-5. **`ctx.snapshot()` is already a copy.** Hold it as long as you like, pass it between
-   threads, carry it to the next tick. It has no size limit and costs other mods nothing.
+5. **Read the world through `ctx.snapshot()`.** How long its result may be held follows
+   from how it is made, which is open
+   ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)).
    Declare a `PRIVATE` engine view only if you read a large slice every tick. Then read it inside
    `with ctx.view().take() as snap:` **in its own function**, so the array views die with
    the frame. `take()` is refused (`ViewBusyError`, retryable) while array views on the

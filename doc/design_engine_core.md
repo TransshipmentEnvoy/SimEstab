@@ -121,10 +121,9 @@ Progress classes, used in exactly this sense throughout:
   undeclared wait is forbidden. A wait of the core follows three rules. It is the gate
   (§3.3) or one of the shutdown and revocation drains below. It is bounded by a declared
   deadline, or, for a pause or the event backlog, held deliberately with no deadline. Its
-  expiry has a declared outcome. A caller's wait (admission, outcome, a step's ticks, a
-  snapshot request) is bounded by structure instead of a timer: it ends when the sim
-  reaches a named tick or tick boundary, or when revocation ends it. A pause holds it as it
-  holds the sim.
+  expiry has a declared outcome. A caller's wait (admission, outcome, a step's ticks) is
+  bounded by structure instead of a timer: it ends when the sim reaches a named tick, or
+  when revocation ends it. A pause holds it as it holds the sim.
   - The main case is **pacing**. Under lockstep, every instance advances at the rate of the
     slowest one, because every peer must run the same command set (`design_multiplayer.md`
     §3.1). Refusing to wait there would cause a desync, not a smoother tick rate.
@@ -163,15 +162,13 @@ specified:
 | **Tick progress** | sim → threads waiting for a tick to run | the sim's store of `first_unexecuted` under `gate.m` after each tick's publish (G5) | the sim takes a short lock per tick; a waiter blocks until the tick runs, the owner thread in interruptible slices | §3.3 |
 | **Operation lease** | any-thread API caller ↔ owner's `close()` | successful lease: the second acquire load of the access state; close: the `OPEN → CLOSING` CAS | call side wait-free; close drains under the shutdown deadline | `design_python_api.md` §2, §6 |
 | **Async error handoff** | sim → owner thread | `error_state.store(READY, release)` after the winning producer fills the slot | wait-free; read at the next rendezvous | `design_python_api.md` §8 |
-| **Snapshot request** | any thread → the thread that runs ticks, and back | request: the increment of `gate.snapshot_requests` under `gate.m`; serve: handing the copy to the pending requests under `gate.m` | the requester blocks for at most one tick plus one copy; the executor never waits for a requester | §3.1 |
 | **Staged join** | owner thread → sim | `stop_requested` stored under `gate.m`, with a notify if the sim is parked (§3.3); `std::thread::join` | owner blocks under a deadline | `design_python_api.md` §4.3 |
 
-That is twelve mechanisms. Most of their steady-state work is a few atomic operations and,
-on the sim, one short lock per tick. Five contain a declared wait, and all five are the same
+That is eleven mechanisms. Most of their steady-state work is a few atomic operations and,
+on the sim, one short lock per tick. Four contain a declared wait, and all four are the same
 kind of wait. The core waits for a participant; a producer waits for ring space; a producer
-waits for a tick it has already released; the owner thread waits for the ticks a step
-granted; and a snapshot request waits for the next tick boundary. Every park in the engine
-follows the one wake-up rule of §3.3.
+waits for a tick it has already released; and the owner thread waits for the ticks a step
+granted. Every park in the engine follows the one wake-up rule of §3.3.
 
 **Any new cross-thread mechanism gets a row here, with all five items, in the same change
 that introduces it.** This mirrors `design_python_api.md` §9, where every new raise site
@@ -518,9 +515,9 @@ Three rules follow from this:
   block-state words that the publisher reads as availability and never dereferences
   (Appendix A, `design_modding.md` §4.3). A thread-host mod is trusted and registers
   normally.
-- **A snapshot nobody registered for is made on request.** `engine.snapshot()` and a mod's
-  `ctx.snapshot()` need no engine view (`design_python_api.md` §7.2). Nobody has to register
-  anything to see the world, and nothing is published for a reader who never asks. Below.
+- **A snapshot nobody registered for is made on request.** `engine.snapshot()` needs no
+  engine view (`design_python_api.md` §7.2). The owner thread sees the world without
+  registering anything, and nothing is published for a reader who never asks. Below.
 - **The number of engine views is capped** (`design_limits.md` §2.3), because publish cost is a sum
   over them. The cap bounds the number of terms in that sum. Projection width and matched
   rows are measured, not capped.
@@ -563,34 +560,37 @@ Three rules follow from this:
   participant (§3.3), and pays for that guarantee at the gate. A reader that only wants to
   shed load sends a cadence hint (§3.5) and stays out of the gate.
 
-**On-demand snapshots.** `snapshot()` is a request, not a read, and any thread may make it.
-It touches no engine view. The thread that runs ticks makes the copy, at a moment when no
-tick is running:
+**On-demand snapshots.** `snapshot()` copies the world into one engine-owned buffer. It is
+an owner-thread call, made while no tick can run. It touches no engine view and needs no
+cross-thread mechanism.
 
-| When the request arrives | Who copies, and when |
-|---|---|
-| the sim thread is running a tick | the sim thread, right after that tick's publish, before the next gate check |
-| the sim thread is parked at the gate: paused, or held by the backlog or a participant | the sim thread, at once. The request wakes it; it copies and parks again |
-| a `step(n)` is running ticks on its calling thread | that thread, at its next tick boundary |
-| nobody runs ticks: a headless session between steps, before `run_sim_async()`, or a stopped session | the requesting thread itself, holding the executor role (below) while it copies |
-
+- **Who calls it, and when.** The owner thread, and only while the session is quiescent: no
+  sim thread runs, or it is paused with no step in flight, or the session has stopped. That
+  is `checksum()`'s contract (`design_python_api.md` §6). With no sim thread, only the
+  owner thread can run a tick, so none runs while it is inside `snapshot()`. Off the owner
+  thread the call raises `EngineThreadError`. While the sim thread runs it raises
+  `EngineStateError`.
 - **What it copies.** Every `[[=viz]]` column of every live row, with the `id` column,
-  converted to float as a publish converts (§3.4, `design_data_container.md` §5.1). A mod
-  sees only the columns in its capabilities (`design_modding.md` §4.1).
-- **One copy per serve.** Every request pending when the copy is made shares it. The copy is
-  immutable, so sharing costs nothing, and many callers in one tick cost one projection.
-- **The wait is at most one tick, plus the copy.** A paused session serves requests too,
-  because a parked sim wakes for them. A request never delays the sim and never changes core
-  state.
-- **The executor role.** Only the thread that runs ticks reads core state (§3.3). When
-  nobody runs ticks, the requester holds that role for the length of one copy. A `step(n)`
-  or `run_sim_async()` that starts meanwhile waits for that one copy to finish.
-- **Mechanism.** A request increments `gate.snapshot_requests` under `gate.m`, notifies a
-  parked sim, and waits on `gate.progress_cv` until it is served. The executor copies outside
-  the mutex. It then hands the copy to every pending request and notifies, under `gate.m`. So
-  the wait follows the wake-up rule of §3.3. Its register row is in §1.1.
-- **Cost.** One projection per serve, charged to the tick budget below. A session nobody
-  inspects pays nothing.
+  converted to float as a publish converts (§3.4, `design_data_container.md` §5.1).
+- **One pass.** A call is one mask, scan and gather over core state: the publish kernel of
+  `design_data_container.md` §5.1, run once. Nothing is copied a second time.
+- **One buffer, reused.** The **snapshot buffer** is reserved at the freeze, as an engine
+  view block is (below): address space for every `[[=viz]]` column at each object type's
+  cap, with pages committed as live rows reach them. Every call refills it. So at most one
+  on-demand snapshot exists, its memory stays warm, and no call allocates.
+- **A call is refused while array views of the previous result are alive**, as a take is
+  (above, `design_python_api.md` §7.2). Refilling the buffer would change memory a caller
+  still reads. The caller drops its array views and calls again, or copies what it keeps.
+- **Cost.** One projection per call, on the owner thread. No tick runs meanwhile, so the
+  tick budget below does not carry it. A session nobody inspects pays only the address
+  space.
+- **Other callers.** A snapshot on request from another thread, or from the owner thread
+  while the sim thread runs, needs a request to the executor and a way for several readers
+  to share one result. That design is open, and `checksum()` shares both the contract and
+  the question
+  ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)).
+  Until it exists, a reader that must see the world while ticks run registers an engine
+  view.
 
 **CPU/GPU lifetime boundary: the GPU never reads engine view memory.** `render()` copies the
 `[[=gpu]]` columns on the CPU into a **staging transfer buffer**, then unmaps it. Under the
@@ -684,7 +684,6 @@ endpoint to narrow, just as the per-engine-view figure does for publish.
 | Terminal commit | O(erases + creates + links into erased entities), sequential | the tick's staged creates and erases. No step is O(rows): rows never move (`design_data_container.md` §2.2) |
 | Checksum | tick digest: O(types + commands), every tick. Rolling checksum: 1/N of a full pass per tick, when enabled. Full checksum: a full pass per tick | the level in use (§2.3). The full checksum runs only in CI, certification and desync bisecting, never in a shipped session |
 | Upload bytes per frame | the render engine view's spec over its matched rows, whole columns | same treatment as publish |
-| On-demand snapshot | one projection of every `[[=viz]]` column over every live row, once per serve, shared by every request it serves | the requests; measured like publish, and paid only when someone asks (above) |
 | Command drain and execution | O(commands stamped for this tick) | `C = Σ capacity(endpoint)` over the registered endpoints (§5.1, `design_limits.md` §2). Only a session that registers that many endpoints, each at full capacity, reaches it |
 | System execution | the actual simulation work | not yet measured |
 
@@ -831,7 +830,6 @@ struct Gate {
     std::condition_variable progress_cv;  // threads waiting for a tick to run park here
     Blocker                 parked;     // why the sim is parked; NONE while it runs
     u32                     progress_waiters;
-    u32                     snapshot_requests;  // pending snapshot() calls (§3.1)
 };
 Participant       participants[N_PARTICIPANTS];   // fixed at the freeze
 HostControl       host;
@@ -866,11 +864,9 @@ for (;;) {
         if (blocker == STOP) return;
         std::unique_lock lk(gate.m);
         if (blocker_for(t) != blocker) continue;             # (G2) re-check under the mutex
-        if (gate.snapshot_requests) { lk.unlock(); serve_snapshots(); continue; }  # (G6)
         gate.parked = blocker;
         woke = gate.sim_cv.wait_until(lk, absolute_deadline(blocker, t),
-                                      [&] { return blocker_for(t) != blocker
-                                                || gate.snapshot_requests; });
+                                      [&] { return blocker_for(t) != blocker; });
                                                              # THE ONE WAIT; releases gate.m
         gate.parked = NONE;
         lk.unlock();
@@ -882,9 +878,7 @@ for (;;) {
     {   std::lock_guard lk(gate.m);
         first_unexecuted.store(t + 1, release);              # (G5) the tick has run
         if (gate.progress_waiters) gate.progress_cv.notify_all();
-        requested = gate.snapshot_requests;
     }
-    if (requested) serve_snapshots();                        # (G6) at the tick boundary
     ++t;
 }
 
@@ -895,6 +889,10 @@ blocker_for(t), in priority order:
     first active p with p.ready_through.load(acquire) < t: p
     otherwise: NONE
 ```
+
+The thread that runs this loop is the **executor**: the sim thread, or the thread inside
+`step(n)` when there is no sim thread. Only the executor touches core state while a tick
+can run.
 
 With no sim thread, `step(n)` runs this loop on the calling thread. Where the sim thread
 would park on the host's own grant (`HOST_PAUSE`) or stop, the calling thread returns
@@ -1031,16 +1029,16 @@ is paused. So every call the frame loop makes returns at once:
 | `outcome(h)` | `pending`: the tick that drains the command has not run yet |
 | `drain_events()` | an empty batch; it never blocks |
 
-Three kinds of call wait, and they wait only on the sim or on a deadline, never on
-something only the owner thread can do. `snapshot()` waits for the next tick boundary, at
-most one tick, and is served even while the sim is paused (§3.1). `step(n)` waits for the
-sim to run its ticks. If the next tick is blocked by a condition only the owner can clear,
-such as the event backlog (§5.2), it returns or raises instead of waiting. A paced engine
-view that the stepping thread itself reads is such a condition too, but the engine does not
-see it, so that reader steps no further than its next publish (§3.1). The shutdown
-calls, `stop_sim_async()` and `close()`, wait under the shutdown deadline
-(`design_python_api.md` §2). Peers keep their waits, and a logic mod may wait for an
-outcome (§5.1). They run on their own threads, and the owner thread never waits for them.
+Two kinds of call wait, and they wait only on the sim or on a deadline, never on
+something only the owner thread can do. `step(n)` waits for the sim to run its ticks. If
+the next tick is blocked by a condition only the owner can clear, such as the event backlog
+(§5.2), it returns or raises instead of waiting. A paced engine view that the stepping
+thread itself reads is such a condition too, but the engine does not see it, so that reader
+steps no further than its next publish (§3.1). The shutdown calls, `stop_sim_async()` and
+`close()`, wait under the shutdown deadline (`design_python_api.md` §2). `snapshot()` does
+not wait: the owner thread makes the copy itself, while no tick can run (§3.1). Peers keep
+their waits, and a logic mod may wait for an outcome (§5.1). They run on their own threads,
+and the owner thread never waits for them.
 
 Pause, single-step, backpressure and shutdown still form one gate predicate, but no two
 share storage, so concurrent controls cannot lose a stop or unblock a backed-up ring.
@@ -2100,7 +2098,7 @@ tests of §3.3, run under a watchdog timeout.
 ### 5.2 Event ring (normative)
 
 The event ring is a bounded single-producer, single-consumer ring. The executor, the thread
-that runs ticks (§3.1), enqueues. The session's event drain empties it (below). Publication
+that runs ticks (§3.3), enqueues. The session's event drain empties it (below). Publication
 uses the idiom of §1.1: fill the entry, then release-store the write index. The drainer's
 acquire load of that index makes the entry visible. It has the same shape as the ring of
 §5.1, with the direction reversed.
