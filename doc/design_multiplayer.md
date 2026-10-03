@@ -170,9 +170,11 @@ may stamp a command.
   - Above that, `margin ≈ ceil(RTT / tick period)`. Each extra tick of margin adds one tick
     of input latency.
   - The value itself is open ([Q50](open_question.md#q50-input_delay_ticks)).
-- **A mod or an engine source has a margin of 0, and the engine checks it.** It acts within
-  the turn it is about to release, so it never has more than one turn in flight. Its command
-  stamped for a later tick is a bug and is rejected with `over_margin`.
+- **An engine source has a margin of 0, and so does a mod unless its manifest declares one.
+  The engine checks it.** A margin-0 producer acts within the turn it is about to release, so
+  it never has more than one turn in flight. Its command stamped for a later tick is a bug
+  and is rejected with `over_margin`. A mod's margin is local: it lets the mod's own loop run
+  ahead of the sim, and has nothing to do with the network.
 - **The local player submits through its own peer endpoint, with the input delay.** In
   single-player the host endpoint is unpaced: its commands name no tick, and each runs at
   the first tick that drains it (`design_engine_core.md` §3.3, §5.1). That cannot work

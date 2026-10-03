@@ -84,6 +84,7 @@ and leave their values to this document.
 | `ipc_deadline` | **open on purpose** ([Q43](open_question.md#q43-ipc_deadline-value-and-constraints)); its ceiling is the input delay | It is not a free parameter, so no number stands here. Its ceiling is the input delay: the window of ticks a peer's command may legitimately be in flight for (`design_multiplayer.md` §3.2). Inside that window nothing is wrong; past it, something is. It must also exceed one tick. A deadline under 33.3 ms can only detect that the other side is mid-tick, which is not a fault. It would also expire on any hot-path round trip that crosses a tick boundary. So its value waits for `input_delay_ticks` (§7). It bounds the **hot-path round trip only**. A process mod's wait for an outcome is a separate, cancellable operation with no deadline of this kind. A wait that may legitimately span a tick cannot share a bound with one that must not (`design_modding.md` §4.3). |
 | `mod_retry_limit` | **0** | A failed mod stays disabled: quarantine restarts nothing by default. This is the default the other docs already give, recorded here so the set is complete. |
 | `max_inbox_size` | **1024** | The engine ceiling on the `inbox_size` a manifest requests (`design_modding.md` §4.2). The example manifest requests 256 (`design_modding.md` §3). Each mod declares its own inbox size, so without a cap total inbox memory would grow with the number of installed mods, not with anything the engine chose. 1024 is four times the example request. It does not bind a normal mod and still bounds a pathological manifest. |
+| `mod_deadline_ms`, `max_mod_deadline_ms` | **open on purpose** ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)) | A mod's gate deadline: the value when its manifest declares no `deadline_ms`, and the engine's cap on one it does declare (`design_modding.md` §3). It is how long one slow mod may hold a tick before it is suspended, so it trades tick latency against how often a busy mod is suspended. That needs a measured mod-loop time, which nothing has yet. |
 
 ## 2. Command endpoints, the three counts, and the engine view cap
 
@@ -113,8 +114,8 @@ margin (below).
 
 | Endpoint | Depth |
 |---|---|
-| margin 0: mods and engine sources | `capacity` |
-| margin 1 or more: a peer | `2 × capacity` |
+| margin 0: engine sources, and mods by default | `capacity` |
+| margin 1 or more: a peer, or a mod that declares a margin | `2 × capacity` |
 | the host endpoint, unpaced | `capacity` |
 
 A margin-0 producer acts inside the tick it is about to release, so it never has more than
@@ -423,7 +424,7 @@ The bit-level specification is part of M2, with `fixed<>`, and is open
 
 ## 7. What this document does not decide
 
-**Ten things are open on purpose.** Each has an entry in
+**Eleven things are open on purpose.** Each has an entry in
 [open_question.md](open_question.md). Each site that would otherwise look unfinished says so
 and says what the value waits on. A reader who finds a missing number should find the reason
 next to it, without coming here to learn whether anyone noticed.
@@ -432,6 +433,7 @@ next to it, without coming here to learn whether anyone noticed.
 |---|---|---|---|
 | **`input_delay_ticks`** ([Q50](open_question.md#q50-input_delay_ticks)): how far ahead of the current tick a peer stamps, that is, its endpoint's stamp margin | a transport | Unlike every number above, it needs measurement against a real round-trip time. It is not an engine value: the engine imposes no margin and bounds none. No ring depth depends on it | `design_multiplayer.md` §3.2, §7; here §1.1 (`ipc_deadline`) |
 | **`ipc_deadline`** ([Q43](open_question.md#q43-ipc_deadline-value-and-constraints)) | the same measurement | It is not a free parameter. Its ceiling is the input delay, so it lands with the row above and not before | §1.1 |
+| **The mod gate deadline**, default and cap ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)) | M7 | It trades tick latency against how often a busy mod is suspended, and needs a measured mod-loop time | §1.1 |
 | **`high_water`** ([Q63](open_question.md#q63-what-is-high_water)): the event backlog threshold | a measured drain rate | The counter has a name, a home and one writer (`design_engine_core.md` §5.2). Its threshold is a separate question, and a number invented here would read as an answer to it | §2 |
 | **Per-slot size**, and so total slot memory ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | M1 | No doc gives a per-slot size for a command or an event entry, on purpose, so the worst case in §2.2 is a count, not a number of bytes | §2.2 |
 | **An engine view's maximum rows, and the GPU allocator behind it** ([Q39](open_question.md#q39-the-gpu-allocator-for-growing-worlds)) | before M3 | Destination buffers cannot be resized after creation, so each is sized from its engine view's maximum rows, not from the current row count. The default maximum, how an engine view declares it, and whether destinations suballocate from a few large buffers need measurements. Choosing now would be guessing | `design_data_container.md` §5, §5.1 |
@@ -476,6 +478,7 @@ This section names the one place each value lives. The C++ side is the partition
 | `C`, ring depth, event ring size | **nowhere** | **nowhere** | computed at the freeze from the closed endpoint set (`design_engine_core.md` §2.4 step 3a). Writing any of them down would create the engine-wide pool that per-endpoint rings avoid |
 | `ipc_deadline` | `HostPolicy.ipc_deadline`, default `None` (unbounded) | — | value open (§7). `EngineConfig` rejects a set value that does not exceed one tick at the configured rate |
 | `high_water`, `input_delay_ticks`, per-slot size | **not yet anywhere** | **not yet anywhere** | values open (§7). `high_water` belongs to the event ring (`design_engine_core.md` §5.2) |
+| mod gate deadline, default and cap | `HostPolicy.mod_deadline_ms`, `HostPolicy.max_mod_deadline_ms`, **not yet in `config.py`** | — | values open (§7) |
 
 Endpoint capacity and `D` are configurable at runtime, so only their defaults can be checked
 with `static_assert`. `config.py` validates the configured values at construction, and the

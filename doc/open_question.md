@@ -14,14 +14,6 @@ so on).
 
 ## Blocks M1
 
-### Q2. Must every mod be paced every tick?
-
-`modding` §4.1 and §4.2 make every mod a participant that declares ready every tick, even
-one that never submits. This conflicts with "no Python callbacks at tick rate" (`python_api`
-§0, §5) and with "reading does not make you a participant" (`engine_core` §3.3). As written,
-the slowest mod's Python loop limits the tick rate. Options: read-only mods become
-observers; a mod declares ready for a range of ticks at once. Also blocks M7.
-
 ### Q3. Can `engine.snapshot()` be called from any thread?
 
 `python_api` §6 and §7.2, and `modding` §4.1, say yes. But it copies from the default engine view,
@@ -43,14 +35,6 @@ opt-out, lazy, less frequent or filtered. Also blocks M5.
 engine view need not carry it, and `python_api` §7.2 also offers `identity=False`. If `id` can be
 left out, it must become one of the declarations closed at the freeze (`engine_core` §2.4),
 and snapshot lookups by id cannot work on such an engine view. Also blocks M5.
-
-### Q9. How does a stopped participant leave the gate?
-
-Nothing removes a participant when its mod is quarantined, fails to spawn, or is stopped by
-`mods.stop()` while the session keeps running (`modding` §4.2, §6; `python_api` §2). Only
-the expiry policy removes one, after a full deadline stall each time (`engine_core` §3.3).
-Also: no manifest or config field declares a mod's deadline or expiry policy, and the memory
-order of the `SUSPEND` write is unspecified. Also blocks M7.
 
 ### Q10. Can the event ring fill within one tick?
 
@@ -80,12 +64,6 @@ mechanism register (§1.1) has no row for it.
 `python_api` §2 says `close()` never raises. The same section, and §8, say it is an
 owner-thread call that raises `EngineThreadError` elsewhere.
 
-### Q14. How does a paced engine view count as ready?
-
-An engine view registered with `paced=True` holds the core back until it is taken (`python_api`
-§7.2). Neither `engine_core` §3.2 nor §3.3 says how a take counts as readiness, or how that
-combines with a cadence above 1.
-
 ### Q16. Which events exist?
 
 The event list is not designed (`python_api` §7.3). M1 needs at least session, integrity and
@@ -108,7 +86,7 @@ build has no stated synchronization for that count (`python_api` §6).
 
 ### Q21. What are the catch-up clamp and `IDLE_SLICE`?
 
-Both are named (`python_api` §4.3; `modding` §4.2) with no value anywhere. Also blocks M6.
+The catch-up clamp is named (`python_api` §4.3) with no value anywhere. Also blocks M6.
 
 ### Q22. How large is one command or event slot?
 
@@ -333,6 +311,14 @@ child can privately write its read-only engine view payload (`modding` §4.3, pl
 Engine memory stays safe, but the dirtied private pages are charged to the paging file, and
 nothing bounds that. A commit limit on the child's Job object is one candidate. Deferred
 with process-host engine views (`engine_core` Appendix A); after M7.
+
+### Q80. The mod gate deadline: default and cap
+
+A mod the gate waits for declares `deadline_ms` in its manifest. `HostPolicy.mod_deadline_ms`
+applies when it declares none, and `HostPolicy.max_mod_deadline_ms` caps it (`modding` §3;
+`python_api` §3; `limits` §1.1). Neither value is decided. The deadline is how long one slow
+mod may hold a tick before it is suspended, so it trades tick latency against how often a
+busy mod is suspended. It needs a measured mod-loop time. M7.
 
 ## Multiplayer (after M7)
 

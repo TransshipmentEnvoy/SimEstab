@@ -52,7 +52,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | participant | A peripheral the core waits for before each tick, up to that participant's deadline. Every producer that names ticks is one; others can opt in with `paced=True`. | engine_core §3.3 |
 | recorder | A peripheral that submits nothing but must not miss a tick; it registers as a participant explicitly. | engine_core §3.3 |
 | conjunction | The set of active participants the gate waits for: a tick runs only when all of them are ready. | engine_core §3.3 |
-| observer | A peripheral the core never waits for. It only reads its engine view. | engine_core §3.3 |
+| observer | A peripheral the core never waits for. It only reads its engine view. A mod whose capabilities grant no command type is one. | engine_core §3.3 |
 | gate | The one place the core waits: before each tick, until nothing blocks the tick (stop, event backlog, pause, or a participant that is not ready). | engine_core §3.3 |
 | run grant | The host's `run_until` value: the core may run ticks below it. `U64_MAX` means running; pause and `step(n)` lower it. | engine_core §3.3 |
 | `stop_requested` | Sticky flag that stops the core at the gate. Highest priority. | engine_core §3.3 |
@@ -80,7 +80,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | row predicate | An engine view's row filter. Its kind (`ALL`, `AABB`, `SPHERE`, `FRUSTUM`, `TAG`) is fixed at the freeze; its parameters can change on every publish. Coarse in the core, refined by the reader. | engine_core §3.4 |
 | return header | A small struct the reader writes before a take and the publisher reads afterwards: predicate parameters, last tick consumed, cadence hint. It can shape the engine view, never the world. | engine_core §3.5 |
 | cadence | An engine view is published every `k` ticks. | engine_core §3.1 |
-| cadence hint | A reader's request to be published less often. The publisher may ignore it. | engine_core §3.5 |
+| cadence hint | A reader's request to be published less often. The publisher may ignore it, and always does on a paced engine view. | engine_core §3.5 |
+| paced engine view | An engine view registered with `paced=True`. Its reader is a participant: each take declares it ready through the next publish. | engine_core §3.1 |
 | consumer lag | Last published tick minus the reader's last consumed tick. The signal that a reader is falling behind. | engine_core §3.5 |
 | array view | A NumPy view into a taken block. Not an engine view. | python_api §7.2 |
 
@@ -96,7 +97,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | command ring | An endpoint's ring buffer. Its depth is `capacity` at margin 0 and on the host endpoint, `2 × capacity` at a margin of 1 or more. Computed at the freeze. | engine_core §5.1 |
 | capacity | The most commands one endpoint may hold for one tick. Default 64, maximum 256. Exceeding it returns `queue_full`. The only number an endpoint declares. | limits §2 |
 | stamp | The tick a command names. | engine_core §5.1 |
-| stamp margin | How far past the current tick an endpoint may stamp. 0 for mods and engine sources, the input delay for a peer. The unpaced host endpoint stamps nothing. | engine_core §5.1 |
+| stamp margin | How far past the current tick an endpoint may stamp, and so how far ahead its producer may declare ready. 0 for engine sources and, unless its manifest declares one, for a mod; the input delay for a peer. The unpaced host endpoint stamps nothing. | engine_core §5.1 |
 | admission | The immediate answer to a submit: `admitted` with a handle, or a rejection (`queue_full`, `too_late`, `out_of_order`, `over_margin`, `invalid`, `revoked`, `host_error`). | engine_core §5.1 |
 | `too_late` | The named tick is past, or its producer has already declared it ready. | engine_core §5.1 |
 | admission wait | A paced submit that finds its ring full waits, on the endpoint's mutex and condition variable, until the oldest tick in the ring has run. Only a ring with a margin can fill. A pause leaves it parked; only revocation wakes it early. | engine_core §5.1 |
@@ -166,7 +167,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | mod bus | Delivers engine events to one inbox per mod. | modding §4.2 |
 | inbox | A mod's event queue. Its size is capped by `max_inbox_size`. | modding §4.2 |
 | suspend | A mod whose inbox overflows stops being fed and stops being waited for, but keeps its endpoint. Reversible. | modding §4.2 |
-| quarantine | A mod that fails is stopped. `mod_retry_limit` sets how often it is restarted. | modding §4.2 |
+| quarantine | A mod that fails is stopped, and leaves the gate at once. `mod_retry_limit` sets how often it is restarted. | modding §4.2 |
 | host services table | The versioned C ABI the engine gives a Tier 3 mod. | modding §5.1 |
 | certification | Checking that a Tier 3 mod is deterministic by re-running golden replays at 1 and N threads, in Debug and Release. | modding §5.3 |
 

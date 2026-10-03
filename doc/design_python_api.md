@@ -49,7 +49,7 @@ The alternatives, and why they lost:
 | Launcher: blocking C++ `run()` (openage) | C++ | Rejected. It locks Python out while running, which breaks REPL, pytest and replay-harness workflows |
 | Stepping: Python pumps the engine | Python | Chosen. It matches the convention of simulation libraries (MuJoCo, pybullet, gym `env.step`, the Panda3D task pump). It is the best fit for the verification harness of `design_engine_core.md` §2.3 |
 | Background engine thread plus a control plane | C++ | Chosen for the tick loop of a windowed session: the sim thread (§4.3). Python keeps the frame loop, and the sim thread runs only ticks |
-| Callback framework (`app.run(on_tick=...)`) | C++ | Rejected as the primary API. It re-enters the GIL at tick rate, and exceptions cross the C++ loop. Mods consume events and snapshots at their own mod host's pace instead (`design_modding.md` §4). No per-frame or per-tick callbacks exist. Whether every mod must still be paced every tick is open ([Q2](open_question.md#q2-must-every-mod-be-paced-every-tick)) |
+| Callback framework (`app.run(on_tick=...)`) | C++ | Rejected as the primary API. It re-enters the GIL at tick rate, and exceptions cross the C++ loop. Mods consume events and snapshots at their own mod host's pace instead (`design_modding.md` §4). No per-frame or per-tick callbacks exist. A mod that submits is paced, and may run up to its declared margin ahead of the sim; a mod that only reads is an observer and paces nothing (`design_modding.md` §4.1) |
 
 A survey of openage, Panda3D, MuJoCo and Godot found one deciding factor. Engines that ship
 a game embed a script VM and keep the loop native. Projects that are a Python package put
@@ -198,8 +198,8 @@ Rules:
      under a deadline (`design_modding.md` §6). This step runs with the GIL held, because
      `on_unload` is Python. It does not end the session: the session is still `running` when
      it returns, and steps 2 and 3 end it. A caller may call `mods.stop()` on its own
-     without closing the engine. How the stopped mods then leave the gate is open
-     ([Q9](open_question.md#q9-how-does-a-stopped-participant-leave-the-gate)).
+     without closing the engine. The stopped mods leave the gate at once, so the session
+     never waits for a mod that is gone (`design_engine_core.md` §3.3).
   2. **`stop_sim_async()`**: the staged native join (§4.3) and the error rendezvous. It may
      raise. It runs with the GIL released. It ends ticking for the session: the engine is
      `stopped`, and no tick runs again. A session with no sim thread has nothing to join;
@@ -376,6 +376,10 @@ class HostPolicy:                        # engine-enforced, needed long after lo
     mod_retry_limit: int = 0             # quarantine: 0 = stay disabled, N = re-spawn up
                                          #   to N times (design_modding.md §4.2)
     max_inbox_size: int = 1024           # engine cap on the manifest's inbox_size
+    mod_deadline_ms: int = ...           # a mod's gate deadline when its manifest gives
+                                         #   none. Not in config.py yet; value open (Q80)
+    max_mod_deadline_ms: int = ...       # engine cap on the manifest's deadline_ms. Not
+                                         #   in config.py yet; value open (Q80)
 
 @dataclass(frozen=True, slots=True)
 class CommandPolicy:                     # doc/design_limits.md §2
@@ -426,9 +430,10 @@ class EngineConfig:
 engine = Engine(config)                  # the only place config crosses the boundary
 ```
 
-The sketch matches `src/sim_estab/config.py`, which is the implementation. `window` and
-`log` are the only fields not in `config.py` yet
-([Q18](open_question.md#q18-what-goes-in-windowconfig-and-logconfig)).
+The sketch matches `src/sim_estab/config.py`, which is the implementation. `window`, `log`
+and `HostPolicy`'s two mod-deadline fields are the only fields not in `config.py` yet
+([Q18](open_question.md#q18-what-goes-in-windowconfig-and-logconfig),
+[Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
 
 Rules:
 
@@ -444,8 +449,8 @@ Rules:
   "first caller wins" in the literal sense of `design_patterns.md` §3 (`design_logging.md`
   §2).
 - **There are two mod-related policies, and they are different objects.** `HostPolicy` is
-  what the engine enforces: the shutdown budget, the IPC deadline, quarantine retries and
-  the inbox cap. The loader knows none of these. `close()` needs all of them, whether or not
+  what the engine enforces: the shutdown budget, the IPC deadline, quarantine retries, the
+  inbox cap and the mod gate deadline. The loader knows none of these. `close()` needs all of them, whether or not
   a mod was ever loaded.
   - **One shutdown number, reused by every stage.** `shutdown_deadline` bounds each of five
     blocking shutdown stages on its own:
@@ -471,6 +476,12 @@ Rules:
     given, must exceed one tick. `EngineConfig` checks this, because the tick rate lives
     there. `design_limits.md` §1.1 gives the input delay as its ceiling. Its value and its
     constraints are open ([Q43](open_question.md#q43-ipc_deadline-value-and-constraints)).
+  - **A mod's gate deadline is declared by the mod and capped by the engine**, like its
+    inbox size: the manifest's `deadline_ms`, or `mod_deadline_ms` when it gives none, and
+    never more than `max_mod_deadline_ms` (`design_modding.md` §3). What happens on expiry
+    is derived, not declared: a mod that submits is suspended, and a mod paced only by its
+    engine view is continued without (`design_engine_core.md` §3.3). The values are open
+    ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
   - **Quarantine is one number, not a mode plus a number.** `mod_retry_limit` alone decides
     it: 0 keeps a failed mod disabled, and N re-spawns it up to N times. A separate mode
     such as `on_mod_error="disable"` would say the same as `retry_limit=0`, and the pair
@@ -946,8 +957,9 @@ boundary, or how long a crossing holds the GIL. Rule 5 sets which thread may mak
    Python-level `close()`, whose step 1 runs mod `on_unload` and so needs the GIL (§2).
 3. **No Python callbacks at tick rate.** There is no `on_tick` for Python code, host or mod.
    Frame-rate readers read snapshots and events, and the world changes only through
-   commands. Whether every mod must still declare ready every tick is open
-   ([Q2](open_question.md#q2-must-every-mod-be-paced-every-tick)).
+   commands. A mod that submits declares ready from its own thread, up to its declared
+   margin ahead of the sim; a mod that only reads declares nothing (`design_modding.md`
+   §4.1).
 4. **Per-frame snapshot access is zero-copy** (§7.2), through a registered `PRIVATE` engine view.
    Copying a full projection every frame would dwarf every other cost in this document. That
    is why render owns an engine view instead of calling `engine.snapshot()`. Occasional readers
@@ -1118,9 +1130,10 @@ res = ctx.outcome(h)                    # waits until t has run; t is already re
 
 **A paced submission names its tick.** There is no unstamped paced call and no peer-only
 variant. A mod and a network peer use the same function. What differs is one number their
-endpoint declared at the freeze, its **stamp margin**: 0 for a mod, or a peer's input delay
-(`design_engine_core.md` §5.1). Nothing returns a lower bound and then chooses, because a
-lower bound is the one answer a submitter cannot act on.
+endpoint declared at the freeze, its **stamp margin**: 0 for a mod unless its manifest
+declares one, or a peer's input delay (`design_engine_core.md` §5.1). Nothing returns a
+lower bound and then chooses, because a lower bound is the one answer a submitter cannot
+act on.
 
 **Every paced producer is a participant.** Submitting for a named tick makes a caller a
 participant (`design_engine_core.md` §3.3): the tick does not advance until every source
@@ -1140,7 +1153,7 @@ the call that submits it, on the calling thread, through an endpoint bound to it
 | Principal | Endpoint | Margin | Call |
 |---|---|---|---|
 | host application (player input, tools) | the **host endpoint**, source id 0. Allocated at the freeze, opened when the session starts, revoked at shutdown after its running submits finish. Its producer is the owner thread (§6) | none: unpaced. Its commands name no tick, and the first drain after a submit takes them | `engine.submit` / `engine.submit_batch` |
-| logic mod (Tier 2) | the mod's stable endpoint, allocated at the freeze and bound to its assigned source id. Opened at `mods.start()` or on retry; revoked at shutdown step 1 after its running submits finish (`design_modding.md` §6) | 0 | `ctx.submit` / `ctx.submit_batch` |
+| logic mod (Tier 2) that may submit | the mod's stable endpoint, allocated at the freeze and bound to its assigned source id. Opened at `mods.start()` or on retry; revoked at shutdown step 1 after its running submits finish (`design_modding.md` §6). A mod that only reads has none | 0, or the margin its manifest declares | `ctx.submit` / `ctx.submit_batch` |
 | network peer | one endpoint per peer, bound at the freeze, with its own receive thread | the input delay | the transport's `submit` |
 
 Single-producer is a contract, and it is what allows the SPSC ring (`design_engine_core.md`
@@ -1462,14 +1475,17 @@ Rules:
   `lag` is how many ticks behind the reader is, computed from the `last_consumed_tick` that
   the return header carries back. A single-reader engine view never skips a publish, so without
   `lag` a lagging reader is invisible. `view.hint_cadence(k)` is the advisory back-pressure
-  that goes with it. The publisher may ignore it, and a reader that cannot miss a tick uses
-  `paced=True` instead.
+  that goes with it. The publisher may ignore it, and always does on a paced engine view. A
+  reader that cannot miss a tick uses `paced=True` instead.
 - **An engine view may be paced.** Registering it with `paced=True` and a deadline makes its reader
   a participant (`design_engine_core.md` §3.3). The core will not advance past a tick the
   engine view has not taken. That is how a recorder or training-data collector makes sure it misses
   no tick. It costs what it says: up to the declared deadline of tick latency, and only
-  while that engine view is behind. How a take counts as readiness is not yet specified
-  ([Q14](open_question.md#q14-how-does-a-paced-engine-view-count-as-ready)).
+  while that engine view is behind. **Taking is the declaration.** `take()` of the block of
+  tick `t` declares the reader ready through `t + cadence`, its next publish, so the sim can
+  never run past a publish the reader has not taken (`design_engine_core.md` §3.1). The
+  reader makes no other call. A paced engine view ignores cadence hints, because its cadence
+  is part of what it declared.
 
   The default is `False`, and an engine view that is not paced cannot delay a tick, however slow it
   is. Pacing is the only way to guarantee no missed tick. A reader that only wants the core

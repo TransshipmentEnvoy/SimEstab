@@ -479,9 +479,15 @@ registry (§2.4 step 3a). Each engine view declares:
 | **paced**, with a deadline | A reader that must see every tick registers a paced engine view and becomes a participant (§3.3) |
 
 Whether an engine view may leave out the id column is open
-([Q5](open_question.md#q5-is-the-id-column-in-every-projection)). How a paced engine view's take
-counts as ready is not yet specified
-([Q14](open_question.md#q14-how-does-a-paced-engine-view-count-as-ready)).
+([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
+
+**A paced engine view's take is its declaration.** Taking the block of tick `t` declares the
+reader ready through `t + k`, where `k` is the view's cadence: up to and including its next
+publish. `take()` makes that store itself, under the gate mutex, with a notify if the sim is
+parked (§3.3). So the sim may run to the next publish, and no further, before the reader
+takes again; every publish is seen. Until the first take, the reader is ready through tick
+0, which the freeze publishes (§2.4 step 9). A take that finds nothing new declares nothing.
+A paced engine view ignores cadence hints (§3.5): its cadence is part of its declaration.
 
 **Placement**, heap or shared memory, is not a v1 declaration. Every engine view is heap-allocated
 engine memory. Shared-memory placement comes back with `SHARED` and its split-permission
@@ -749,9 +755,9 @@ single-player**: its commands name no tick, so it has no tick to be late for (be
 Reading gives no standing at all: an observer may fall any distance behind, and the core
 never notices. One case is declared rather than implied: a peripheral that submits
 nothing but must not miss a tick, such as a recorder or a training-data collector. It
-registers as a participant explicitly, with a paced engine view (§3.1). Whether mods that never
-submit must still be paced every tick is open
-([Q2](open_question.md#q2-must-every-mod-be-paced-every-tick)).
+registers as a participant explicitly, with a paced engine view (§3.1). A mod follows the
+same rule: one that submits is a participant, and one that only reads is an observer
+(`design_modding.md` §4.1).
 
 Tier 3 core mods are neither kind. They are systems inside the tick, ordered by the phase
 cut (§4.1), and this section does not apply to them.
@@ -1009,9 +1015,13 @@ sim has met it at the gate, no tick runs again. A stopped session can still be r
 the deadline and the expiry policy. There is **no global default**. Registration is where
 the cost is taken on, so it is where the cost is declared, just as a mod manifest declares
 its endpoint capacity. The count is capped (`design_limits.md` §2.1). The cap is generous
-because a participant costs an array entry scanned once per tick, not an allocation. No
-manifest or config field yet declares a mod's deadline and expiry policy
-([Q9](open_question.md#q9-how-does-a-stopped-participant-leave-the-gate)).
+because a participant costs an array entry scanned once per tick, not an allocation.
+
+A mod's deadline comes from its manifest's `deadline_ms`, or `HostPolicy`'s default when the
+manifest gives none, and `HostPolicy` caps it (`design_modding.md` §3,
+`design_python_api.md` §3). A mod's expiry policy is derived, not declared: `SUSPEND` for a
+mod that submits, `CONTINUE_WITHOUT` for a mod paced only by its engine view. Those are the
+only two answers that cannot change what the session computes behind its back (below).
 
 **On expiry.** The participant set never shrinks, since the freeze fixes it. What changes is
 whether a participant can still hold the gate. The `DROP` row is a correctness constraint,
@@ -1040,6 +1050,14 @@ The obvious implementation of `DROP` is wrong in two ways:
   tick prevents the desync. The stall policy and escalation protocol are open
   ([Q48](open_question.md#q48-stall-policy),
   [Q49](open_question.md#q49-peer-deadline-and-drop-escalation)).
+
+**Leaving the gate.** A participant whose producer has stopped leaves the conjunction at
+once, without waiting out its deadline. When a mod host stops, by quarantine, a failed spawn
+or `mods.stop()` (`design_modding.md` §4.2, §6), the engine clears its `active` under
+`gate.m` and notifies a parked sim. It reports the departure as a reliable `participant.left`
+event. A retry re-enters it at the current tick: under `gate.m`, its `ready_through` becomes
+`first_unexecuted - 1` and `active` becomes 1. Suspension (`SUSPEND`) and resumption use the
+same two stores.
 
 `CONTINUE_WITHOUT` is allowed only for a participant whose absence provably cannot change
 the command stream. That excludes a peer, and every mod that submits commands, since
@@ -1188,7 +1206,8 @@ command ring (§5.1), which is the ordered, deterministic, replayed and checksum
 path. A second input that is unordered, undeclared and invisible to replay would be a desync
 source. This channel is convenient, which is exactly why the rule is stated here.
 
-**The cadence hint is advisory.** The publisher may ignore it. A reader that must receive
+**The cadence hint is advisory.** The publisher may ignore it, and always ignores it on a
+paced engine view, whose cadence sets its declarations (§3.1). A reader that must receive
 every tick registers a paced engine view and becomes a participant (§3.3), paying for that
 guarantee at the gate. The hint lets a reader shed load without blocking the core; pacing
 lets it refuse to miss a tick. They meet different needs, and neither replaces the other.
@@ -1559,7 +1578,7 @@ The only artifacts peripherals ever see:
 | Endpoint | **one SPSC ring per endpoint**, single-producer by contract, and **one endpoint per source** in v1. A source with several producer threads serializes its own submissions. Source 0 is the host |
 | Submission | happens inside the submitting call, on the caller's thread. There is no relaying producer, no buffer-then-flush stage and no contention between sources: two endpoints never touch the same word |
 | Result | two per command. **Admission** is returned by the call (`admitted \| queue_full \| too_late \| out_of_order \| over_margin \| invalid \| revoked \| host_error`). The **outcome** is read later: a paced producer reads it for a tick already released, and the host polls it. Neither is an event |
-| Tick | **a paced submitter names it**, and the command runs at that tick or not at all. Paced endpoints differ only in a declared stamp margin: 0 for a mod or an engine source, or a peer's input delay. The host endpoint is unpaced: its commands name no tick and run at the first tick that drains them (§5.1) |
+| Tick | **a paced submitter names it**, and the command runs at that tick or not at all. Paced endpoints differ only in a declared stamp margin: 0 for an engine source, 0 or a declared margin for a mod, or a peer's input delay. The host endpoint is unpaced: its commands name no tick and run at the first tick that drains them (§5.1) |
 | Capacity | the one number an endpoint declares: how many commands it may hold for **one tick**. There is no drain quota; a tick runs everything stamped for it, because pacing closed the set first |
 | Order | the sequence is the position in the drain, so `(source id, sequence)` is a total order **by construction**: assigned by the engine, impossible to forge, and needing no sort |
 | Record | recorded as consumed: exactly the commands the tick runs, so what is recorded is what was applied. Rejected commands never enter the record |
@@ -1650,12 +1669,15 @@ peer is a number declared once, not a second API.
 
 | Margin | Who | A command stamped for a later tick is |
 |---|---|---|
-| **0** | mods that submit commands, engine and AI sources. Each acts inside the tick it is about to release | **a bug**, rejected when submitted |
+| **0** | mods that submit commands, by default; engine and AI sources. Each acts inside the tick it is about to release | **a bug**, rejected when submitted |
+| a mod's declared **`margin`** | a mod whose manifest declares one, so that its Python loop may run up to that many ticks ahead of the sim (`design_modding.md` §3) | normal, up to the margin |
 | the **input delay** | a peer, whose commands cross a network and are legitimately in flight across ticks | normal; this is why the margin exists (`design_multiplayer.md` §3.2) |
 
 The transport owns a peer's margin, and its value is open
 ([Q50](open_question.md#q50-input_delay_ticks)). The engine imposes no value and no bound.
-The host endpoint has no margin, because it stamps nothing.
+A mod's margin is its own declaration. The host endpoint has no margin, because it stamps
+nothing. A producer with margin `m` may declare ready up to `m` ticks past the current one.
+The further ahead it runs, the less often the gate has to wait for it.
 
 **State.** Per endpoint: two hot 8-byte ring atomics on separate cache lines, two cold
 4-byte lease atomics, a cold mutex and condition variable for the admission wait, a plain
@@ -1676,7 +1698,7 @@ struct Endpoint {                            // one per producer, fixed at the f
     std::condition_variable space_cv;        // a producer waiting for ring space parks here
     u32               waiters;               // producers parked on space_cv; guarded by m
     u32               capacity;              // commands this endpoint may hold for ONE tick
-    u32               margin;                // 0 for mods and engine sources
+    u32               margin;                // 0 for engine sources; a mod's from its manifest
     bool              unpaced;               // the host endpoint in single-player
     u64               last_stamped;          // producer-thread-only
     u32               stamped_for_tick;      // producer-thread-only
@@ -1943,7 +1965,7 @@ for it. The ring depth follows:
 | Endpoint | Depth |
 |---|---|
 | margin 0 | `capacity` |
-| margin 1 or more (a peer) | `2 × capacity`: the tick being filled, and one already released. A producer further ahead waits at (C3) |
+| margin 1 or more (a peer, or a mod that declares a margin) | `2 × capacity`: the tick being filled, and one already released. A producer further ahead waits at (C3) |
 | the host endpoint, unpaced | `capacity`: every drain empties it |
 
 The engine-wide per-tick ceiling is `C = Σ capacity(e)` over registered endpoints
@@ -2127,8 +2149,8 @@ Rules that keep this sound:
   The gate makes this more than bookkeeping. Every instance waits for `t` rather than
   running past it (§3.3), so a named tick means the same tick everywhere. A lockstep peer
   needs this (`design_multiplayer.md` §3.2), and a local caller gets it for free. How far
-  ahead of the current tick an endpoint may name is its declared stamp margin: 0 for a mod
-  or an engine source, the input delay for a peer (§5.1). The transport chooses that delay;
+  ahead of the current tick an endpoint may name is its declared stamp margin: 0 for an
+  engine source, 0 or a declared margin for a mod, the input delay for a peer (§5.1). The transport chooses that delay;
   the engine imposes no value and no bound. The host names no tick at all (§5.1).
 - **Replay feeds commands in at consumption, not at submission.** The recorded stream is
   already ordered and already carries each command's tick (§2.3, §5). So a loaded replay
