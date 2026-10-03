@@ -337,7 +337,7 @@ ComputeContext::~ComputeContext() noexcept {
 }
 
 // Device queries
-GPUDeviceInfo ComputeContext::device_info() const {
+GPUDeviceInfo ComputeContext::device_info() const noexcept {
     GPUDeviceInfo info{};
     info.backend = GPUBackend::Unknown;
 
@@ -405,7 +405,7 @@ ComputeBufferHandle ComputeContext::create_buffer(size_t size, BufferUsage usage
     return static_cast<ComputeBufferHandle>(buffer);
 }
 
-void ComputeContext::destroy_buffer(ComputeBufferHandle buffer) {
+void ComputeContext::destroy_buffer(ComputeBufferHandle buffer) noexcept {
     check_impl();
     if (buffer) {
         SDL_ReleaseGPUBuffer(impl_->gpu_device, static_cast<SDL_GPUBuffer *>(buffer));
@@ -597,7 +597,7 @@ ComputePipelineHandle ComputeContext::create_pipeline(std::span<const uint8_t> s
     return static_cast<ComputePipelineHandle>(pipeline);
 }
 
-void ComputeContext::destroy_pipeline(ComputePipelineHandle pipeline) {
+void ComputeContext::destroy_pipeline(ComputePipelineHandle pipeline) noexcept {
     check_impl();
     if (pipeline) {
         SDL_ReleaseGPUComputePipeline(impl_->gpu_device, static_cast<SDL_GPUComputePipeline *>(pipeline));

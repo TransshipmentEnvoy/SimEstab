@@ -213,7 +213,7 @@ public:
     /**
      * Get information about the GPU device
      */
-    [[nodiscard]] GPUDeviceInfo device_info() const;
+    [[nodiscard]] GPUDeviceInfo device_info() const noexcept;
 
     /**
      * Check if the context has a valid GPU device
@@ -236,7 +236,7 @@ public:
      *
      * @param buffer Handle to the buffer to destroy
      */
-    void destroy_buffer(ComputeBufferHandle buffer);
+    void destroy_buffer(ComputeBufferHandle buffer) noexcept;
 
     /**
      * Upload data to a GPU buffer
@@ -283,7 +283,7 @@ public:
      *
      * @param pipeline Handle to the pipeline to destroy
      */
-    void destroy_pipeline(ComputePipelineHandle pipeline);
+    void destroy_pipeline(ComputePipelineHandle pipeline) noexcept;
 
     // Dispatch operations
     /**

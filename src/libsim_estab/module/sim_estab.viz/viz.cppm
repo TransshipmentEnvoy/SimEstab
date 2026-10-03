@@ -95,18 +95,18 @@ public:
     void clear(float r = 0.0f, float g = 0.0f, float b = 0.0f);
 
     // Window state queries
-    bool is_visible() const;
-    bool is_minimized() const;
-    bool is_maximized() const;
+    [[nodiscard]] bool is_visible() const noexcept;
+    [[nodiscard]] bool is_minimized() const noexcept;
+    [[nodiscard]] bool is_maximized() const noexcept;
 
     // Window property queries
-    int width() const;
-    int height() const;
-    std::string title() const;
+    [[nodiscard]] int width() const noexcept;
+    [[nodiscard]] int height() const noexcept;
+    [[nodiscard]] std::string title() const noexcept;
     void set_title(std::string_view title);
 
     // GPU queries
-    GPUDeviceInfo device_info() const;
+    [[nodiscard]] GPUDeviceInfo device_info() const noexcept;
 
     [[nodiscard]] bool has_device() const noexcept;
 

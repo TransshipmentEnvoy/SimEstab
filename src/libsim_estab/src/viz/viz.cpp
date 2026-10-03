@@ -262,21 +262,21 @@ void VizContext::clear(float r, float g, float b) {
 }
 
 // Window state queries - return defaults if impl_ is null
-bool VizContext::is_visible() const {
+bool VizContext::is_visible() const noexcept {
     if (!impl_ || !impl_->window) {
         return false;
     }
     return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_HIDDEN) == 0;
 }
 
-bool VizContext::is_minimized() const {
+bool VizContext::is_minimized() const noexcept {
     if (!impl_ || !impl_->window) {
         return false;
     }
     return (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_MINIMIZED) != 0;
 }
 
-bool VizContext::is_maximized() const {
+bool VizContext::is_maximized() const noexcept {
     if (!impl_ || !impl_->window) {
         return false;
     }
@@ -284,7 +284,7 @@ bool VizContext::is_maximized() const {
 }
 
 // Window property queries - return defaults if impl_ is null
-int VizContext::width() const {
+int VizContext::width() const noexcept {
     if (!impl_) {
         return 0;
     }
@@ -296,7 +296,7 @@ int VizContext::width() const {
     return impl_->width;
 }
 
-int VizContext::height() const {
+int VizContext::height() const noexcept {
     if (!impl_) {
         return 0;
     }
@@ -308,7 +308,7 @@ int VizContext::height() const {
     return impl_->height;
 }
 
-std::string VizContext::title() const {
+std::string VizContext::title() const noexcept {
     if (!impl_) {
         return {};
     }
@@ -328,7 +328,7 @@ void VizContext::set_title(std::string_view title) {
 }
 
 // GPU queries - return defaults if impl_ is null
-GPUDeviceInfo VizContext::device_info() const {
+GPUDeviceInfo VizContext::device_info() const noexcept {
     GPUDeviceInfo info{};
     info.backend = GPUBackend::Unknown;
 
