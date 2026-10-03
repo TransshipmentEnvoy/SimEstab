@@ -31,6 +31,8 @@ How to read this doc:
 
 - One primary module `sim_estab`, with one partition per subsystem.
 - Heavy optional subsystems get a separate module (`sim_estab.viz`).
+- A subsystem's internals go in a non-exported partition.
+- Every file's name and folder follow from the module or partition it holds.
 - Macros stay in ordinary headers. Foreign types cross the interface as
   opaque `void *` aliases.
 
@@ -40,28 +42,85 @@ How to read this doc:
 - Subsystems are **module partitions**: `sim_estab:log`, `sim_estab:gpu`,
   `sim_estab:util`.
 - `sim_estab.cppm` re-exports them (`export import :log;`).
+- A subsystem's internals that importers must not see go in a
+  **non-exported partition**, declared without `export`
+  (`module sim_estab:<name>;`). Every unit of the module can import it. An
+  importer of `sim_estab` cannot, and `sim_estab.cppm` cannot re-export it.
 - Optional/heavy subsystems that pull extra dependencies live in a
   **separate module** (`sim_estab.viz`). That module does `import sim_estab;`.
 - Small cross-cutting helpers go in the `:util` partition. They live in
   sub-namespaces of `sim_estab::core::util`. Example:
   `util::thread_util::is_main_thread()`.
-- Interface = `module/*.cppm`. It holds declarations, doc comments, and small
-  inline/template code.
-- Implementation = `src/*.cpp` module implementation units
-  (`module sim_estab;` without `export`).
+- An interface unit holds declarations, doc comments, and small
+  inline/template code. Its global module fragment includes standard headers
+  only.
+- An implementation unit in `src/` declares the module, never a partition:
+  `module sim_estab;` without `export`. A non-exported partition is not one
+  of these; it lives in `module/` (see the file layout below).
 - Implementation units include the heavy third-party headers (Boost.Log,
   SDL3). They do so in their **global module fragment** only.
 - Modules cannot export macros. So macros stay in ordinary headers under
-  `include/`:
-  - `macro.h` for `SIM_ESTAB_LOG_*`.
-  - `compat.h` for std headers the interface needs. This hybrid exists
-    because g++ header export support is incomplete.
-- Consumers do `import sim_estab;` + `#include <sim_estab/macro.h>`.
+  `include/` (see the file layout below).
 - Never forward-declare foreign struct types (e.g. `SDL_GPUDevice`) in a
   module interface. Module type mangling makes them incompatible with the
   header-defined type.
 - Instead, expose them as opaque `void *` aliases (`SDL_GPUDevice_ptr`,
   `ComputeBufferHandle`). `static_cast` in the implementation unit.
+
+### File layout
+
+A file's path follows from the module or partition it holds, so a reader can
+find the file from its `import`. Each module has a folder and a **short
+name**: the last component of the module name.
+
+- **Module folders.** Each module's interface units sit in its own folder.
+  - The primary module `sim_estab` uses `module/` itself. Its short name is
+    `sim_estab`.
+  - A secondary module `sim_estab.<m>` uses `module/sim_estab.<m>/`. Its short
+    name is `<m>`.
+- **Interface units.**
+  - A module's primary interface is `<short>.cppm` in its folder:
+    `module/sim_estab.cppm`, `module/sim_estab.viz/viz.cppm`.
+  - A partition `<p>` is `<short>--<p>.cppm` in the same folder, with `--`
+    standing for `:`: `module/sim_estab--log.cppm`.
+  - A non-exported partition is named the same way and also lives in
+    `module/`.
+- **Implementation units.**
+  - A partition `<p>` of `sim_estab` is implemented in `src/<p>.cpp`
+    (`src/log.cpp`, `src/gpu.cpp`).
+  - A partition with only inline and `constexpr` content has no
+    implementation unit (`:limits`).
+  - A partition made of independent helpers, each in its own sub-namespace,
+    gets a folder with one file per helper: `src/<p>/<sub>.cpp`
+    (`src/util/thread_util.cpp`). A partition that needs several files uses
+    the same form.
+  - A secondary module's units go in `src/<m>/`, under its short name. The
+    primary interface is implemented in `src/<m>/<m>.cpp` (`src/viz/viz.cpp`),
+    and a partition in `src/<m>/<p>.cpp`.
+- **Folder names in `src/`.** A folder in `src/` is either a partition or a
+  secondary module. So **a secondary module's short name must differ from
+  every partition name of `sim_estab`.**
+- **Headers.** `include/` holds only what a module cannot export: macros, and
+  the standard headers a unit includes before it imports or implements the
+  module. Headers are per module, not per partition.
+  - `macro.h` holds the macros (`SIM_ESTAB_LOG_*`).
+  - `compat.h` lists the standard headers. This hybrid exists because g++
+    header export support is incomplete.
+  - The primary module's headers sit in `include/`, and a secondary module's in
+    `include/<m>/` (`include/viz/compat.h`).
+- **Include guards.** A guard is `LIBSIM_ESTAB__` plus the path under
+  `include/`, in upper case, with `/` written `__` and `.h` written `_H`:
+  `LIBSIM_ESTAB__COMPAT_H`, `LIBSIM_ESTAB__VIZ__COMPAT_H`.
+- **Include paths.** These differ inside and outside the project.
+  - Code inside the project, tests included, writes the path relative to
+    `include/`: `<compat.h>`, `"viz/compat.h"`.
+  - The install puts `include/` at `include/sim_estab/`. So code built against
+    the installed package writes `<sim_estab/...>`: consumers do
+    `import sim_estab;` + `#include <sim_estab/macro.h>`, and `bind.cpp`
+    includes `<sim_estab/compat.h>`.
+- **Folder names differ between trees.** A secondary module's folder is named
+  by the full module name in `module/` (`sim_estab.viz/`), and by the short
+  name in `src/` and `include/` (`viz/`).
 
 ## 2. Subsystem lifecycle: `X_init` / `X_deinit` / `X_is_init` triad
 
@@ -576,8 +635,9 @@ Rules:
 
 1. Interface in `module/sim_estab--<name>.cppm` as partition
    `sim_estab:<name>`. Use a separate module `sim_estab.<name>` if it drags
-   heavy deps. Re-export from `sim_estab.cppm`. Implementation unit in
-   `src/<name>.cpp`.
+   heavy deps. Re-export from `sim_estab.cppm`. Put internals in a
+   non-exported partition, which is not re-exported. Implementation unit in
+   `src/<name>.cpp`. File names and folders follow §1 "File layout".
 2. Export `<name>_error : std::runtime_error`.
 3. Process-global state? → init/deinit/is_init triad (§2). Single `detail::`
    mutex. Idempotent both ways.
