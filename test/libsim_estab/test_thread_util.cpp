@@ -51,7 +51,7 @@ BOOST_AUTO_TEST_CASE(test_is_main_thread_on_worker,
  */
 BOOST_AUTO_TEST_CASE(test_first_sdl_acquire_off_main_throws,
                      *utf::description("SDL_ctx_acquire with refcount 0 throws gpu_error off the main thread")) {
-    BOOST_REQUIRE(!SDL_ctx_is_initialized());
+    BOOST_REQUIRE(!SDL_ctx_is_init());
 
     bool threw_gpu_error = false;
     std::thread worker([&threw_gpu_error] {
@@ -64,7 +64,7 @@ BOOST_AUTO_TEST_CASE(test_first_sdl_acquire_off_main_throws,
     worker.join();
 
     BOOST_TEST(threw_gpu_error);
-    BOOST_TEST(!SDL_ctx_is_initialized());
+    BOOST_TEST(!SDL_ctx_is_init());
 }
 
 /**
@@ -72,7 +72,7 @@ BOOST_AUTO_TEST_CASE(test_first_sdl_acquire_off_main_throws,
  */
 BOOST_AUTO_TEST_CASE(test_compute_context_off_main_throws,
                      *utf::description("ComputeContext ctor on a worker thread throws gpu_error with refcount 0")) {
-    BOOST_REQUIRE(!SDL_ctx_is_initialized());
+    BOOST_REQUIRE(!SDL_ctx_is_init());
 
     bool threw_gpu_error = false;
     std::thread worker([&threw_gpu_error] {
@@ -85,7 +85,7 @@ BOOST_AUTO_TEST_CASE(test_compute_context_off_main_throws,
     worker.join();
 
     BOOST_TEST(threw_gpu_error);
-    BOOST_TEST(!SDL_ctx_is_initialized());
+    BOOST_TEST(!SDL_ctx_is_init());
 }
 
 /**
@@ -93,11 +93,11 @@ BOOST_AUTO_TEST_CASE(test_compute_context_off_main_throws,
  */
 BOOST_AUTO_TEST_CASE(test_worker_reacquire_allowed,
                      *utf::description("SDL_ctx_acquire from a worker succeeds while main holds a reference")) {
-    BOOST_REQUIRE(!SDL_ctx_is_initialized());
+    BOOST_REQUIRE(!SDL_ctx_is_init());
 
     // First acquisition on the main thread, no subsystems (headless-safe)
     SDL_ctx_acquire(0);
-    BOOST_TEST(SDL_ctx_is_initialized());
+    BOOST_TEST(SDL_ctx_is_init());
 
     bool worker_acquired = false;
     std::thread worker([&worker_acquired] {
@@ -111,10 +111,10 @@ BOOST_AUTO_TEST_CASE(test_worker_reacquire_allowed,
     worker.join();
 
     BOOST_TEST(worker_acquired);
-    BOOST_TEST(SDL_ctx_is_initialized());
+    BOOST_TEST(SDL_ctx_is_init());
 
     SDL_ctx_release();
-    BOOST_TEST(!SDL_ctx_is_initialized());
+    BOOST_TEST(!SDL_ctx_is_init());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

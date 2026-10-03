@@ -262,7 +262,7 @@ Typical cause: the underlying library allows only one instance per process.
 ```cpp
 export void X_acquire(/* capabilities, creation options */);   // throws on failure
 export void X_release() noexcept;                              // no-op if never acquired
-export [[nodiscard]] bool X_is_initialized() noexcept;
+export [[nodiscard]] bool X_is_init() noexcept;
 export [[nodiscard]] X_handle X_get() noexcept;  // if the resource is handle-shaped;
                                                  // nullptr if not initialized
 ```
@@ -307,12 +307,12 @@ Implementation rules:
 ```cpp
 export void SDL_ctx_acquire(SDL_InitFlags subsystems = 0);   // throws on failure
 export void SDL_ctx_release() noexcept;                      // no-op if never acquired
-export [[nodiscard]] bool SDL_ctx_is_initialized() noexcept;
+export [[nodiscard]] bool SDL_ctx_is_init() noexcept;
 
 export [[nodiscard]] SDL_GPUDevice_ptr GPU_device_acquire(bool debug = false, bool low_power = false);
 export void GPU_device_release() noexcept;
 export [[nodiscard]] SDL_GPUDevice_ptr GPU_device_get() noexcept; // nullptr if not initialized
-export [[nodiscard]] bool GPU_device_is_initialized() noexcept;
+export [[nodiscard]] bool GPU_device_is_init() noexcept;
 ```
 
 The points below are facts about SDL. This instance of the pattern has to
@@ -327,7 +327,7 @@ encode them. Discover the equivalents for any new resource:
   `GPU_device_acquire` resets `debug_mode`/`prefer_low_power` before
   throwing.
 - Layering: `GPU_device_acquire` throws `gpu_error` if
-  `SDL_ctx_is_initialized()` is false.
+  `SDL_ctx_is_init()` is false.
 - Thread affinity: SDL's video/main thread is whichever thread first
   initializes video. On Apple platforms, that must be the real main thread.
   So `SDL_ctx_acquire` throws `gpu_error` when `ref_count == 0` off the main
@@ -642,7 +642,7 @@ Rules:
 3. Process-global state? → init/deinit/is_init triad (§2). Single `detail::`
    mutex. Idempotent both ways.
 4. Shared unique resource? → acquire/release refcount pair (§3). Throwing
-   acquire, noexcept release, `_get`/`_is_initialized` queries. Also write
+   acquire, noexcept release, `_get`/`_is_init` queries. Also write
    down the constraints the resource itself imposes: per-process uniqueness,
    thread affinity, immutable creation options. Encode them the way the SDL
    example in §3 does.

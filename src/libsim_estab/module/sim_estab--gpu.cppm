@@ -131,7 +131,7 @@ export void SDL_ctx_release() noexcept;
  *
  * @return true if SDL is initialized (reference count > 0)
  */
-export [[nodiscard]] bool SDL_ctx_is_initialized() noexcept;
+export [[nodiscard]] bool SDL_ctx_is_init() noexcept;
 
 // =============================================================================
 // Shared GPU Device Management
@@ -175,7 +175,7 @@ export [[nodiscard]] SDL_GPUDevice_ptr GPU_device_get() noexcept;
  *
  * @return true if GPU device is initialized (reference count > 0)
  */
-export [[nodiscard]] bool GPU_device_is_initialized() noexcept;
+export [[nodiscard]] bool GPU_device_is_init() noexcept;
 
 /**
  * ComputeContext manages headless GPU compute resources

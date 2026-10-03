@@ -25,7 +25,7 @@ namespace sim_estab::core::gpu {
 
 namespace detail {
 /// Lock order within this subsystem: GPU_device_mutex -> SDL_ctx_mutex, never
-/// the reverse (GPU_device_acquire() calls SDL_ctx_is_initialized() while
+/// the reverse (GPU_device_acquire() calls SDL_ctx_is_init() while
 /// holding its own lock). Both sit above logging, which takes no lock on its
 /// emission guard. See design_patterns.md §2 "Lock hierarchy".
 static std::mutex SDL_ctx_mutex;
@@ -96,7 +96,7 @@ void SDL_ctx_release() noexcept {
     }
 }
 
-bool SDL_ctx_is_initialized() noexcept {
+bool SDL_ctx_is_init() noexcept {
     std::lock_guard<std::mutex> lock(detail::SDL_ctx_mutex);
     return detail::SDL_ctx_ref_count > 0;
 }
@@ -121,7 +121,7 @@ SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode, bool prefer_low_power) {
         // First acquisition - ensure SDL is initialized
         // Note: SDL must be initialized before creating GPU device
         // Video subsystem is required for GPU device creation, even for headless compute
-        if (!SDL_ctx_is_initialized()) {
+        if (!SDL_ctx_is_init()) {
             throw gpu_error("SDL context must be acquired before GPU device creation");
         }
 
@@ -225,7 +225,7 @@ SDL_GPUDevice_ptr GPU_device_get() noexcept {
     return static_cast<SDL_GPUDevice_ptr>(detail::GPU_device_ptr);
 }
 
-bool GPU_device_is_initialized() noexcept {
+bool GPU_device_is_init() noexcept {
     std::lock_guard<std::mutex> lock(detail::GPU_device_mutex);
     return detail::GPU_device_ref_count > 0;
 }
