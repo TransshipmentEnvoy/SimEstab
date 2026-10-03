@@ -128,7 +128,7 @@ margin (below).
 | — | host endpoint (source 0) capacity | **256** | The host gets the ceiling by default. Its endpoint is unpaced, so the number counts the commands waiting for the next drain, which every drain empties (`design_engine_core.md` §5.1). It needs no reserve carved out of an engine-wide pool, because rings are per endpoint: no mod can use up the host's capacity, whatever it submits |
 | — | peer endpoint capacity | **256** | A peer's endpoint carries a whole remote player's turn, so it gets the ceiling for the same reason as the host |
 | `D` | maximum ticks between `drain_events()` calls | **8** | 267 ms at 30 Hz: about sixteen frames of slack at 60 fps for a host that drains every frame, and short enough to catch a host that stopped draining. A tolerance, not a promise |
-| `high_water` | event backlog at which the gate pauses the sim | **derived**: `(C + E) × D` (below) | `D` drain intervals' worth of events. It is not a value to pick: the ring holds it plus one tick, so the tick that passes the gate just below it always fits (`design_engine_core.md` §5.2) |
+| `high_water` | event backlog at which the gate pauses the sim | **derived**: `E × D` (below) | `D` drain intervals' worth of events. It is not a value to pick: the ring holds it plus one tick, so the tick that passes the gate just below it always fits (`design_engine_core.md` §5.2) |
 
 **Ring depth is derived from capacity and the endpoint's stamp margin**, never declared:
 
@@ -156,8 +156,8 @@ second source of truth:
 | `C`: commands run per tick, engine-wide | `Σ capacity(endpoint)` | 256 + 64 × n_mod_endpoints | `design_engine_core.md` §5.1 |
 | endpoint ring depth | `capacity` at margin 0 and on the host endpoint; `2 × capacity` at a margin of 1 or more | `capacity` for every margin-0 producer and the host; 512 for a peer | `design_engine_core.md` §5.1 |
 | `E`: engine-created events per tick | `T·S + S + 3·P + V + 4`, over object types, sources, participants and engine views | `S + 3·P + V + 4` before cap refusals exist (M3) | `design_engine_core.md` §5.2 |
-| `high_water` | `(C + E) × D` | `8 × (C + E)` | `design_engine_core.md` §5.2 |
-| event ring size | `(C + E) × (D + 1)` | `9 × (C + E)` | `design_python_api.md` §7.1, §7.3 |
+| `high_water` | `E × D` | `8 × E` | `design_engine_core.md` §5.2 |
+| event ring size | `E × (D + 1)` | `9 × E` | `design_python_api.md` §7.1, §7.3 |
 
 `C` is not a policy value. The drain assigns order by position and sorts nothing, so the
 per-tick cost is `O(C)`. That makes `C` a result of the endpoint set, not a budget to divide
@@ -213,7 +213,7 @@ At 256 sources, each holding 256 commands for one tick:
 |---|---|---|
 | `C`, commands per tick | **65,536** | ~2M/s at 30 Hz |
 | command ring entries | **at most 131,072** | `Σ depth ≤ 2 × C`: a ring with a margin is two ticks deep |
-| event ring entries | **599,652** before cap refusals; plus `9 × T × 256` from M3 | `(C + E) × (D + 1)`, with `E = 256 + 3 × 256 + 64 + 4 = 1,092` at 256 sources and participants and 64 engine views |
+| event ring entries | **9,828** before cap refusals; plus `9 × T × 256` from M3 | `E × (D + 1)`, with `E = 256 + 3 × 256 + 64 + 4 = 1,092` at 256 sources and participants and 64 engine views. Commands and the world add nothing: every event is an engine event (`design_engine_core.md` §5.2) |
 | total slot memory | **open** ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | M1 uses a provisional per-slot size; the real one is decided with the command payload schema in M2 |
 
 Both counts come from a `Σ` over what actually registered. A session reaches them only by

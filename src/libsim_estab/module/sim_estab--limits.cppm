@@ -20,9 +20,9 @@
  * What is deliberately ABSENT is as load-bearing as what is here. C, the engine-wide
  * commands executed per tick, is the sum of the configured CAPACITIES over the endpoint
  * set, and that set is not closed until the freeze; ring DEPTH (capacity, or 2 x capacity
- * for an endpoint with a stamp margin) and the event ring's (C + E) x (D + 1) both follow
- * it. None of the three is a constant, because a constant would be wrong for every
- * session that loads a different number of mods.
+ * for an endpoint with a stamp margin) follows it, and the event ring's E x (D + 1) follows
+ * the sets the freeze closes. None of the three is a constant, because a constant would be
+ * wrong for every session that loads a different number of mods.
  */
 
 // Global module fragment - minimal headers only
@@ -83,11 +83,11 @@ export inline constexpr std::uint32_t default_peer_source_capacity = 256;
 // ---------------------------------------------------------------------------
 // Freeze-time bounds (design_engine_core.md 2.4 step 3a)
 //
-// Deliberately NOT constants here: C, ring DEPTH, and the event ring's (C + E) x (D + 1),
-// with its backlog mark (C + E) x D. C is the sum of the configured capacities over the
-// endpoint set, and that set is not closed until the freeze; DEPTH is capacity per
-// endpoint, or 2 x capacity for one with a stamp margin, so it too follows the endpoint
-// set, and E follows the sets the freeze closes. Writing any of them down would create an
+// Deliberately NOT constants here: C, ring DEPTH, and the event ring's E x (D + 1), with
+// its backlog mark E x D. C is the sum of the configured capacities over the endpoint set,
+// and that set is not closed until the freeze; DEPTH is capacity per endpoint, or
+// 2 x capacity for one with a stamp margin, so it too follows the endpoint set, and E
+// follows the sets the freeze closes. Writing any of them down would create an
 // engine-wide pool, which per-endpoint rings avoid, and would be wrong for every session
 // that loads a different number of mods.
 // ---------------------------------------------------------------------------

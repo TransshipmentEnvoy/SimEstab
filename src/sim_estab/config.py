@@ -58,8 +58,8 @@ class CommandPolicy:
     Deliberately **not** here, and not as properties either: ring ``DEPTH``
     (``capacity``, or ``2 × capacity`` for an endpoint with a stamp margin), ``C`` (the
     engine-wide commands executed per tick, ``Σ capacity(endpoint)``) and the event ring
-    size ``(C + E) × (D + 1)`` that follows it. The endpoint set is not closed until the
-    freeze, so none of the three is knowable at construction. Exposing any of them would create an
+    size ``E × (D + 1)``. The sets they follow are not closed until the freeze, so none
+    of the three is knowable at construction. Exposing any of them would create an
     engine-wide pool, which per-endpoint rings avoid, and would be wrong for every
     session that loads a different number of mods (``doc/design_limits.md`` §2, §8).
     """

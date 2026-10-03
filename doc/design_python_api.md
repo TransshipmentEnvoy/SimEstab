@@ -400,7 +400,7 @@ class CommandPolicy:                     # doc/design_limits.md §2
                                          #   (capacity, or 2 x capacity at a margin
                                          #   of 1 or more), C (sum of capacities), E,
                                          #   high_water and the event ring size
-                                         #   ((C + E) x (D + 1)). All are computed at
+                                         #   (E x (D + 1)). All are computed at
                                          #   the freeze (§7.1, §7.3).
                                          #   There is no drain quota and no
                                          #   ring_capacity_ticks
@@ -655,7 +655,7 @@ def run_windowed(engine, mods):              # `mods`: the engine-registered bus
                                              #   commands, on the host endpoint. No tick:
                                              #   the next drain takes them (§7.1)
         events = engine.drain_events()       # ALWAYS drained, bus or no bus (§7.3)
-        if mods:                             # engine domain events -> per-mod inboxes;
+        if mods:                             # engine events -> per-mod inboxes;
             mods.publish(events)             #   non-blocking fan-out
         open_handles = app.on_outcomes(engine.outcomes(open_handles))
                                              # polls: `pending` until the command's tick
@@ -914,7 +914,7 @@ thread.
     is not involved: the host declares nothing, so nothing it does per frame bounds the
     speed.
   - **"Unbounded" means unpaced, not free of every limit.** The event backlog mark is
-    `(C + E) × D`: `D` drain intervals' worth of events, where `D` is the number of ticks
+    `E × D`: `D` drain intervals' worth of events, where `D` is the number of ticks
     between two `drain_events()` calls the ring is sized for (§7.1). A sim running free runs
     more ticks per drain, so a literally unbounded mode would overflow the ring by using a
     documented feature correctly.
@@ -1355,14 +1355,16 @@ Rules:
   | Quantity | Bound |
   |---|---|
   | endpoint ring depth | `capacity` at margin 0 and on an unpaced endpoint, `2 × capacity` at a margin of 1 or more: computed, never configured |
-  | engine-wide commands per tick, `C` | `Σ capacity(endpoint)` over *registered* endpoints: a bound checked at the freeze, not an allocation |
+  | engine-wide commands per tick, `C` | `Σ capacity(endpoint)` over *registered* endpoints: computed at the freeze, and nothing is sized from it |
   | engine-created events per tick, `E` | `T·S + S + 3·P + V + 4` over object types, sources, participants and engine views, all closed at the freeze (`design_engine_core.md` §5.2) |
-  | events into the ring per tick | `≤ C + E` |
-  | `high_water`, the event backlog mark | `(C + E) × D`, where `D` is the drain interval: the ticks between two `drain_events()` calls that the ring is sized for |
-  | event ring size | `(C + E) × (D + 1)`: the mark plus one tick, which the gate check cannot stop |
+  | events into the ring per tick | `≤ E` |
+  | `high_water`, the event backlog mark | `E × D`, where `D` is the drain interval: the ticks between two `drain_events()` calls that the ring is sized for |
+  | event ring size | `E × (D + 1)`: the mark plus one tick, which the gate check cannot stop |
 
-  `C` bounds the events commands can cause, and `E` the events the engine creates itself:
-  participant changes, protocol errors, bandwidth warnings, and from M3 cap refusals. Events
+  Every event is created by the engine, so `E` bounds them all: participant changes,
+  protocol errors, bandwidth warnings, and from M3 cap refusals. Commands add nothing, and
+  neither does the world: a change in the world reaches readers as state, never as an event
+  (`design_engine_core.md` §5.2). Events
   the engine raises outside a tick, on the owner thread or a mod host thread, never enter the
   ring; the drain merges them (§7.3).
 
@@ -1665,13 +1667,15 @@ Rules:
   A session that declares neither cannot start (§3).
 - Events are tick-stamped, typed and drained in batches. `drain_events` never blocks, and it
   has exactly one owner (§6). The event ring it drains is bounded and lossless. **Its size is
-  derived, not picked**: `(C + E) × (D + 1)` (§7.1).
+  derived, not picked**: `E × (D + 1)` (§7.1).
 
-  The ring is easy to size because neither of a command's two answers travels on it.
-  Admission is `submit`'s return value, and the outcome is read from its handle (§7.1). What
-  remains is created by the engine, so no source can flood the ring. `E` bounds what the
-  engine creates in one tick, from counts closed at the freeze, so the ring holds the
-  backlog mark plus one tick and cannot overflow (`design_engine_core.md` §5.2).
+  The ring is easy to size because only the engine raises events. Neither of a command's
+  two answers travels on it: admission is `submit`'s return value, and the outcome is read
+  from its handle (§7.1). A change in the world is not an event either. A reader sees it as
+  state, in its engine view, and a change it must not miss is kept in the world
+  (`design_engine_core.md` §5.2). So neither a source nor a system can flood the ring. `E`
+  bounds what the engine creates in one tick, from counts closed at the freeze, so the ring
+  holds the backlog mark plus one tick and cannot overflow (`design_engine_core.md` §5.2).
 - **Events raised outside a tick never enter the ring.** `session.started` comes from the
   freeze, and `participant.left` from a mod host stopping, on the owner thread or a mod host
   thread. They wait in a short side list, and `drain_events()` merges them into its batch in

@@ -115,7 +115,8 @@ requires = ["example.roads>=2"]     # dependency ordering
 
 [capabilities]
 commands = ["set_route", "spawn_vehicle"]   # command types it may submit
-events   = ["vehicle.*", "session.*"]       # event topics it may subscribe to
+events   = ["session.*", "participant.*"]   # engine event topics it may subscribe to;
+                                            #   world changes come from its snapshot
 columns  = ["vehicle.position", "vehicle.id"]   # column read grants (§4.3;
                                                 #   design_data_container.md §7.2)
 

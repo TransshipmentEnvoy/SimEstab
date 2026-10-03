@@ -70,9 +70,9 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
   + [ ] the endpoint lease: revoke closes admission, wakes producers parked on the
         admission wait or an outcome wait, and waits for active submits before reclaim or
         reopen; a retry keeps the same ring (`doc/design_engine_core.md` §5.1)
-  + [ ] the event ring and the event backlog, sized `(C + E) × (D + 1)` with the mark at
-        `(C + E) × D`; the side list for events raised outside a tick; the two event drains,
-        declared by `EngineConfig.event_drain`: the owner drain and the native sink; and
+  + [ ] the event ring and the event backlog, sized `E × (D + 1)` with the mark at `E × D`;
+        the side list for events raised outside a tick; the two event drains, declared by
+        `EngineConfig.event_drain`: the owner drain and the native sink; and
         `EventBacklogError` from a step that reaches the mark under an owner drain
         (`doc/design_engine_core.md` §5.2)
   + [ ] the M1 events: `session.*`, `sim.backlog_*`, `participant.*`,

@@ -85,6 +85,27 @@ game rule (reject deterministically) or a ceiling (stop and report, the default)
 `EngineConfig.entity_capacity` can say which kind. What "stop" means is undefined: pause or
 `failed`? For a Tier 3 mod's system, "suspend that mod" is defined only for Tier 2 mods. M3.
 
+The answer also sizes the `T·S` term of `E` (`engine_core` §5.2; `limits` §2). That term
+allows one cap refusal per object type and source, for every object type and every source.
+Two rules in `data_container` §2.2 suggest it allows more than can happen:
+
+- Only a game-rule cap emits a refusal event. A ceiling stops instead.
+- The event covers only a create with no command behind it, a system creating on its own.
+  A command's refused create reports through that command's outcome, which goes back to its
+  caller and never enters the event ring. So the source behind the event is whoever runs the
+  system, the engine or a Tier 3 mod, not a peer or the host.
+
+A tighter term counts game-rule-capped object types times the sources that run systems. The
+freeze can count those types only once a declaration says which kind a cap is, so the
+formula counts every object type for now. Whether the event's source can be a peer or the
+host is to be confirmed with the rest of this question.
+
+The difference is large, because `T·S` is the largest term of `E` from M3, and the event
+ring is `E × (D + 1)`. A Victoria-style schema has about 20 to 60 object types: Project Alice
+declares 58, of which 22 are created during play. At 256 sources and `T = 60`, `E` is 16,452
+instead of 1,092, and the event ring holds 148,068 entries instead of 9,828. Few object types
+are likely to have game-rule caps, so the tighter term would be a few dozen events.
+
 ### Q32. Relationships
 
 Link storage, indexing, composite keys and delete-time fix-up are undesigned
@@ -233,6 +254,19 @@ A mod with a paced engine view declares `deadline_ms` in its manifest.
 Neither value is decided. The deadline is how long one slow mod's take may hold a tick
 before the gate continues without its view, so it trades tick latency against how often a
 busy mod's view drops out. It needs a measured mod-loop time. M7.
+
+### Q82. How does a reader learn of a world change it must not miss?
+
+A change in the world is never an event. A reader sees it as state, and an observer may skip
+publishes (`engine_core` §5.2, §3.3). So a change that a reader must not miss is kept in the
+world, or the reader paces its engine view. Three forms of state are named: a counter, a
+column holding the tick of the last change, and a log object type that systems create rows
+in and later erase, such as a message log.
+
+Open: whether the engine provides any of them generically, or each schema builds its own.
+A log object type needs a game-rule cap and an expiry rule, so it depends on Q31. Whether
+an engine view should offer "rows changed since tick `t`" is part of the same question. M7,
+when logic mods first read the world.
 
 ## Multiplayer (after M7)
 

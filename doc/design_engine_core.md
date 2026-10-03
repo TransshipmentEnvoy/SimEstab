@@ -1636,8 +1636,9 @@ budgeted sim-thread work, a sum over registered engine views, bounded per engine
 (§3.4).
 
 **`EventRing`**: from the executor to the session's event drain, bounded, and lossless. The
-size is derived, `(C + E) × (D + 1)`: the per-tick command ceiling, a per-tick bound on the
-events the engine creates itself, and the drain interval (§5.2). It cannot overflow, because
+size is derived, `E × (D + 1)`: a per-tick bound on the events the engine creates, and the
+drain interval (§5.2). Every event is an engine event: a command's answers go back to its
+caller, and a change in the world reaches readers as state. It cannot overflow, because
 the gate stops the executor at the backlog mark, one tick's worth below the size. A source
 cannot cause it by submitting. Fan-out to individual subscribers may drop or merge events by
 delivery class (`design_python_api.md` §7.3):
@@ -2022,9 +2023,10 @@ for it. The ring depth follows:
 | unpaced: the host endpoint, a logic mod's | `capacity`: every drain empties it |
 
 The engine-wide per-tick ceiling is `C = Σ capacity(e)` over registered endpoints
-(`design_limits.md` §2). It is a bound checked at the freeze, not an allocation, which is
-why the limit on sources can be generous at no cost to a session with four sources. The
-event ring's size, `(C + E) × (D + 1)`, follows from it (§5.2).
+(`design_limits.md` §2). It is computed at the freeze, and nothing is sized from it: each
+ring is sized from its own endpoint's capacity. That is why the limit on sources can be
+generous at no cost to a session with four sources. The event ring's size does not depend
+on it either, because no command's answer travels on the event ring (§5.2).
 
 **Memory orders.**
 
@@ -2091,6 +2093,22 @@ uses the idiom of §1.1: fill the entry, then release-store the write index. The
 acquire load of that index makes the entry visible. It has the same shape as the ring of
 §5.1, with the direction reversed.
 
+**Only the engine raises events.** An event reports on the engine itself: the session, the
+gate, participants, endpoints, engine views and caps. **A change in the world is never an
+event.** A reader sees it as state, in its engine view (§3.1). A command's two answers go
+back to its caller and never enter the ring: admission is `submit`'s return value, and the
+outcome is read from the command's handle (`design_python_api.md` §7.1). So neither a source
+nor a system can fill the ring, and its bound is a count the freeze closes (below).
+
+**A reader that must not miss a change reads it from state.** An engine view holds the
+latest publish, and an observer may fall any distance behind (§3.3). So a change that is
+undone before the reader's next snapshot never reaches it. A change that a reader must not
+miss is kept in the world instead: a counter, a column holding the tick of the last change,
+or rows of a log object type that systems create and later erase. A reader that needs every
+tick paces its engine view, and the gate then waits for it, up to its deadline (§3.3).
+Which of these the engine supports directly is open
+([Q82](open_question.md#q82-how-does-a-reader-learn-of-a-world-change-it-must-not-miss)).
+
 **Every session declares one event drain.** The drain says who empties the ring. The freeze
 refuses a session that declares none (`design_python_api.md` §3), because a ring nobody
 empties stalls the session while it does nothing else wrong.
@@ -2120,19 +2138,19 @@ host thread. They wait in a short side list under its own mutex, and the drain t
 with the ring's events, in tick order. So the ring keeps its one producer, and these events
 need no room in it.
 
-**The ring's size and the backlog mark are derived.** One tick emits at most `C + E` events
-into the ring. `C` (§5.1) bounds the events commands can cause. `E` bounds the events the
-engine creates itself, and is computed at the freeze from counts the freeze closes (§2.4):
+**The ring's size and the backlog mark are derived.** One tick emits at most `E` events into
+the ring, because every event is an engine event (above). `E` is computed at the freeze from
+counts the freeze closes (§2.4):
 
 | Quantity | Formula | What each term is |
 |---|---|---|
 | `E`: engine-created events per tick | `T·S + S + 3·P + V + 4` | `T·S`: one cap refusal per object type and source (`design_data_container.md` §2.2), from M3. `S`: one protocol-error report per endpoint (§5.1). `3·P`: expired, suspended and resumed, per participant. `V`: one bandwidth warning per engine view (§3.1). `4`: `session.stopped`, `sim.backlog_paused`, `sim.backlog_resumed` and `sim.behind` |
-| `high_water` | `(C + E) × D` | `D` drain intervals' worth of events: the backlog at which the gate pauses the sim |
-| ring size | `(C + E) × (D + 1)` | the mark plus one tick of headroom |
+| `high_water` | `E × D` | `D` drain intervals' worth of events: the backlog at which the gate pauses the sim |
+| ring size | `E × (D + 1)` | the mark plus one tick of headroom |
 
 `T` is the number of object types, `S` of sources, `P` of participants and `V` of engine
 views. The backlog is checked only at the gate, before a tick. A tick that passes just below
-the mark adds at most `C + E` entries, which the extra tick of headroom holds. **So the ring
+the mark adds at most `E` entries, which the extra tick of headroom holds. **So the ring
 cannot overflow:** the gate stops the executor before any tick that could. The event list
 itself is in `design_python_api.md` §7.3, and a new engine-created event adds its term to `E`
 in the same change.
