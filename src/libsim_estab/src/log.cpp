@@ -444,9 +444,9 @@ void log_init() {
 
     // Lifecycle record, emitted AFTER the lock is released and the flag is set:
     // before that the guard would drop it, and inside the lock this call would
-    // be re-entrant if log_is_init() ever took the mutex again. §7 of
-    // design_patterns.md requires the record; §2's lock hierarchy is why the
-    // ordering, not an exemption, is what makes it possible.
+    // be re-entrant if log_is_init() ever took the mutex again.
+    // design_patterns.md §7 requires the record; the lock hierarchy of §2 is
+    // why the ordering, not an exemption, is what makes it possible.
     sim_estab_log("sim_estab.log", severity_level::info, "Logging subsystem initialized");
 }
 

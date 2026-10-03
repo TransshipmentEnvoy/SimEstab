@@ -39,7 +39,7 @@ set(LIBSIM_ESTAB__ARCH_BASELINE "x86-64-v3" CACHE STRING
 set_property(CACHE LIBSIM_ESTAB__ARCH_BASELINE PROPERTY STRINGS
     "x86-64-v3" "x86-64-v4" "x86-64-v2" "x86-64" "native" "")
 
-# Chunk quantum in ELEMENTS, defined here and nowhere else (doc/design_limits.md 3).
+# Chunk quantum in ELEMENTS, defined here and nowhere else (design_limits.md §3).
 # Retuning is a rebuild, deliberately. The constraints are re-checked as static_asserts
 # in sim_estab:limits; they are validated here too so the failure names the cache entry
 # rather than a template instantiation.

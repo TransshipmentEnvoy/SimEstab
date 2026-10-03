@@ -1,6 +1,6 @@
 """Engine configuration: frozen option objects, validated before the boundary.
 
-Every value here is decided in ``doc/design_limits.md``, which carries the reasoning
+Every value here is decided in ``design_limits.md``, which carries the reasoning
 and the revisit trigger for each one; the shapes are ``design_python_api.md`` §3. The
 C++ mirror of the command-policy defaults, the tick rate, the warn threshold and the
 entity capacities is the ``sim_estab:limits`` module partition, and the two must not
@@ -33,7 +33,7 @@ __all__ = [
 MAX_SOURCE_CAPACITY: Final[int] = 256
 
 #: The cap of every object type that declares none: the most entities of that type
-#: alive at one time (``doc/design_limits.md`` §4). A ceiling, not a working size.
+#: alive at one time (``design_limits.md`` §4). A ceiling, not a working size.
 DEFAULT_ENTITY_CAPACITY: Final[int] = 1 << 24
 
 #: The largest cap a type may declare or a session may configure. A slot is a ``u32``
@@ -61,7 +61,7 @@ class CommandPolicy:
     size ``E × (D + 1)``. The sets they follow are not closed until the freeze, so none
     of the three is knowable at construction. Exposing any of them would create an
     engine-wide pool, which per-endpoint rings avoid, and would be wrong for every
-    session that loads a different number of mods (``doc/design_limits.md`` §2, §8).
+    session that loads a different number of mods (``design_limits.md`` §2, §8).
     """
 
     #: ``D`` — ticks between two ``drain_events()`` calls that the event ring is sized
@@ -118,7 +118,7 @@ class HostPolicy:
     #: Seconds bounding a per-call IPC round trip before it becomes ``host_error``, or
     #: ``None`` to leave it unbounded.
     #:
-    #: **Deliberately undecided** (``doc/design_limits.md`` §1.1, §7). It is not a free
+    #: **Deliberately undecided** (``design_limits.md`` §1.1, §7). It is not a free
     #: parameter: its ceiling *is* the input delay — the window in which a peer's
     #: command may legitimately be in flight — so it lands with ``input_delay_ticks``
     #: and not before, against a measured RTT (``doc/open_question.md`` Q43).
@@ -175,7 +175,7 @@ class EngineConfig:
     #: time. Empty means every type keeps its declared ``[[=cap(N)]]``, or
     #: ``DEFAULT_ENTITY_CAPACITY``. Each entry must be 1 to ``MAX_ENTITY_CAPACITY``.
     #: Every cap is closed at the freeze and joins session identity, and a create at the
-    #: cap is refused deterministically (``doc/design_data_container.md`` §2.2).
+    #: cap is refused deterministically (``design_data_container.md`` §2.2).
     entity_capacity: Mapping[str, int] = field(default_factory=dict)
 
     #: ``None`` generates one, which is then recorded.
@@ -188,7 +188,7 @@ class EngineConfig:
     #: rate **and the engine view**. Evaluated **per engine view**, never against the
     #: session total: every remedy is a change to one declaration — a narrower spec, a
     #: tighter row predicate, a lower cadence — so a crossing has to name one. The
-    #: projection is deliberately uncapped (``doc/design_limits.md`` §5); its cost is
+    #: projection is deliberately uncapped (``design_limits.md`` §5); its cost is
     #: measured instead.
     #:
     #: 4 GB/s is reasoned, not measured. One unfiltered engine view over 10⁶ live rows

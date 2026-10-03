@@ -3,7 +3,7 @@
 """Tests for the frozen engine config objects and their validation.
 
 The value assertions here are deliberately literal: they are the Python half of the
-M0 decision recorded in ``doc/design_limits.md``, and a silent change to a default is
+M0 decision recorded in ``design_limits.md``, and a silent change to a default is
 exactly what they exist to catch. If a value legitimately moves, the document and the
 ``sim_estab:limits`` partition move with it.
 """
@@ -16,7 +16,7 @@ import sim_estab.config as engine_config
 from sim_estab.config import CommandPolicy, EngineConfig, HostPolicy
 
 # --------------------------------------------------------------------------
-# decided values (doc/design_limits.md 1, 2, 4)
+# decided values (design_limits.md §1, §2, §4)
 # --------------------------------------------------------------------------
 
 
@@ -34,7 +34,7 @@ def test_decided_defaults():
 
 def test_entity_capacity_decided_values():
     """The default cap is 2**24, a ceiling rather than a working size; the maximum is
-    what a ``u32`` slot can address (``doc/design_limits.md`` §4)."""
+    what a ``u32`` slot can address (``design_limits.md`` §4)."""
     assert engine_config.DEFAULT_ENTITY_CAPACITY == 1 << 24
     assert engine_config.MAX_ENTITY_CAPACITY == 2**32 - 1
     assert EngineConfig().entity_capacity == {}
@@ -70,7 +70,7 @@ def test_derived_bounds_are_not_configurable():
 
 
 # --------------------------------------------------------------------------
-# validation (design_python_api.md 3: validate before touching native code)
+# validation (design_python_api.md §3: validate before touching native code)
 # --------------------------------------------------------------------------
 
 
@@ -98,7 +98,7 @@ def test_command_policy_rejects_non_positive(kwargs):
 
 def test_projection_warn_bandwidth():
     """4 GB/s per engine view, reasoned from the budgeted normal case
-    (``doc/design_limits.md`` §5), and overridable per session."""
+    (``design_limits.md`` §5), and overridable per session."""
     assert EngineConfig().projection_warn_bytes_per_second == 4_000_000_000
     retuned = EngineConfig(projection_warn_bytes_per_second=8_000_000_000)
     assert retuned.projection_warn_bytes_per_second == 8_000_000_000
@@ -149,7 +149,7 @@ def test_host_policy_defaults():
 
 def test_ipc_deadline_has_no_decided_value():
     """It is not a free parameter: its ceiling *is* the input delay, so it lands with
-    ``input_delay_ticks`` and not before (``doc/design_limits.md`` §1.1, §7). Shipping a
+    ``input_delay_ticks`` and not before (``design_limits.md`` §1.1, §7). Shipping a
     number here would be inventing the measurement it waits on."""
     assert HostPolicy().ipc_deadline is None
     assert EngineConfig().host_policy.ipc_deadline is None

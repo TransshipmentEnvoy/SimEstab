@@ -2,7 +2,7 @@
  * @file sim_estab--limits.cppm
  * @brief Module partition for engine-wide limits
  *
- * Every value here is decided in doc/design_limits.md, which carries the reasoning and
+ * Every value here is decided in design_limits.md, which carries the reasoning and
  * the revisit trigger for each one. This partition is the landing site: comments below say
  * what a value binds, and at most summarize why.
  *
@@ -39,7 +39,7 @@ export module sim_estab:limits;
  * @namespace sim_estab::core::limits
  * @brief Engine-wide limits and the bounds derived from them
  *
- * See doc/design_limits.md, which carries the reasoning and the revisit trigger for
+ * See design_limits.md, which carries the reasoning and the revisit trigger for
  * every value below.
  */
 namespace sim_estab::core::limits {
@@ -55,7 +55,7 @@ export inline constexpr std::uint32_t default_tick_rate = 30;
 
 // ---------------------------------------------------------------------------
 // Command admission (policy defaults - EngineConfig.command_policy)
-// design_engine_core.md 5.1, design_python_api.md 7.1
+// design_engine_core.md §5.1, design_python_api.md §7.1
 // ---------------------------------------------------------------------------
 
 /// D - the number of ticks between two drain_events() calls that the event ring is sized
@@ -81,7 +81,7 @@ export inline constexpr std::uint32_t default_host_source_capacity = 256;
 export inline constexpr std::uint32_t default_peer_source_capacity = 256;
 
 // ---------------------------------------------------------------------------
-// Freeze-time bounds (design_engine_core.md 2.4 step 3a)
+// Freeze-time bounds (design_engine_core.md §2.4 step 3a)
 //
 // Deliberately NOT constants here: C, ring DEPTH, and the event ring's E x (D + 1), with
 // its backlog mark E x D. C is the sum of the configured capacities over the endpoint set,
@@ -117,7 +117,7 @@ export inline constexpr std::uint32_t max_paced_participants = 256;
 
 // ---------------------------------------------------------------------------
 // Storage (build constant - LIBSIM_ESTAB__CHUNK_ELEMENTS)
-// design_data_container.md 4
+// design_data_container.md §4
 // ---------------------------------------------------------------------------
 
 #ifndef LIBSIM_ESTAB__CHUNK_ELEMENTS
@@ -133,14 +133,14 @@ export inline constexpr std::uint32_t max_paced_participants = 256;
 export inline constexpr std::size_t chunk_elements = LIBSIM_ESTAB__CHUNK_ELEMENTS;
 
 /// One cache line's worth of elements of type T - the rule column<T> pads its element
-/// count up to (design_data_container.md 3). Stating it in bytes is what makes
+/// count up to (design_data_container.md §3). Stating it in bytes is what makes
 /// one rule hold at every ISA level from SSE to AVX-512.
 export template <typename T>
 inline constexpr std::size_t padding_elements = 64u / sizeof(T);
 
 // ---------------------------------------------------------------------------
 // Entity capacity (build constants - [[=cap(N)]], EngineConfig.entity_capacity)
-// design_limits.md 4, design_data_container.md 2.1, 2.2
+// design_limits.md §4, design_data_container.md §2.1, §2.2
 // ---------------------------------------------------------------------------
 
 /// The cap of every object type that declares none: the most entities of that type alive
@@ -156,7 +156,7 @@ export inline constexpr std::uint32_t max_entity_capacity = 0xFFFF'FFFFu;
 
 // ---------------------------------------------------------------------------
 // Measured, not capped - the projection warn bandwidth
-// design_limits.md 5
+// design_limits.md §5
 //
 // Projected-row width has no cap, by decision rather than omission. Its cost is measured
 // instead: publish reports duration and bytes/second as first-class metrics, and crossing
@@ -170,7 +170,7 @@ export inline constexpr std::uint32_t max_entity_capacity = 0xFFFF'FFFFu;
 /// so a crossing has to name one. The total is still reported; it is not what this is read
 /// against.
 ///
-/// 4 GB/s is reasoned, not measured (design_limits.md 5). One unfiltered engine view over
+/// 4 GB/s is reasoned, not measured (design_limits.md §5). One unfiltered engine view over
 /// 10^6 live rows at a 32-byte spec is 0.96 GB/s at 30 Hz - the scale this design budgets
 /// for - so a threshold near 1 GB/s would warn during ordinary operation. 4 GB/s leaves that
 /// case quiet, still catches the same engine view at 10^7 rows (9.6 GB/s), and stays far
