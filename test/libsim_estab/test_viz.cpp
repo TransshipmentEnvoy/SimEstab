@@ -74,8 +74,8 @@ BOOST_AUTO_TEST_CASE(test_viz_context_creation,
     VizContext ctx;
 
     BOOST_TEST(ctx.has_device());
-    BOOST_TEST(ctx.get_width() == 1280);
-    BOOST_TEST(ctx.get_height() == 720);
+    BOOST_TEST(ctx.width() == 1280);
+    BOOST_TEST(ctx.height() == 720);
 
     // Show window for visual verification
     ctx.show();
@@ -101,9 +101,9 @@ BOOST_AUTO_TEST_CASE(test_viz_context_custom_params,
     ctx.poll_events();
 
     BOOST_TEST(ctx.has_device());
-    BOOST_TEST(ctx.get_width() == 800);
-    BOOST_TEST(ctx.get_height() == 600);
-    BOOST_TEST(ctx.get_title() == "Test Window");
+    BOOST_TEST(ctx.width() == 800);
+    BOOST_TEST(ctx.height() == 600);
+    BOOST_TEST(ctx.title() == "Test Window");
 }
 
 /**
@@ -134,7 +134,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_gpu_info,
     ctx.clear();
     ctx.poll_events();
 
-    auto info = ctx.get_device_info();
+    auto info = ctx.device_info();
 
     // Should have a valid backend (Vulkan or D3D12 on most systems)
     BOOST_TEST((info.backend == GPUBackend::Vulkan || info.backend == GPUBackend::D3D12 ||
@@ -150,10 +150,10 @@ BOOST_AUTO_TEST_CASE(test_viz_context_set_title,
     ctx.clear();
     ctx.poll_events();
 
-    BOOST_TEST(ctx.get_title() == "Initial Title");
+    BOOST_TEST(ctx.title() == "Initial Title");
 
     ctx.set_title("New Title");
-    BOOST_TEST(ctx.get_title() == "New Title");
+    BOOST_TEST(ctx.title() == "New Title");
 }
 
 /**
@@ -175,8 +175,8 @@ BOOST_AUTO_TEST_CASE(test_viz_context_sequential_lifecycle,
         VizContext ctx(640 + i * 100, 480 + i * 50, "Sequential Window " + std::to_string(i));
 
         BOOST_REQUIRE(ctx.has_device());
-        BOOST_TEST(ctx.get_width() == 640 + i * 100);
-        BOOST_TEST(ctx.get_height() == 480 + i * 50);
+        BOOST_TEST(ctx.width() == 640 + i * 100);
+        BOOST_TEST(ctx.height() == 480 + i * 50);
 
         ctx.show();
         ctx.clear(static_cast<float>(i) / 3.0f, 0.5f, 1.0f - static_cast<float>(i) / 3.0f);
@@ -193,7 +193,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_sequential_lifecycle,
 
         // Test title modification
         ctx.set_title("Modified " + std::to_string(i));
-        BOOST_TEST(ctx.get_title() == "Modified " + std::to_string(i));
+        BOOST_TEST(ctx.title() == "Modified " + std::to_string(i));
 
         // ctx is destroyed here at end of loop iteration
         BOOST_TEST_MESSAGE("VizContext iteration " << i << " completed");
@@ -221,7 +221,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_gpu_info_sequential,
         ctx.clear();
         ctx.poll_events();
 
-        auto info = ctx.get_device_info();
+        auto info = ctx.device_info();
 
         // Should report a valid GPU backend
         BOOST_TEST((info.backend == GPUBackend::Vulkan || info.backend == GPUBackend::D3D12 ||
@@ -265,18 +265,18 @@ BOOST_AUTO_TEST_CASE(test_viz_context_multiple_simultaneous,
     BOOST_TEST_MESSAGE("Second VizContext created");
 
     // Both should be functional
-    BOOST_TEST(ctx1.get_width() == 640);
-    BOOST_TEST(ctx1.get_height() == 480);
-    BOOST_TEST(ctx2.get_width() == 800);
-    BOOST_TEST(ctx2.get_height() == 600);
+    BOOST_TEST(ctx1.width() == 640);
+    BOOST_TEST(ctx1.height() == 480);
+    BOOST_TEST(ctx2.width() == 800);
+    BOOST_TEST(ctx2.height() == 600);
 
     // Show both windows
     ctx1.show();
     ctx2.show();
 
     // Both should report same GPU backend (they share the same device)
-    auto info1 = ctx1.get_device_info();
-    auto info2 = ctx2.get_device_info();
+    auto info1 = ctx1.device_info();
+    auto info2 = ctx2.device_info();
     BOOST_TEST(static_cast<int>(info1.backend) == static_cast<int>(info2.backend));
 
     // Render to both windows

@@ -149,7 +149,7 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
         impl_->window_claimed = true;
 
         // Log GPU info
-        auto gpu_info            = get_device_info();
+        auto gpu_info            = device_info();
         const char *backend_name = "Unknown";
         switch (gpu_info.backend) {
         case GPUBackend::Vulkan:
@@ -284,7 +284,7 @@ bool VizContext::is_maximized() const {
 }
 
 // Window property queries - return defaults if impl_ is null
-int VizContext::get_width() const {
+int VizContext::width() const {
     if (!impl_) {
         return 0;
     }
@@ -296,7 +296,7 @@ int VizContext::get_width() const {
     return impl_->width;
 }
 
-int VizContext::get_height() const {
+int VizContext::height() const {
     if (!impl_) {
         return 0;
     }
@@ -308,7 +308,7 @@ int VizContext::get_height() const {
     return impl_->height;
 }
 
-std::string VizContext::get_title() const {
+std::string VizContext::title() const {
     if (!impl_) {
         return {};
     }
@@ -328,7 +328,7 @@ void VizContext::set_title(std::string_view title) {
 }
 
 // GPU queries - return defaults if impl_ is null
-GPUDeviceInfo VizContext::get_device_info() const {
+GPUDeviceInfo VizContext::device_info() const {
     GPUDeviceInfo info{};
     info.backend = GPUBackend::Unknown;
 

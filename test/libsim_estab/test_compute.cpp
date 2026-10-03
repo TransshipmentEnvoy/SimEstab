@@ -41,7 +41,7 @@ BOOST_AUTO_TEST_CASE(test_compute_context_creation,
 
     BOOST_TEST(ctx.has_device());
 
-    auto info = ctx.get_device_info();
+    auto info = ctx.device_info();
     BOOST_TEST_MESSAGE("GPU Backend: " << static_cast<int>(info.backend));
     BOOST_TEST_MESSAGE("GPU Driver: " << info.driver_name);
 
@@ -87,8 +87,8 @@ BOOST_AUTO_TEST_CASE(test_compute_context_mixed_device_preferences,
     ComputeContext ctx2(true);
     BOOST_TEST(ctx2.has_device());
 
-    auto info1 = ctx1.get_device_info();
-    auto info2 = ctx2.get_device_info();
+    auto info1 = ctx1.device_info();
+    auto info2 = ctx2.device_info();
     BOOST_TEST(static_cast<int>(info1.backend) == static_cast<int>(info2.backend));
 }
 
@@ -197,13 +197,13 @@ BOOST_AUTO_TEST_CASE(test_compute_multiple_contexts,
     ComputeContext ctx1;
     BOOST_TEST(ctx1.has_device());
 
-    auto info1 = ctx1.get_device_info();
+    auto info1 = ctx1.device_info();
 
     // Create second context
     ComputeContext ctx2;
     BOOST_TEST(ctx2.has_device());
 
-    auto info2 = ctx2.get_device_info();
+    auto info2 = ctx2.device_info();
 
     // Both contexts should share the same device (same backend)
     BOOST_TEST(static_cast<int>(info1.backend) == static_cast<int>(info2.backend));

@@ -452,7 +452,7 @@ dtor: Impl::~Impl → cleanup(): release window claim → destroy window
       → GPU_device_release() → SDL_ctx_release()
 ```
 
-- `[[nodiscard]]` queries: `has_device()`, `get_device_info()`.
+- `[[nodiscard]]` queries: `has_device()`, `device_info()`.
 - Acquisition witnesses: pointers `gpu_device`, `window`; flags
   `sdl_ctx_acquired`, `window_claimed`.
 - Error translation: `VizContext` catches `gpu_error`. It rethrows as
@@ -497,8 +497,7 @@ private:
   building. A query returns a value-initialized result, which every caller must already
   handle, because a live but empty context can return the same.
 - **Both contexts follow it**, and the rule is stated once here so they cannot drift apart.
-  `VizContext::get_device_info()` and the `VizContext` getters degrade, and so does
-  `ComputeContext::get_device_info()`.
+  `device_info()` degrades on both contexts, and so do the other `VizContext` queries.
 
 ### 5b. Opaque wrapper style (`record`, `record_ostream`, `logger`, `logger_mt`)
 

@@ -213,7 +213,7 @@ public:
     /**
      * Get information about the GPU device
      */
-    [[nodiscard]] GPUDeviceInfo get_device_info() const;
+    [[nodiscard]] GPUDeviceInfo device_info() const;
 
     /**
      * Check if the context has a valid GPU device

@@ -100,13 +100,13 @@ public:
     bool is_maximized() const;
 
     // Window property queries
-    int get_width() const;
-    int get_height() const;
-    std::string get_title() const;
+    int width() const;
+    int height() const;
+    std::string title() const;
     void set_title(std::string_view title);
 
     // GPU queries
-    GPUDeviceInfo get_device_info() const;
+    GPUDeviceInfo device_info() const;
 
     [[nodiscard]] bool has_device() const noexcept;
 
