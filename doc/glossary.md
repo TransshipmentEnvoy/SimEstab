@@ -91,14 +91,15 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | command | The only input that changes world state. Names the tick it applies to, is submitted through an endpoint, runs at that tick and is recorded. | engine_core §5.1 |
 | source | Anything that submits commands: the host, a mod, a peer, an engine AI. | limits §2.1 |
 | source id | A source's `u32` number, fixed at the freeze. The host is 0. Commands run in source id order. | engine_core §2.4 |
-| endpoint | A single-producer command ring for one source. | engine_core §5.1 |
+| endpoint | A single-producer command ring for one source. A source has one endpoint in v1. | engine_core §5.1 |
 | producer | The one thread that submits on an endpoint. | engine_core §5.1 |
-| command ring | An endpoint's ring buffer. Its depth is `(margin + 1) × capacity`, computed at the freeze. | engine_core §5.1 |
+| command ring | An endpoint's ring buffer. Its depth is `capacity` at margin 0 and on the host endpoint, `2 × capacity` at a margin of 1 or more. Computed at the freeze. | engine_core §5.1 |
 | capacity | The most commands one endpoint may hold for one tick. Default 64, maximum 256. Exceeding it returns `queue_full`. The only number an endpoint declares. | limits §2 |
 | stamp | The tick a command names. | engine_core §5.1 |
 | stamp margin | How far past the current tick an endpoint may stamp. 0 for mods and engine sources, the input delay for a peer. The unpaced host endpoint stamps nothing. | engine_core §5.1 |
 | admission | The immediate answer to a submit: `admitted` with a handle, or a rejection (`queue_full`, `too_late`, `out_of_order`, `over_margin`, `invalid`, `revoked`, `host_error`). | engine_core §5.1 |
-| admission wait | A paced submit that finds its ring full waits for space, for at most one tick, on the endpoint's mutex and condition variable. | engine_core §5.1 |
+| `too_late` | The named tick is past, or its producer has already declared it ready. | engine_core §5.1 |
+| admission wait | A paced submit that finds its ring full waits, on the endpoint's mutex and condition variable, until the oldest tick in the ring has run. Only a ring with a margin can fill. A pause leaves it parked; only revocation wakes it early. | engine_core §5.1 |
 | endpoint lease | An endpoint's lifecycle state, which every submit enters and which `revoke` closes. | engine_core §5.1 |
 | outcome | The second answer to a command: whether it was applied when its tick ran. Read from the handle after that tick. For a host command it also reports the tick, and reads `pending` until then. | engine_core §5.1 |
 | deadlock rule | A paced producer may wait only for outcomes of ticks it has already declared ready. Breaking it raises `CommandOrderError`. | engine_core §5.1 |

@@ -386,7 +386,8 @@ class CommandPolicy:                     # doc/design_limits.md §2
     host_source_capacity: int = 256      # source 0's own capacity
     peer_source_capacity: int = 256      # a peer endpoint's capacity
                                          # Not fields and not properties: ring depth
-                                         #   ((margin + 1) x capacity), C (sum of
+                                         #   (capacity, or 2 x capacity at a margin
+                                         #   of 1 or more), C (sum of
                                          #   capacities) and the event ring size (C x D).
                                          #   All three are computed at the freeze (§7.1).
                                          #   There is no drain quota and no
@@ -734,9 +735,8 @@ call sites. Where ticks run follows from the kind of session:
   from the loop that presents frames. It costs nothing in the API, because the boundary
   mechanisms stay bounded and never block the sim (`design_engine_core.md` §3.2, §5.1). An
   engine view publishes with one exchange and cannot fail. A paced submit into a full ring
-  waits for space, for at most one tick, and the sim never waits for it
-  (`design_engine_core.md` §5.1). Whether that wait can happen at all is open
-  ([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)).
+  waits for space until the oldest tick in it has run, and the sim never waits for it
+  (`design_engine_core.md` §5.1).
 - **Why a headless session has none.** CI, golden replays and notebooks want exact ticks, not
   a clock. `step(n)` on the calling thread gives exactly `n` ticks, with no second thread to
   start, wait for or join. So a headless session has no sim thread, and `run_sim_async()`
@@ -875,7 +875,8 @@ call sites. Where ticks run follows from the kind of session:
     declared expiry policy (`design_engine_core.md` §3.3). A pause and a backed-up event
     ring hold it with no deadline, because nothing in a paused session can be late. Callers
     have two more waits. Both are declared, and both are bounded by structure rather than by
-    a timer: admission (at most one tick) and outcome (until the named tick runs), §7.1.
+    a timer: admission (until the oldest tick in the ring has run) and outcome (until the
+    named tick runs), §7.1.
     Both belong to paced producers, mods and peers, on their own threads.
 
     **The owner thread waits for neither: the frame loop never waits on the engine; it
@@ -1132,7 +1133,7 @@ none of them can be late, and nothing has to wait for the host. The frame loop n
 on the engine; it polls (§4.3). In a networked session the local player submits through its
 own peer endpoint instead (`design_multiplayer.md` §3.2).
 
-**One endpoint per producer, and an endpoint is single-producer.** A command is submitted by
+**One endpoint per source, and an endpoint is single-producer.** A command is submitted by
 the call that submits it, on the calling thread, through an endpoint bound to its
 **source**:
 
@@ -1143,9 +1144,8 @@ the call that submits it, on the calling thread, through an endpoint bound to it
 | network peer | one endpoint per peer, bound at the freeze, with its own receive thread | the input delay | the transport's `submit` |
 
 Single-producer is a contract, and it is what allows the SPSC ring (`design_engine_core.md`
-§5.1). A caller with several producer threads registers one endpoint per thread at the
-freeze, or serializes its own submissions. How the drain orders two endpoints of one source
-is open ([Q62](open_question.md#q62-in-what-order-are-two-endpoints-of-one-source-drained)).
+§5.1). A source has one endpoint in v1, so a caller with several producer threads
+serializes its own submissions.
 Concurrent `submit` on one endpoint is a usage error, diagnosed in debug builds and
 undefined in release. It is the same class of contract as "one owner for `drain_events()`"
 (§6). There is no relaying. Mod commands never travel through the event bus, and are never
@@ -1161,17 +1161,16 @@ Rules:
   |---|---|---|
   | Who | every producer, peers included | every producer |
   | Why | the alternative is dropping a command, and for a peer a dropped command is a certain desync | feedback, and the only place a rejection at application time is reported |
-  | Length | a paced producer: until space frees, at most one tick. The host: none; a full ring returns `queue_full` | a paced producer: until the named tick has run. The host: none; `pending` until its tick has run |
+  | Length | a paced producer: until the oldest tick in its ring has run. The host: none; a full ring returns `queue_full` | a paced producer: until the named tick has run. The host: none; `pending` until its tick has run |
   | Can it fail? | only if the producer breaks its own contract (the table below) | no. It *reports* failures; it is not one |
 
 - **For a paced producer, admission is a wait, not a coin flip.** `submit` blocks until the
-  ring has room. The wait is bounded by one tick, because the sim frees a tick's worth of
-  entries every tick. It cannot deadlock. An endpoint's capacity is by definition at least one tick's worth of
-  its own commands, so a producer inside its own allocation always fits. Whether the wait
-  can happen at all is open ([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)).
-  A pause wakes every waiter with `session_paused`, which means *retry*, never *failed*
-  (`design_engine_core.md` §3.3). Whether a caller ever sees `session_paused` is open
-  ([Q7](open_question.md#q7-does-a-caller-ever-see-session_paused)).
+  ring has room. A margin-0 ring never fills while its producer stays within its own
+  allocation. A ring with a margin holds two ticks' worth, so a producer running further
+  ahead, such as a peer with several turns delivered, waits until the oldest tick in its
+  ring has run. It cannot deadlock: those ticks are ones the producer has already released
+  (`design_engine_core.md` §5.1). A pause wakes nobody. The waiter stays parked and continues
+  when the session does; only revocation wakes it early, with `revoked`.
 
 - **The deadlock rule, and the engine enforces it.** A deadlock exists only if something
   waits for the outcome of a tick it is itself holding up. Ordering the calls removes it:
@@ -1199,7 +1198,7 @@ Rules:
   |---|---|---|
   | `admitted{handle}` | none | in the ring for the tick you named; the handle reads the outcome |
   | `queue_full` | contract | more than `capacity` commands stamped for one tick on this endpoint. On the host endpoint: more than `capacity` commands waiting for the next drain |
-  | `too_late` | contract | the named tick is strictly in the past |
+  | `too_late` | contract | the named tick is in the past, or this producer has already declared it ready |
   | `out_of_order` | contract | the named tick is earlier than one already named on this endpoint. Stamps never decrease, and this result enforces it |
   | `over_margin` | contract | further ahead than this endpoint's declared margin; for a margin-0 producer, any tick but the current one |
   | `invalid` | contract | a malformed payload, or a capability the source does not hold |
@@ -1213,16 +1212,20 @@ Rules:
   limit, no second recipient and no overflow policy. So an outcome cannot be dropped, split
   between callers, or used to flood a queue.
 
-- **`too_late` is `t < first_unexecuted`: strictly past, and nothing else.** The tick the
-  engine is currently waiting on is not late. A command stamped for it is the normal case,
-  since the producer submitting is the one the gate is waiting for. In a healthy session
-  `too_late` cannot happen, so it reports a defect, not load.
+- **`too_late` means the tick is past, or the producer has already released it.** The tick
+  the engine is currently waiting on is not late. A command stamped for it is the normal
+  case, since the producer submitting is the one the gate is waiting for. A tick the
+  producer has declared ready is refused even before it runs: the declaration said the
+  producer had finished with it, and the gate may pass it at any moment
+  (`design_engine_core.md` §5.1). In a healthy session `too_late` cannot happen, so it
+  reports a defect, not load.
 
 - **Revocation closes the endpoint before reclaiming the ring.** Every submit takes the
   endpoint lease of `design_engine_core.md` §5.1, then touches the ring. Revocation changes
   `OPEN -> REVOKING` and refuses new leases. It wakes any producer parked in the admission
-  wait with `revoked`. It then waits, under the shutdown deadline, for calls already
-  admitted, and stores `REVOKED`. A timeout of that wait is a `failed` path (§2).
+  wait or an outcome wait with `revoked`; nothing else wakes either wait early. It then
+  waits, under the shutdown deadline, for calls already admitted, and stores `REVOKED`. A
+  timeout of that wait is a `failed` path (§2).
 
   A call admitted before revocation may still return any ordinary result. A later poll of
   `ctx.stopping` is only advisory. The submit result is authoritative, so seeing `stopping
@@ -1249,11 +1252,11 @@ Rules:
 - **Capacity is the only number an endpoint declares.** `capacity` is how many commands it
   may hold for one tick. There is no drain quota: a tick runs everything stamped for it,
   because pacing closes the set before the drain runs (`design_engine_core.md` §5.1). Ring
-  depth follows, `(margin + 1) × capacity`, and so does everything else:
+  depth follows, `capacity` or `2 × capacity`, and so does everything else:
 
   | Quantity | Bound |
   |---|---|
-  | endpoint ring depth | `(margin + 1) × capacity`: computed, never configured |
+  | endpoint ring depth | `capacity` at margin 0 and on the host endpoint, `2 × capacity` at a margin of 1 or more: computed, never configured |
   | engine-wide commands per tick, `C` | `Σ capacity(endpoint)` over *registered* endpoints: a bound checked at the freeze, not an allocation |
   | reliable-class event volume to the host | `≤ C` per tick |
   | event ring size | `≥ C × D`, where `D` is the drain interval: the ticks between two `drain_events()` calls that the ring is sized for |

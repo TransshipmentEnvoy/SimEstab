@@ -19,10 +19,10 @@
  *
  * What is deliberately ABSENT is as load-bearing as what is here. C, the engine-wide
  * commands executed per tick, is the sum of the configured CAPACITIES over the endpoint
- * set, and that set is not closed until the freeze; ring DEPTH ((margin + 1) x capacity)
- * and the event ring's C x D both follow it. None of the three is a constant, because a
- * constant would be wrong for every session that loads a different number of mods - and
- * because margin is input_delay_ticks, which design_limits.md 7 has not decided.
+ * set, and that set is not closed until the freeze; ring DEPTH (capacity, or 2 x capacity
+ * for an endpoint with a stamp margin) and the event ring's C x D both follow it. None of
+ * the three is a constant, because a constant would be wrong for every session that loads
+ * a different number of mods.
  */
 
 // Global module fragment - minimal headers only
@@ -85,10 +85,10 @@ export inline constexpr std::uint32_t default_peer_source_capacity = 256;
 //
 // Deliberately NOT constants here: C, ring DEPTH, and the event ring's C x D. C is the
 // sum of the configured capacities over the endpoint set, and that set is not closed
-// until the freeze; DEPTH is (margin + 1) x capacity per endpoint, and margin is
-// input_delay_ticks, which design_limits.md 7 has not decided. Writing any of them down
-// would create an engine-wide pool, which per-endpoint rings avoid, and would be wrong for
-// every session that loads a different number of mods.
+// until the freeze; DEPTH is capacity per endpoint, or 2 x capacity for one with a stamp
+// margin, so it too follows the endpoint set. Writing any of them down would create an
+// engine-wide pool, which per-endpoint rings avoid, and would be wrong for every session
+// that loads a different number of mods.
 // ---------------------------------------------------------------------------
 
 /// Humans a session admits. A game rule, not an engine structure: nothing in the engine is

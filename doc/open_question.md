@@ -44,20 +44,6 @@ engine view need not carry it, and `python_api` §7.2 also offers `identity=Fals
 left out, it must become one of the declarations closed at the freeze (`engine_core` §2.4),
 and snapshot lookups by id cannot work on such an engine view. Also blocks M5.
 
-### Q7. Does a caller ever see `session_paused`?
-
-`engine_core` §3.3 and `python_api` §7.1 say a paused session wakes waiting submitters with
-`session_paused`, so a pause is not mistaken for a hang. But the submit pseudo-code in
-`engine_core` §5.1 retries internally, and `session_paused` appears in no result list.
-Either add it as a result everywhere or drop the wake-up.
-
-### Q8. Can the admission wait ever happen?
-
-A ring's depth is `(margin + 1) × capacity`, each tick holds at most `capacity` commands,
-stamps stay within the margin, and the drain empties every earlier tick first (`engine_core`
-§5.1). Together these seem to guarantee there is always room, so the admission wait, its
-wake-ups and its tests may be dead code. Either name the case that reaches it or remove it.
-
 ### Q9. How does a stopped participant leave the gate?
 
 Nothing removes a participant when its mod is quarantined, fails to spawn, or is stopped by
@@ -128,12 +114,6 @@ Both are named (`python_api` §4.3; `modding` §4.2) with no value anywhere. Als
 
 No doc gives a slot size, so worst-case ring memory is a count, not bytes (`limits` §2.2).
 Depends on the payload schema (`engine_core` §2.3).
-
-### Q62. In what order are two endpoints of one source drained?
-
-A source with several producer threads takes one endpoint per thread (`engine_core` §5;
-`python_api` §7.1; `modding` §4.1). The drain visits endpoints in ascending source id
-(`engine_core` §5.1), which does not order two endpoints of the same source.
 
 ### Q63. What is `high_water`?
 
@@ -333,9 +313,18 @@ though it is in the replay header (`modding` §4.2; `engine_core` §5.2). Deferr
 
 ### Q66. How does a mod declare an endpoint per producer thread?
 
-A source with several producer threads takes one endpoint per thread (`engine_core` §5.1;
-`modding` §4.1), but the manifest has no field to declare them (`modding` §3). How two
-endpoints of one source are ordered in the drain is Q62. M7.
+A source has one endpoint in v1, so a mod with several producer threads serializes them
+(`engine_core` §5.1; `modding` §4.1). Whether a mod may declare one endpoint per thread, and
+the manifest field for it (`modding` §3), are open. How two endpoints of one source are
+ordered in the drain is Q62. M7.
+
+### Q62. In what order are two endpoints of one source drained?
+
+A source has one endpoint in v1, and a source with several producer threads serializes its
+own submissions (`engine_core` §5.1; `python_api` §7.1; `modding` §4.1). If a source ever
+gets one endpoint per thread (Q66), the drain needs an order between them: it visits
+endpoints in ascending source id (`engine_core` §5.1), which does not order two endpoints of
+the same source. M7.
 
 ### Q64. Bounding a process host's copy-on-write pages
 

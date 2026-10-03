@@ -114,16 +114,17 @@ margin (below).
 | Endpoint | Depth |
 |---|---|
 | margin 0: mods and engine sources | `capacity` |
-| a peer at margin `m` | `(m + 1) × capacity` |
+| margin 1 or more: a peer | `2 × capacity` |
 | the host endpoint, unpaced | `capacity` |
 
 A margin-0 producer acts inside the tick it is about to release, so it never has more than
 one tick's worth outstanding. The host endpoint names no tick, and every drain empties it,
 so it holds at most what the frame loop submits between two drains
-(`design_engine_core.md` §5.1). A peer legitimately has `m + 1` ticks in flight. Its margin
-`m` is the input delay, which the transport owns and which is open on purpose
-([Q50](open_question.md#q50-input_delay_ticks)). The formula is decided; that one term is
-not. The table says so rather than inventing a value.
+(`design_engine_core.md` §5.1). An endpoint with a margin holds two ticks' worth: the tick
+being filled and one already released. A producer further ahead waits for space until the
+oldest tick in its ring has run, which cannot deadlock (`design_engine_core.md` §5.1). So
+the depth does not depend on the margin's value, and a peer's input delay, which is open
+on purpose ([Q50](open_question.md#q50-input_delay_ticks)), does not size any ring.
 
 Three quantities are **derived** from these values. They are computed, never restated. An
 implementation that hardcodes any of them has created a second source of truth:
@@ -131,7 +132,7 @@ implementation that hardcodes any of them has created a second source of truth:
 | Derived | Formula | Value at defaults | Where it binds |
 |---|---|---|---|
 | `C`: commands run per tick, engine-wide | `Σ capacity(endpoint)` | 256 + 64 × n_mod_endpoints | `design_engine_core.md` §5.1 |
-| endpoint ring depth | `(margin + 1) × capacity` | `capacity`, for every margin-0 producer and the host | `design_engine_core.md` §5.1 |
+| endpoint ring depth | `capacity` at margin 0 and on the host endpoint; `2 × capacity` at a margin of 1 or more | `capacity` for every margin-0 producer and the host; 512 for a peer | `design_engine_core.md` §5.1 |
 | event ring size | `C × D` | `8 × C` | `design_python_api.md` §7.1, §7.3 |
 
 `C` is not a policy value. The drain assigns order by position and sorts nothing, so the
@@ -186,6 +187,7 @@ At 256 sources, each holding 256 commands for one tick:
 | Quantity | Worst case | Note |
 |---|---|---|
 | `C`, commands per tick | **65,536** | ~2M/s at 30 Hz |
+| command ring entries | **at most 131,072** | `Σ depth ≤ 2 × C`: a ring with a margin is two ticks deep |
 | event ring entries | **524,288** | `C × D` |
 | total slot memory | **open** ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | no doc gives a per-slot size, on purpose |
 
@@ -428,7 +430,7 @@ next to it, without coming here to learn whether anyone noticed.
 
 | Open | Decided by | Why not here | Noted at |
 |---|---|---|---|
-| **`input_delay_ticks`** ([Q50](open_question.md#q50-input_delay_ticks)): how far ahead of the current tick a peer stamps, that is, its endpoint's stamp margin | a transport | Unlike every number above, it needs measurement against a real round-trip time. It is not an engine value: the engine imposes no margin and bounds none | `design_multiplayer.md` §3.2, §7; here §2 (ring depth), §2.2 (the totals), §1.1 (`ipc_deadline`) |
+| **`input_delay_ticks`** ([Q50](open_question.md#q50-input_delay_ticks)): how far ahead of the current tick a peer stamps, that is, its endpoint's stamp margin | a transport | Unlike every number above, it needs measurement against a real round-trip time. It is not an engine value: the engine imposes no margin and bounds none. No ring depth depends on it | `design_multiplayer.md` §3.2, §7; here §1.1 (`ipc_deadline`) |
 | **`ipc_deadline`** ([Q43](open_question.md#q43-ipc_deadline-value-and-constraints)) | the same measurement | It is not a free parameter. Its ceiling is the input delay, so it lands with the row above and not before | §1.1 |
 | **`high_water`** ([Q63](open_question.md#q63-what-is-high_water)): the event backlog threshold | a measured drain rate | The counter has a name, a home and one writer (`design_engine_core.md` §5.2). Its threshold is a separate question, and a number invented here would read as an answer to it | §2 |
 | **Per-slot size**, and so total slot memory ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | M1 | No doc gives a per-slot size for a command or an event entry, on purpose, so the worst case in §2.2 is a count, not a number of bytes | §2.2 |

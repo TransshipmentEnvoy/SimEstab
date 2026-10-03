@@ -56,11 +56,10 @@ class CommandPolicy:
     drain runs (``design_engine_core.md`` §5.1).
 
     Deliberately **not** here, and not as properties either: ring ``DEPTH``
-    (``(margin + 1) × capacity``), ``C`` (the engine-wide commands executed per tick,
-    ``Σ capacity(endpoint)``) and the event ring size ``C × D`` that follows it.
-    The endpoint set is not closed until the freeze, and ``margin`` is
-    ``input_delay_ticks``, which ``doc/design_limits.md`` §7 has not decided — so none
-    of the three is knowable at construction. Exposing any of them would create an
+    (``capacity``, or ``2 × capacity`` for an endpoint with a stamp margin), ``C`` (the
+    engine-wide commands executed per tick, ``Σ capacity(endpoint)``) and the event ring
+    size ``C × D`` that follows it. The endpoint set is not closed until the freeze, so
+    none of the three is knowable at construction. Exposing any of them would create an
     engine-wide pool, which per-endpoint rings avoid, and would be wrong for every
     session that loads a different number of mods (``doc/design_limits.md`` §2, §8).
     """

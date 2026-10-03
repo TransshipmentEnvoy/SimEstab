@@ -50,10 +50,10 @@ def test_capacity_is_the_only_number_an_endpoint_declares():
 
 def test_derived_bounds_are_not_configurable():
     """``C`` is ``Σ capacity`` over an endpoint set closed at the freeze; ring ``DEPTH``
-    is ``(margin + 1) × capacity`` and ``margin`` is undecided (``design_limits.md`` §7);
-    the event ring is ``C × D``. None can be a construction-time value, as a field or a
-    property — naming any would create an engine-wide pool, which per-endpoint rings
-    avoid.
+    is ``capacity``, or ``2 × capacity`` for an endpoint with a stamp margin
+    (``design_limits.md`` §2); the event ring is ``C × D``. None can be a
+    construction-time value, as a field or a property — naming any would create an
+    engine-wide pool, which per-endpoint rings avoid.
     """
     policy = CommandPolicy()
     for absent in (

@@ -50,10 +50,11 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         to, and each paced endpoint declares how far ahead it may name (0 for mods and
         engine sources, the input delay for a peer). The host endpoint is unpaced: its
         commands name no tick, a full ring returns `queue_full`, and outcomes are polled.
-        Depth is `(margin + 1) × capacity`. There is no drain
-        quota, so `queue_full` only means a producer exceeded its own per-tick capacity
-        (`doc/design_engine_core.md` §5.1). Whether the admission wait is reachable is open
-        ([Q8](doc/open_question.md#q8-can-the-admission-wait-ever-happen))
+        Depth is `capacity`, or `2 × capacity` for an endpoint with a margin, which then
+        waits for space until its oldest tick has run. `too_late` covers a tick already
+        released. There is no drain quota, so `queue_full` only means a producer exceeded
+        its own per-tick capacity. One endpoint per source (`doc/design_engine_core.md`
+        §5.1)
   + [ ] the endpoint lease: revoke closes admission, wakes producers parked on the
         admission wait, and waits for active submits before reclaim or reopen; a retry
         keeps the same ring (`doc/design_engine_core.md` §5.1)

@@ -149,7 +149,7 @@ specified:
 | Mechanism | Direction | Linearization point | Progress | Specified in |
 |---|---|---|---|---|
 | **Engine view** | sim → one reader; the reader's return header travels back on the same edge | publish: the release exchange of the engine view's control word (§3.2 (P2)); take: the release exchange at (T2), which also publishes the return header | publisher wait-free (1 exchange); reader wait-free (1 exchange) | §3.2, §3.5 |
-| **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it. A full ring parks the producer on the endpoint's mutex and condition variable, and the drain stores `read` under that mutex | drain wait-free (1 load), plus a short lock on each endpoint it frees space in; submit wait-free unless the ring is full, where a paced producer makes a **bounded wait** of at most one tick and the host gets `queue_full` | §5.1 |
+| **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it. A full ring parks the producer on the endpoint's mutex and condition variable, and the drain stores `read` under that mutex | drain wait-free (1 load), plus a short lock on each endpoint it frees space in; submit wait-free unless the ring is full, where a paced producer makes a **bounded wait** until the oldest tick in its ring has run and the host gets `queue_full` | §5.1 |
 | **Command outcome** | sim → producer | the outcome's release publication at the end of the tick that consumed the command, made visible by (G5) | a paced reader **blocks, bounded** by the named tick running, on the tick-progress wait, and is refused outright if it still holds that tick; the host polls and never blocks | §5.1 |
 | **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of `admission`; revocation: the `OPEN → REVOKING` exchange | submit side wait-free; revoker blocks under the shutdown deadline | §5.1 |
 | **Event ring** | sim → owner thread | enqueue: the release store of the ring's write index | wait-free | §5.2 |
@@ -918,16 +918,15 @@ budget again. The rule covers every clock in the engine:
 | Clock | During a pause |
 |---|---|
 | participant deadlines at the gate | re-anchored on resume; a pause is never charged to a peer |
-| a producer's admission or outcome wait (§5.1) | suspended, and the waiter is woken with `session_paused` |
+| a producer's admission or outcome wait (§5.1) | none to stop: these waits have no timer. The waiter stays parked and continues when the session does |
 | a mod's inbox-drain and `on_unload` budgets (`design_modding.md` §6) | suspended. Shutdown is not a pause, so this matters only if a pause overlaps shutdown |
 | the event backlog (§5.2) | it is itself a pause, so there is no second clock to stop |
 
-**Every waiter is woken on pause, with a reason.** Every producer is paced and every
-producer waits (§5.1). A pause that left waiters asleep would park every mod thread on a
-condition only a running engine can satisfy, and inside every mod the pause would look like
-a hang. So a pause wakes all of them with `session_paused`, which means "the wait is still
-yours to retry", never "your operation failed". Whether callers actually see
-`session_paused` is open ([Q7](open_question.md#q7-does-a-caller-ever-see-session_paused)).
+**A pause leaves waiters parked.** An admission or outcome wait is bounded by structure, not
+by a timer (§5.1), so a pause cannot make it late, and waking it would only tell the caller
+to wait again. So a pause wakes nobody. Inside a mod, a paused session looks like one long
+tick, which is what it is. Only revocation wakes a waiter early, with `revoked` (§5.1), and
+`close()` revokes every endpoint it has not already revoked (`design_python_api.md` §2).
 
 `HOST_PAUSE` is intentionally indefinite. Each wait uses a bounded diagnostic slice whose
 expiry means `remain parked`, never `FAIL`. `HOST_BACKLOG` works the same way,
@@ -1557,7 +1556,7 @@ The only artifacts peripherals ever see:
 
 | Aspect | Rule |
 |---|---|
-| Endpoint | **one SPSC ring per endpoint**, single-producer by contract. A source with several producer threads takes one endpoint per thread, or serializes itself. Source 0 is the host. The drain order between two endpoints of the same source is not yet specified ([Q62](open_question.md#q62-in-what-order-are-two-endpoints-of-one-source-drained)) |
+| Endpoint | **one SPSC ring per endpoint**, single-producer by contract, and **one endpoint per source** in v1. A source with several producer threads serializes its own submissions. Source 0 is the host |
 | Submission | happens inside the submitting call, on the caller's thread. There is no relaying producer, no buffer-then-flush stage and no contention between sources: two endpoints never touch the same word |
 | Result | two per command. **Admission** is returned by the call (`admitted \| queue_full \| too_late \| out_of_order \| over_margin \| invalid \| revoked \| host_error`). The **outcome** is read later: a paced producer reads it for a tick already released, and the host polls it. Neither is an event |
 | Tick | **a paced submitter names it**, and the command runs at that tick or not at all. Paced endpoints differ only in a declared stamp margin: 0 for a mod or an engine source, or a peer's input delay. The host endpoint is unpaced: its commands name no tick and run at the first tick that drains them (§5.1) |
@@ -1636,16 +1635,17 @@ and the frame loop never waits for the engine (§3.3). A networked session canno
 local player this way, because every machine must run the command at the same tick
 (`design_multiplayer.md` §3.2).
 
-**An endpoint is single-producer.** That is a contract, not an observation. A source with
-several producer threads registers one endpoint per thread at the freeze, or serializes
-itself. In exchange, the inbound path is a plain SPSC ring: no CAS on the slot or index
+**An endpoint is single-producer, and a source has one endpoint.** That is a contract, not
+an observation. A source with several producer threads serializes its own submissions. Two
+endpoints of one source would need a drain order between them, and v1 has no use for one.
+In exchange, the inbound path is a plain SPSC ring: no CAS on the slot or index
 path, no per-tick cells, no staging arena and no reclamation scheme. And no sort is needed
 to order commands deterministically, because the drain order is the order. The endpoint
 lease is a separate, cold lifecycle mechanism, because revocation is a second writer the
 SPSC indices cannot represent.
 
 **Endpoints declare a stamp margin** at the freeze, next to their capacity. This keeps local
-and networked submission on one call with one shape: the difference between the host and a
+and networked submission on one call with one shape: the difference between a mod and a
 peer is a number declared once, not a second API.
 
 | Margin | Who | A command stamped for a later tick is |
@@ -1666,7 +1666,8 @@ struct Entry { payload…; u64 tick; };        // the tick this command acts on;
                                              //   the unpaced host endpoint
 
 struct Endpoint {                            // one per producer, fixed at the freeze
-    Entry            slot[DEPTH];            // DEPTH = (margin + 1) x capacity (design_limits.md §2)
+    Entry            slot[DEPTH];            // DEPTH = capacity, or 2 x capacity if margin >= 1
+                                             //   (design_limits.md §2)
     alignas(hardware_destructive_interference_size) std::atomic<u64> write;   // producer
     alignas(hardware_destructive_interference_size) std::atomic<u64> read;    // sim
     std::atomic<u32>  admission;             // OPEN | REVOKING | REVOKED
@@ -1703,9 +1704,10 @@ leave:
     if active_submit.fetch_sub(1, release) == 1: notify revoker
 
 revoke:
-    { std::lock_guard lk(m);                           # admission is a park predicate input
+    { std::lock_guard g(gate.m); std::lock_guard lk(m);    # both parks read admission
       admission.exchange(REVOKING, acq_rel);           # closes new leases
-      space_cv.notify_all(); }                         # an admission wait is not a lease leak
+      space_cv.notify_all();                           # an admission wait is not a lease leak,
+      gate.progress_cv.notify_all(); }                 #   nor is an outcome wait (§3.3)
     wait under the shutdown deadline for active_submit == 0
     admission.store(REVOKED, release)                   # revocation complete
 
@@ -1716,11 +1718,13 @@ open_or_reopen:
 
 A lease that linearized before `REVOKING` completes normally, including publishing its entry
 after revocation began; revocation waits for it. A later call returns `revoked` before
-touching an index or slot. Revocation also **wakes every parked producer**. A producer
-asleep on the admission wait holds a lease, and would otherwise be waited on for the whole
-shutdown deadline; it wakes with `revoked` and leaves. The change of `admission` happens
-under the endpoint's mutex, as §3.3's wake-up rule requires of anything a parked thread
-waits on.
+touching an index or slot. Revocation also **wakes every parked producer**: one asleep on
+the admission wait, and one waiting for an outcome. A producer asleep on the admission wait
+holds a lease, and would otherwise be waited on for the whole shutdown deadline; it wakes
+with `revoked` and leaves. An outcome waiter wakes with `revoked` too. Revocation is the
+only thing that wakes either wait early. The change of `admission` happens under both
+mutexes, as §3.3's wake-up rule requires of anything a parked thread waits on. The lock
+order is always `gate.m` before an endpoint's `m`.
 
 The endpoint and its control storage stay alive until the producer has been joined. If the
 deadline expires, the engine follows the existing `failed` and disarm path instead of
@@ -1737,7 +1741,8 @@ waits for space, and fails only by asking for more than it declared.
 submit(cmd, t):
     lease = try_enter(); if lease == revoked: return revoked           # (C0)
     fu = first_unexecuted.load(acquire)
-    if t <  fu:            leave(); return too_late                    # (C1a) STRICTLY past
+    rt = my_participant.ready_through.load(relaxed)                    # our own declaration
+    if t < fu || t <= rt:  leave(); return too_late                    # (C1a) past, or released
     if t <  last_stamped:  leave(); return out_of_order                # (C1b)
     if t >  fu + margin:   leave(); return over_margin                 # (C1c)
     if t != last_stamped:  last_stamped = t; stamped_for_tick = 0      # producer-local
@@ -1746,18 +1751,37 @@ submit(cmd, t):
     if w - read.load(acquire) == DEPTH:                                # (C3) THE ADMISSION WAIT
         std::unique_lock lk(m); ++waiters                              #      re-check under m
         space_cv.wait(lk, [&] { return w - read.load(relaxed) < DEPTH
-                                     || admission.load(relaxed) != OPEN
-                                     || session_paused(); })
+                                     || admission.load(relaxed) != OPEN; })
         --waiters
-        on `session_paused` retry (C3); on `revoked` leave and return revoked
+        if admission.load(relaxed) != OPEN: leave(); return revoked
     slot[w % DEPTH] = cmd; slot[w % DEPTH].tick = t                    # (C4) plain; the slot is ours
     ++stamped_for_tick
     write.store(w + 1, release)                                        # (C5) LINEARIZATION POINT
     leave(); return admitted{ handle }
 ```
 
-Whether the admission wait (C3) can ever be reached is open
-([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)).
+**When the admission wait happens.** A ring at margin 0 holds `capacity` entries, all for
+the one tick a margin-0 producer may stamp, and (C1d) refuses the entry past `capacity`. So
+a margin-0 ring never fills while its producer stays within its allocation, and (C3) never
+parks there. An endpoint with a margin of 1 or more holds `2 × capacity`: two ticks' worth,
+whatever the margin. A producer running further ahead than that fills its ring and parks
+at (C3) until the oldest tick in it has run. That is what the wait is for: a fast producer,
+such as a peer's receive thread with several turns already delivered, waits for space
+instead of failing.
+
+**Why it cannot deadlock.** A paced producer stamps the tick after its last declaration,
+`ready_through + 1`: it submits for a tick, declares it, then moves to the next. (C1a)
+refuses a tick it already declared, and stamps never decrease (C1b). The ring holds at most
+`capacity − 1` entries for the tick being stamped, or (C1d) would have refused the submit
+first. So a full ring holds more than `capacity` entries for earlier ticks, all of which
+this producer has already declared. Those ticks do not wait for it, and the drain frees
+their space without its help. A producer that stamps further ahead before declaring breaks
+this order. Its ring can then fill with ticks it still holds, and the wait ends only when
+its participant deadline expires (§3.3).
+
+**How long it lasts.** Until the oldest tick in the ring has run. Normally that is at most
+one tick. While the gate is held, by a pause, the event backlog or another participant, it
+lasts as long as the gate does. The wait has no timer of its own; its bound is structural.
 
 **The host endpoint's submit names no tick and never waits.** Its producer is the owner
 thread, which must not park (§3.3). So it has no stamp checks and no admission wait:
@@ -1815,10 +1839,10 @@ Five properties follow from the mechanism:
   published and stops there. The engine's wait for that producer is the gate's: declared,
   and finished before the drain ran (§3.3). No slot is ever reserved but unfilled, because a
   slot becomes visible and complete in the same operation, (C5).
-- **A paced producer waits only for space, never for a tick to finish.** (C3) is the only
-  interaction, and it lasts at most one tick. The sim frees a tick's worth of entries every
-  tick, and (C1d) has already confirmed that this producer is within its own allocation.
-  The host never waits at all: (H1) returns `queue_full` instead.
+- **A paced producer waits only for space, never for a tick it holds.** (C3) is the only
+  interaction, and it lasts until the oldest tick in the ring has run, a tick this producer
+  has already released (above). The host never waits at all: (H1) returns `queue_full`
+  instead.
 - **Ordering is total, deterministic and cannot be forged.** The drain assigns `seq` in a
   fixed endpoint order over each endpoint's FIFO. So `(source id, sequence)` is a total
   order with no sort and no field a source could forge. Order within one source is the
@@ -1842,7 +1866,7 @@ command did answers another, and that answer does not exist until the tick runs.
 |---|---|---|
 | Who | every paced producer, peers included | every paced producer |
 | Why | the alternative is dropping a command, and for a peer a dropped command is a certain desync | feedback, and the only place a rejection at consumption is reported |
-| Length | until space frees: at most one tick | until the named tick has run |
+| Length | until the oldest tick in the ring has run | until the named tick has run |
 | Can it fail? | only if the producer breaks its own contract | **no.** It *reports* failures; it is not one |
 
 ```
@@ -1874,9 +1898,9 @@ and which tick that participant holds, so a wait for the outcome of an unrelease
 refused at once, naming the tick. A clear error at the call site is far better than a frozen
 session. The host cannot break the rule, because its outcome read never waits.
 
-Admission cannot deadlock either, for a simpler reason. An endpoint's capacity is at least
-one tick's worth of its own commands, so a producer submitting within its allocation always
-fits. (C1d) marks that boundary, and crossing it is the contract violation, not the wait.
+Admission cannot deadlock either: a full ring always holds ticks its producer has already
+released, and the drain frees them without the producer's help (above). (C1d) marks the
+producer's own allocation, and crossing it is the contract violation, not the wait.
 
 **There is exactly one capacity rejection.** `queue_full` means "more than you allocated for
 this tick": a producer breaking its own declaration, not a busy engine. A busy tick, a slow
@@ -1887,7 +1911,7 @@ contract violation, a lifecycle state, or a transport failure, and none is a loa
 |---|---|---|
 | `admitted{handle}` | none | in the ring, for the tick you named. The handle reads the outcome |
 | `queue_full` | contract | more than `capacity` commands stamped for one tick on this endpoint. On the host endpoint: more than `capacity` commands waiting for the next drain |
-| `too_late` | contract | the named tick is **strictly** in the past |
+| `too_late` | contract | the named tick is in the past, or this producer has already declared it ready |
 | `out_of_order` | contract | the named tick is earlier than one already named on this endpoint |
 | `over_margin` | contract | further ahead than this endpoint's declared margin; for a margin-0 producer, any tick but the current one |
 | `invalid` | contract | malformed payload, or a capability the source does not hold |
@@ -1897,17 +1921,20 @@ contract violation, a lifecycle state, or a transport failure, and none is a loa
 The host endpoint names no tick, so `too_late`, `out_of_order` and `over_margin` cannot
 arise on it.
 
-Whether `session_paused` also belongs in this table is open
-([Q7](open_question.md#q7-does-a-caller-ever-see-session_paused)).
 
-**`too_late` rejects only ticks already in the past.** That is one tick narrower than it
-might seem, and the excluded tick is the one nearly every command lands in. A command
-stamped for the tick the engine is currently waiting on is the normal case, not a late one.
-`first_unexecuted` has not moved and cannot, because the producer that would release that
-tick is the one submitting. Pacing, not timing, makes the current tick safe. A peer's
-commands for `t` arrive before it declares ready for `t`, and the gate cannot pass `t` until
-it does. So in a healthy session `too_late` cannot happen; if it does, it reports a defect,
-not load.
+**`too_late` rejects a tick that is past, or that this producer has already released.** The
+tick the engine is currently waiting on is not late, and it is the one nearly every command
+lands in. `first_unexecuted` has not moved and cannot, because the producer that would
+release that tick is the one submitting. Pacing, not timing, makes the current tick safe. A
+peer's commands for `t` arrive before it declares ready for `t`, and the gate cannot pass `t`
+until it does.
+
+A tick the producer has already declared ready is refused even if it has not run yet. The
+declaration said "I have finished submitting for `t`". Once every other participant has
+said the same, the gate may pass `t` at any moment. A command admitted for `t` after that
+could miss `t`'s drain and reach (S3) as a protocol error. Refusing it at submit, where the
+producer is still there to be told, turns that race into a returned result. So in a healthy
+session `too_late` cannot happen; if it does, it reports a defect, not load.
 
 **Capacity is the only number an endpoint declares:** how many commands it may hold for one
 tick. There is no second number for the drain to cap, because a tick runs everything stamped
@@ -1916,7 +1943,7 @@ for it. The ring depth follows:
 | Endpoint | Depth |
 |---|---|
 | margin 0 | `capacity` |
-| a peer at margin `m` | `(m + 1) × capacity`: one tick's worth for each tick legitimately in flight |
+| margin 1 or more (a peer) | `2 × capacity`: the tick being filled, and one already released. A producer further ahead waits at (C3) |
 | the host endpoint, unpaced | `capacity`: every drain empties it |
 
 The engine-wide per-tick ceiling is `C = Σ capacity(e)` over registered endpoints
@@ -1947,18 +1974,18 @@ read-modify-writes, three bounded validity checks, one relaxed index load, one a
 load, a copy and one release store, with no loop. The drain takes the endpoint's mutex only
 when it frees space there: one short lock per active endpoint per tick, a few microseconds
 per tick for 256 endpoints. A submit that finds the ring full is a
-**bounded wait** in the sense of §1.1: declared, bounded by one tick, and with no expiry on
-the normal path. The only other ways out are the two named wake reasons, `session_paused`
-(retry) and `revoked` (leave). The drain is `O(commands stamped for this tick)` with no
+**bounded wait** in the sense of §1.1: declared, bounded by the oldest tick in the ring
+running, and with no expiry on the normal path. The only other way out is revocation, which
+wakes it with `revoked`. The drain is `O(commands stamped for this tick)` with no
 retries. The ring indices are never contended, since the producer owns `write` and the sim
 owns `read`. Revocation contends only on the separate endpoint lease. A host submit is
 wait-free in every case, full ring included.
 
 **Failure and deadline behaviour.** Every rejection in the table above is returned
 synchronously, and the command is not enqueued. The admission wait has no deadline of its
-own, on purpose: its bound is structural (one tick), not a timer. A session that is not
-advancing has paused, and a pause wakes the waiter with a reason instead of timing it out
-(§3.3). Revocation waits, under the shutdown deadline, for leases that already linearized.
+own, on purpose: its bound is structural (the oldest tick in the ring running), not a
+timer. A session that is not advancing is paused or held at the gate, and the waiter waits
+with it (§3.3). Revocation waits, under the shutdown deadline, for leases that already linearized.
 If that deadline expires, the engine enters the terminal `failed` state and disarms instead
 of reclaiming the endpoint.
 
@@ -1973,11 +2000,11 @@ be tested:
   calls finish.
 - **Full ring**: a producer parked at (C3) is woken by the drain that frees its slot, and
   never sleeps through one.
-- **Pause**: a pause taken while producers are parked wakes every one of them with
-  `session_paused`, and a resume needs no second wake.
+- **Pause**: a pause taken while producers are parked wakes none of them. The resume that
+  lets the oldest tick run frees their space, and the drain wakes them.
 
-The wake-up parts of these races (a parked producer woken by revocation, by a drain, or by a
-pause) are hangs, not data races, so the sanitizer does not see them. They are the stress
+The wake-up parts of these races (a parked producer woken by revocation or by a drain) are
+hangs, not data races, so the sanitizer does not see them. They are the stress
 tests of §3.3, run under a watchdog timeout.
 
 ### 5.2 Event ring (normative)

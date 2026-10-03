@@ -86,9 +86,9 @@ first_unexecuted.store(t + 1, release);
 ```
 
 At the freeze, each peer registers one participant, one endpoint and **its own receive
-thread**. The dedicated thread is required. An admission wait can last up to a tick
-(`design_engine_core.md` §5.1), so one thread serving all peers would stall everyone behind
-whichever endpoint is full. One thread per peer also gives each endpoint the single producer
+thread**. The dedicated thread is required. A receive thread with several turns delivered
+waits for ring space until its oldest turn runs (`design_engine_core.md` §5.1), so one
+thread serving all peers would stall everyone behind whichever endpoint is full. One thread per peer also gives each endpoint the single producer
 its SPSC ring requires.
 
 For each turn, the receive thread does two things, in this order:
@@ -128,7 +128,7 @@ Four details make this work:
 | Detail | Why it matters |
 |---|---|
 | An empty turn is still sent | `ready_through` cannot tell "nobody acted in turn 1000" from "turn 1000 has not arrived". So the relay sends turn `t` even when it is empty, and peers report for `t` even with nothing to submit (§1) |
-| A peer's commands arrive before its readiness | So a command stamped for the tick the engine is currently waiting on is normal, not late. That is why `too_late` rejects only ticks that have already run (`design_engine_core.md` §5.1). The order shown above is the whole guarantee |
+| A peer's commands arrive before its readiness | So a command stamped for the tick the engine is currently waiting on is normal, not late. `too_late` rejects only a tick that has already run or that the peer has already declared (`design_engine_core.md` §5.1). The order shown above is the whole guarantee |
 | Remote commands need no new structure | A peer is another source id with its own endpoint. Its receive thread is that endpoint's single producer, as the SPSC contract of `design_engine_core.md` §5.1 requires. The drain assigns the `(source id, sequence)` order. It is identical on every peer, because every peer drains the same per-endpoint FIFO rings in the same source order |
 | The wait is bounded twice | Turns already delivered run without blocking, so a burst of three turns runs at full speed. And the participant's deadline stops a dead peer from hanging the session |
 
@@ -156,9 +156,11 @@ may stamp a command.
   alone, and nothing would report it.
 - The stamp margin is the classic input delay. The transport chooses it. The engine imposes
   no value and no upper limit, and needs no change to raise it.
-  - The engine sizes the endpoint's ring from it. Depth is `(margin + 1) × capacity`
-    (`design_limits.md` §2), because a peer with margin `m` can have `m + 1` turns in
-    flight.
+  - The ring does not grow with it. A peer's ring is `2 × capacity` deep for any margin of
+    1 or more (`design_limits.md` §2). A receive thread that has more turns in hand than
+    that waits for space, which frees as its oldest turn runs. The turns it waits on are
+    ones it has already declared, so the wait cannot deadlock (`design_engine_core.md`
+    §5.1).
   - The same window is the ceiling of `HostPolicy.ipc_deadline` (`design_limits.md` §1.1).
     The worst-case totals in `design_limits.md` §2.2 also depend on it.
   - A margin of 1 is enough while the slowest peer's round-trip time (RTT) is at most one

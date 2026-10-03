@@ -174,13 +174,12 @@ Rules:
   - per-mod attribution in the replay;
   - rate limiting and revocation. Each endpoint declares one number, its **per-tick
     capacity**. The manifest declares it and the engine caps it. The ring depth derives from
-    it as `(margin + 1) × capacity`, and a mod's margin is 0 (`design_limits.md` §2). There
-    is no separate drain quota to exceed, because a tick runs everything stamped for it. A
-    mod that submits more than it declared for one tick gets `queue_full` **from the
-    submitting call**, and nowhere else (`design_python_api.md` §7.1). A mod that is only
-    early waits for space instead of being rejected
-    ([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)). Neither of a command's
-    two answers is an event, so a mod cannot flood the event ring by submitting hard. Rings
+    it: a mod's margin is 0, so its ring holds `capacity` entries (`design_limits.md` §2).
+    There is no separate drain quota to exceed, because a tick runs everything stamped for
+    it. A mod that submits more than it declared for one tick gets `queue_full` **from the
+    submitting call**, and nowhere else (`design_python_api.md` §7.1). A mod within its
+    capacity never finds its ring full (`design_engine_core.md` §5.1). Neither of a
+    command's two answers is an event, so a mod cannot flood the event ring by submitting hard. Rings
     are per endpoint, so one mod's burst cannot use up another's capacity at all.
 - **The engine binds identity; a mod cannot declare it.** The source id is bound to the
   submission endpoint the engine allocates at the freeze and opens for each mod host at
@@ -316,17 +315,18 @@ the commands the mod submitted for that tick (§4.2).
   - There is no buffer-and-flush step: `submit_batch` *is* the batching primitive.
   - A mod's stamp margin is 0, so the only tick it may name is the one it is about to
     release. Any other tick is `over_margin`.
-  - `submit` waits for ring space instead of rejecting on a busy tick. The wait is bounded
-    by one tick ([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)). Whether a
-    pause wakes a waiting submit, and what the caller then sees, is open
-    ([Q7](open_question.md#q7-does-a-caller-ever-see-session_paused)).
+  - At margin 0 the ring never fills while the mod stays within its capacity, so `submit`
+    does not wait for space (`design_engine_core.md` §5.1). `too_late` means the mod named
+    a tick that has run, or one it has already released.
+  - A pause wakes no waiting call. An outcome wait stays parked and continues when the
+    session does; only revocation wakes it early, with `revoked`.
   - `queue_full` means one thing only: "more than the capacity this mod declared for one
     tick". That is the mod's own contract, not backpressure.
-  - The endpoint has a **single producer**. A mod that submits from more than one of its own
-    threads must serialize them, or declare an endpoint per thread in its manifest. The
-    manifest has no field for that yet
+  - The endpoint has a **single producer**, and a source has one endpoint in v1. A mod that
+    submits from more than one of its own threads serializes them. Whether a mod may later
+    declare an endpoint per thread is open
     ([Q66](open_question.md#q66-how-does-a-mod-declare-an-endpoint-per-producer-thread)),
-    and the drain order between two endpoints of one source is open
+    and so is how the drain would order two endpoints of one source
     ([Q62](open_question.md#q62-in-what-order-are-two-endpoints-of-one-source-drained)).
 - `next_tick()`: the tick this mod is about to release. The mod host loop names it in every
   submit, then releases it (§4.2).
@@ -562,8 +562,7 @@ Rules:
   segment (below), so there is no broker and no second copy.
 - **A waiting call needs its own frame shape, and the hot-path deadline must not apply to
   it.** A process mod has two waits: the admission wait and the outcome
-  (`design_engine_core.md` §5.1). Whether the admission wait can happen at all is open
-  ([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)). Both waits can rightly
+  (`design_engine_core.md` §5.1). Both waits can rightly
   span a tick. Measured against a 33.3 ms tick, a 10 ms hot-path deadline would expire on
   every one of them. So a single request-and-reply frame shape cannot carry them:
 
