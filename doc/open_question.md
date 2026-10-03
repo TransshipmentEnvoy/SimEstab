@@ -14,17 +14,6 @@ so on).
 
 ## Blocks M1
 
-### Q13. Can `close()` be called from another thread?
-
-`python_api` §2 says `close()` never raises. The same section, and §8, say it is an
-owner-thread call that raises `EngineThreadError` elsewhere.
-
-### Q17. Should resource failures have their own terminal state?
-
-GPU device loss and a failed memory commit in the terminal commit end in `failed`, which
-poisons the process (`python_api` §2; `data_container` §2.2). Whether they deserve a cleaner
-terminal state is open.
-
 ### Q18. What goes in `WindowConfig` and `LogConfig`?
 
 Both are named in `EngineConfig` without fields (`python_api` §3; `design_logging.md` §3).
@@ -42,16 +31,6 @@ The catch-up clamp is named (`python_api` §4.3) with no value anywhere. Also bl
 
 No doc gives a slot size, so worst-case ring memory is a count, not bytes (`limits` §2.2).
 Depends on the payload schema (`engine_core` §2.3).
-
-### Q65. Which `failed` paths does `on_failed_stop` cover?
-
-`python_api` §3 applies `on_failed_stop` to the sim-thread join timeout and an abandoned
-thread host. `failed` has more entry paths (`python_api` §2): a participant's gate deadline
-under `FAIL` (`engine_core` §3.3), an endpoint
-revocation timeout (`engine_core` §5.1, `modding` §6), the operation-lease wait timeout in
-`close()`, GPU device loss (`engine_core` §5) and a failed memory commit in the terminal
-commit (`data_container` §2.2). No doc says whether `"terminate"` aborts on these, or what
-`"raise"` means where no call can raise.
 
 ## Blocks M2
 

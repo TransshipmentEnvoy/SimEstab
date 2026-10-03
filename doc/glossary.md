@@ -192,7 +192,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 
 | Term | Meaning | Where |
 |---|---|---|
-| shutdown sequence | `mods.stop()`, then `stop_sim_async()`, then `close()`. `close()` does any step not done, never raises and can be called twice. | python_api §2 |
+| shutdown sequence | `mods.stop()`, then `stop_sim_async()`, then `close()`. `close()` does any step not done, never raises because shutdown failed, and can be called twice. | python_api §2 |
 | shutdown step | One of the three calls of the shutdown sequence. | python_api §2 |
 | shutdown stage | One of the five blocking waits during shutdown, each bounded by `shutdown_deadline`: running submits on a revoked endpoint, a mod host's inbox drain and `on_unload`, mod host and sim thread joins, confirming a killed process is dead, and running engine calls in `close()`. | limits §1.1 |
 | operation lease | Every native call except `close()` registers itself; `close()` refuses new calls and waits for running ones. | python_api §2, §6 |
@@ -200,7 +200,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | registered dependant | Anything that can outlive a tick and still touch engine memory (mod hosts, engine view blocks held by array views). `close()` unwinds them before releasing anything native. | python_api §2 |
 | staged join | How `stop_sim_async()` stops the sim thread: request stop, wake the gate, wait, then log and retry once before `failed`. | python_api §4.3 |
 | `shutdown_deadline` | How long each blocking shutdown step may wait. 5 seconds. | limits §1.1 |
-| `failed` | Terminal state when something could not be stopped safely. Resources are leaked on purpose and no new `Engine` may be created in the process. | python_api §2 |
+| `failed` | Terminal state when something could not be stopped safely. Resources are leaked on purpose and no new `Engine` may be created in the process. `on_failed_stop` decides whether it raises `EngineFailedError` or aborts. | python_api §2 |
+| resource failure | A lost GPU device or a failed memory commit in the terminal commit. Not a `failed` path: the engine cleans up its child processes and the process exits with a nonzero status. | python_api §2 |
 | `load_failed` | Terminal state after a failed load or freeze. Nothing leaks; create a new `Engine`. | python_api §2 |
 | disarm | Cleanup that deliberately releases nothing, because another thread may still use the resource. | patterns §4 |
 | detach | Disarm for one resource: an engine view block still referenced at `close()` is freed when its last array view drops. | python_api §7.2 |

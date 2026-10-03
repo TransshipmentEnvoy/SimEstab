@@ -305,12 +305,13 @@ creates and erases, caps, the order rows are visited in, and what a save holds.
     Addresses never change for the whole session. A 2²⁴ cap of 8-byte values reserves
     128 MiB of address space per column. A thousand such columns use about 125 GiB of the
     128 TiB a 64-bit Linux process can address.
-  - **Commit failure ends the session; it is never a rejection.** The terminal commit commits
-    the pages it needs before it changes anything. A failure therefore leaves core state
-    whole at tick N, and the tick is abandoned rather than half-applied. The freeze uses the
-    same order, fallible steps before observable ones (`design_engine_core.md` §2.4). The
-    engine logs `critical` and enters `failed` (`design_python_api.md` §2), as it does on GPU
-    device loss (`design_engine_core.md` §5). It must not fall back to rejecting the creates
+  - **Commit failure ends the process; it is never a rejection.** The terminal commit
+    commits the pages it needs before it changes anything. A failure therefore leaves core
+    state whole at tick N, and the tick is abandoned rather than half-applied. The freeze
+    uses the same order, fallible steps before observable ones (`design_engine_core.md`
+    §2.4). The engine logs `critical`, cleans up its child processes and exits with a
+    nonzero status (`design_python_api.md` §2), as it does on GPU device loss
+    (`design_engine_core.md` §5). It must not fall back to rejecting the creates
     that did not fit. That would make the accepted set depend on machine memory, so two
     machines replaying one command stream would diverge by how much RAM they had. A bound
     that affects outcomes has to be the cap: identical on every machine and recorded in the

@@ -206,15 +206,18 @@ Rules:
      `stopped`, and no tick runs again. A session with no sim thread has nothing to join;
      the call only sets the stop.
   3. **`close()`**: close the operation lease and wait for running calls, detach retained
-     `PRIVATE` engine view blocks, then release native resources. It never raises.
+     `PRIVATE` engine view blocks, then release native resources. It never raises because
+     shutdown failed.
 
   Steps 1 and 2 cannot swap. The step that stops mod hosts needs the GIL to make progress,
   and the join step must release it. Joining first would starve every thread host for the
   whole join window. That would guarantee the deadline expiry the join tries to avoid
   (§4.3).
-- **`close()` never raises and is idempotent**, mirroring "release and destroy are
-  `noexcept`". An async error still pending at close is logged prominently, never raised
-  (§8). The raising rendezvous points are `stop_sim_async()` and the pump calls. `close()`
+- **`close()` never raises because shutdown failed, and is idempotent**, mirroring "release
+  and destroy are `noexcept`". An async error still pending at close is logged prominently,
+  never raised (§8). A timeout inside it enters `failed` and is logged, never raised. The
+  one thing it raises for is being called wrongly: off the owner thread it raises
+  `EngineThreadError` and does nothing, like every lifecycle call (below). The raising rendezvous points are `stop_sim_async()` and the pump calls. `close()`
   also never blocks indefinitely. Every wait inside it has a deadline, and an expiry leads
   to the `failed` path below, not to a hang. It performs steps 1 and 2 itself if the caller
   has not, so a bare `close()` is always a complete shutdown.
@@ -251,8 +254,10 @@ Rules:
   **The check is always on and raises `EngineThreadError`.** It is not debug-only. Each
   checked call is O(1) per frame (§5 rule 1), and a debug-only check would leave an ordinary
   Python mistake as undefined behaviour in the core. Below the binding, the C++
-  abort-on-invariant rule is unchanged. How this combines with `close()` never raising is
-  open ([Q13](open_question.md#q13-can-close-be-called-from-another-thread)).
+  abort-on-invariant rule is unchanged. `close()` follows the same check. Called off the
+  owner thread it raises `EngineThreadError` before it touches anything, so the engine is
+  exactly as it was and the owner thread can still close it. Its promise never to raise is
+  about shutdown failing, not about being called from the wrong place.
 - **A call after closing raises.** A call that begins once closing has started, or after
   close, raises `sim_estab.EngineClosedError` instead of aborting. This is a *documented
   deviation* from the C++ rule "programming errors abort" (`design_patterns.md` §6). On the
@@ -297,9 +302,8 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
   `outcome()`. `close()` releases as usual. To inspect a live session without ending it,
   pause and step instead (§4.3).
 
-- **`failed` is a terminal state with seven entry paths, in two classes.**
-
-  **Live execution that will not stop or finish safely.** Five paths:
+- **`failed` is a terminal state for live execution that will not stop or finish
+  safely.** It has five entry paths:
   - the sim-thread join timed out (§4.3);
   - a participant's gate deadline expired a second time under `on_expiry = FAIL`
     (`design_engine_core.md` §3.3);
@@ -316,22 +320,8 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
   - the operation-lease wait timed out in shutdown step 3. That shows a running call may
     still be touching native resources.
 
-  **A resource the session cannot continue without.** Two paths:
-  - GPU device loss (`design_engine_core.md` §5). The GPU is in the peripheral domain, so
-    core state is untouched and the session can still be replayed;
-  - commit failure in the terminal commit (`design_data_container.md` §2.2). Memory is
-    reserved at each object type's cap, and the commit commits the pages it needs before it
-    changes anything. So a failure leaves core state whole at tick N, and the tick is simply
-    abandoned. It is never turned into a rejection. The freeze uses the same order:
-    everything that can fail happens before anything is visible (`design_engine_core.md`
-    §2.4).
-
-  Device loss and commit failure are specified in other documents. They are listed here
-  because this is where the `failed` paths are collected. The table below is written for the
-  live-execution class: leak rather than free, because a live thread may still touch
-  anything. For the resource class it is cautious but harmless, since nothing is running
-  that could be surprised. Whether the resource class deserves its own terminal state is
-  open ([Q17](open_question.md#q17-should-resource-failures-have-their-own-terminal-state)).
+  The table below follows from that: leak rather than free, because a live thread may
+  still touch anything.
 
   In `failed`, nothing a surviving thread can reach is destroyed. This is the Python face of
   a disarmed RAII context (`design_patterns.md` §4): `close()` clears its witnesses without
@@ -343,14 +333,30 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
   | logging | `critical`, naming exactly what was leaked |
   | `engine.state` | reports `failed` |
   | any further API call | raises `sim_estab.EngineFailedError` |
-  | `close()` | a no-op that never raises |
+  | `close()` | a no-op; it does not raise for the failure |
   | a new `Engine` | still raises `EngineExistsError`: the process is poisoned |
   | shared SDL and GPU reference counts | not dropped. A later acquire would hand a live device to a process that lost track of one (`design_patterns.md` §3) |
 
-  `on_failed_stop` (§3) chooses between raising and terminating the process. Which of the
-  seven paths it covers is open
-  ([Q65](open_question.md#q65-which-failed-paths-does-on_failed_stop-cover)). `closed` is
-  reachable only through a clean shutdown. The API never reports `closed` to mean "gave up".
+  `on_failed_stop` (§3) chooses, for every one of these paths, between raising and
+  terminating the process. `closed` is reachable only through a clean shutdown. The API
+  never reports `closed` to mean "gave up".
+
+- **A resource the session cannot continue without ends the process, not the engine.** Two
+  failures leave nothing to continue with:
+  - GPU device loss (`design_engine_core.md` §5). The GPU is in the peripheral domain, so
+    core state is untouched and the session can still be replayed;
+  - a failed memory commit in the terminal commit (`design_data_container.md` §2.2). Memory
+    is reserved at each object type's cap, and the commit commits the pages it needs before
+    it changes anything. So a failure leaves core state whole at tick N, and the tick is
+    simply abandoned. It is never turned into a rejection.
+
+  Neither is a stuck thread, so there is nothing to wait out and nothing to leak on
+  purpose. The engine logs `critical`, runs the out-of-process cleanup of
+  `on_failed_stop = "terminate"` (§3) so that no child process or shared-memory object
+  outlives it, and ends the process with a nonzero exit status. This is not configurable,
+  adds no engine state, and does not depend on `on_failed_stop`. A session that has lost
+  its device or its memory has no useful state to report through an exception, and a
+  process that kept running would only reach the same failure again.
 
 ## 3. Options
 
@@ -566,15 +572,22 @@ Rules:
   - Escape hatch: game speed, or something like it, may one day be wanted *as game state*,
     for example a mod that slows time in the world. Model it then as core state changed by a
     real command. Never smuggle control calls into the input stream.
-- `on_failed_stop` chooses what a `failed` entry path (§2) does next. It covers the
-  sim-thread join timeout and an abandoned thread host. Which of the other paths it covers
-  is open
-  ([Q65](open_question.md#q65-which-failed-paths-does-on_failed_stop-cover)).
-  - `"raise"` (the default) raises `EngineFailedError` and enters the terminal `failed`
-    state. This suits interactive hosts that want to save unrelated work first.
-  - `"terminate"` hard-aborts the process after logging. This suits CI and headless runs,
-    where a hung run must die visibly instead of pretending to clean up.
-- **`"terminate"` cleans up out-of-process state before aborting**, in this order:
+- `on_failed_stop` chooses what happens on every `failed` entry path (§2): the sim-thread
+  join timeout, a participant's second expiry under `FAIL`, an endpoint revocation timeout,
+  an abandoned thread host, and the operation-lease timeout in `close()`.
+  - `"raise"` (the default) enters the terminal `failed` state and raises
+    `EngineFailedError`. The call that hit the path raises it. A path no call can raise
+    from, such as a participant's second expiry under `FAIL` on the sim thread, raises at
+    the next engine call instead, and every later call raises too. Inside
+    `close()`, which never raises because shutdown failed, it is logged instead. This suits
+    interactive hosts that want to save unrelated work first.
+  - `"terminate"` runs the cleanup below, then hard-aborts the process. This suits CI and
+    headless runs, where a hung run must die visibly instead of pretending to clean up.
+  - A lost GPU device or a failed memory commit is not a `failed` path. It ends the process
+    whatever this field says, after the same cleanup (§2).
+- **`"terminate"` cleans up out-of-process state before aborting**, in this order. The
+  process exit for a lost resource (§2) runs the same steps, then exits with a nonzero
+  status instead of aborting:
 
   1. kill every process host;
   2. confirm each death through `waitpid` or `pidfd`;
@@ -950,9 +963,9 @@ call sites. Where ticks run follows from the kind of session:
     5. on the final timeout, the engine enters the terminal `failed` state (§2). This call
        then raises `EngineFailedError`, or hard-aborts, depending on `on_failed_stop` (§3).
 
-    `close()` makes the same attempt but never raises. A failed join leaves the engine
-    `failed`, with resources leaked on purpose, never freed under a live thread. **The
-    staged join releases the GIL** (§5 rule 2). Holding it would freeze every thread host
+    `close()` makes the same attempt but logs instead of raising. A failed join leaves the
+    engine `failed`, with resources leaked on purpose, never freed under a live thread.
+    **The staged join releases the GIL** (§5 rule 2). Holding it would freeze every thread host
     for the join window. That is safe only because shutdown step 1 has already stopped the
     mod hosts (§2).
 - Render stays on the Python main loop, as checked against SDL3: **window = event pump =
@@ -1054,8 +1067,8 @@ Rules:
     `poll_input`, `drain_events`, `run_*_async`): externally synchronized, with exactly one
     driving thread, the owner thread of §2. An always-on check raises
     `EngineThreadError` (§2). The C++ layer below keeps its abort-on-invariant behaviour.
-    `close()` is in this family but never raises; how the two combine is open
-    ([Q13](open_question.md#q13-can-close-be-called-from-another-thread)).
+    `close()` is in this family. Off the owner thread it raises `EngineThreadError` and
+    does nothing; it never raises because shutdown failed (§2).
   - `drain_events()` is in this family because it empties a single queue. Two callers would
     each get a disjoint half, and each would conclude the other half never happened. The
     owner thread drains, and the mod bus fans out (§4.1). It exists only under an owner
@@ -1716,7 +1729,7 @@ Rules:
   later rendezvous. Both sides are wait-free: the driving thread learns of a failure when it
   next asks, never by waiting.
 
-  `close()` is not a rendezvous point, because it never raises (§2). An error still `READY`
+  `close()` is not a rendezvous point, because it never raises for a failure (§2). An error still `READY`
   at `close()` is logged prominently instead, using the same acquire load. Errors still
   cannot be silently lost on the context-manager path, because `__exit__` runs
   `stop_sim_async()`, which raises, before `close()` (§2).
@@ -1728,12 +1741,12 @@ Rules:
   | Raised when | Type | Retryable? |
   |---|---|---|
   | Any new call once closing has linearized, or any call on a closed engine or handle (§2, §6, §7.2) | `EngineClosedError` | no; terminal for that engine |
-  | Any call once the engine is `failed`; `stop_sim_async()` on the final join timeout (§2, §4.3) | `EngineFailedError` | no; terminal, and the process is poisoned |
+  | Under `on_failed_stop = "raise"`: the call that hit a `failed` entry path, such as `stop_sim_async()` on the final join timeout, and any call after it; `close()` logs instead (§2, §3) | `EngineFailedError` | no; terminal, and the process is poisoned |
   | `view.take()` while an array view on the previous snapshot is alive (§7.2) | `ViewBusyError` | yes: drop the array views, or copy |
   | `snap.find(...)` on a snapshot from an engine view that declared `identity=False` (§7.2) | `ValueError` | no; the declaration is closed at the freeze. Use `snapshot()`, which always carries `id` |
   | `start_session()` while `EngineConfig.event_drain` is `None` (§3) | `ValueError` | no for this `Engine`: the config is frozen. Construct one that declares `"owner"` or `"sink"` |
   | `step()` under an owner drain when the event backlog reaches `high_water` (§4.3, §7.3) | `EventBacklogError` | yes: drain with `drain_events()`, then step again. The error names the tick reached |
-  | Any lifecycle or pump call off the owner thread (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread |
+  | Any lifecycle or pump call off the owner thread, `close()` included (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread. Nothing was touched |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
   | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `run_sim_async()` in a headless session; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
   | `snap.column(...)` for a column outside the caller's capabilities (`design_modding.md` §4.1) | `ColumnNotGrantedError` | no; capabilities are fixed at load |

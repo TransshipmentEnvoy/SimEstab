@@ -1570,11 +1570,11 @@ lagging.
   - **Backend scope**: Vulkan only (SPIR-V from glslang), covering Linux and Windows. D3D12
     and Metal need DXIL and MSL and are future work, so macOS has no GPU path
     (`design_data_container.md` §5).
-  - **Losing the GPU device ends the session.** It is logged as `critical`, the engine
-    enters `failed`, and there is no recover-and-re-upload path. Core state is untouched and
-    the session can still be replayed, because the GPU is in the peripheral domain. Whether
-    this deserves its own terminal state is open
-    ([Q17](open_question.md#q17-should-resource-failures-have-their-own-terminal-state)).
+  - **Losing the GPU device ends the process.** It is logged as `critical`, the
+    out-of-process cleanup runs, and the process exits with a nonzero status
+    (`design_python_api.md` §2). There is no recover-and-re-upload path. Core state is
+    untouched and the session can still be replayed from its record, because the GPU is in
+    the peripheral domain.
 - **GUI**: an engine view like any other, usually a few columns at cadence 1, plus the host's
   command endpoint. It is not a special case of anything. Under lockstep, a `pause()` from
   the GUI is agreed across the session rather than applied locally, because it changes the
