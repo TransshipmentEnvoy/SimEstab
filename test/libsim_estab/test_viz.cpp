@@ -73,7 +73,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_creation,
 
     VizContext ctx;
 
-    BOOST_TEST(ctx.has_gpu_device());
+    BOOST_TEST(ctx.has_device());
     BOOST_TEST(ctx.get_width() == 1280);
     BOOST_TEST(ctx.get_height() == 720);
 
@@ -100,7 +100,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_custom_params,
     ctx.clear();
     ctx.poll_events();
 
-    BOOST_TEST(ctx.has_gpu_device());
+    BOOST_TEST(ctx.has_device());
     BOOST_TEST(ctx.get_width() == 800);
     BOOST_TEST(ctx.get_height() == 600);
     BOOST_TEST(ctx.get_title() == "Test Window");
@@ -134,7 +134,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_gpu_info,
     ctx.clear();
     ctx.poll_events();
 
-    auto info = ctx.get_gpu_info();
+    auto info = ctx.get_device_info();
 
     // Should have a valid backend (Vulkan or D3D12 on most systems)
     BOOST_TEST((info.backend == GPUBackend::Vulkan || info.backend == GPUBackend::D3D12 ||
@@ -174,7 +174,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_sequential_lifecycle,
 
         VizContext ctx(640 + i * 100, 480 + i * 50, "Sequential Window " + std::to_string(i));
 
-        BOOST_REQUIRE(ctx.has_gpu_device());
+        BOOST_REQUIRE(ctx.has_device());
         BOOST_TEST(ctx.get_width() == 640 + i * 100);
         BOOST_TEST(ctx.get_height() == 480 + i * 50);
 
@@ -217,11 +217,11 @@ BOOST_AUTO_TEST_CASE(test_viz_context_gpu_info_sequential,
 
     for (int i = 0; i < 2; ++i) {
         VizContext ctx(640, 480, "GPU Info Test " + std::to_string(i));
-        BOOST_REQUIRE(ctx.has_gpu_device());
+        BOOST_REQUIRE(ctx.has_device());
         ctx.clear();
         ctx.poll_events();
 
-        auto info = ctx.get_gpu_info();
+        auto info = ctx.get_device_info();
 
         // Should report a valid GPU backend
         BOOST_TEST((info.backend == GPUBackend::Vulkan || info.backend == GPUBackend::D3D12 ||
@@ -257,11 +257,11 @@ BOOST_AUTO_TEST_CASE(test_viz_context_multiple_simultaneous,
 
     // Create two contexts at the same time
     VizContext ctx1(640, 480, "Window 1");
-    BOOST_REQUIRE(ctx1.has_gpu_device());
+    BOOST_REQUIRE(ctx1.has_device());
     BOOST_TEST_MESSAGE("First VizContext created");
 
     VizContext ctx2(800, 600, "Window 2");
-    BOOST_REQUIRE(ctx2.has_gpu_device());
+    BOOST_REQUIRE(ctx2.has_device());
     BOOST_TEST_MESSAGE("Second VizContext created");
 
     // Both should be functional
@@ -275,8 +275,8 @@ BOOST_AUTO_TEST_CASE(test_viz_context_multiple_simultaneous,
     ctx2.show();
 
     // Both should report same GPU backend (they share the same device)
-    auto info1 = ctx1.get_gpu_info();
-    auto info2 = ctx2.get_gpu_info();
+    auto info1 = ctx1.get_device_info();
+    auto info2 = ctx2.get_device_info();
     BOOST_TEST(static_cast<int>(info1.backend) == static_cast<int>(info2.backend));
 
     // Render to both windows
@@ -308,9 +308,9 @@ BOOST_AUTO_TEST_CASE(test_viz_context_three_windows,
     VizContext ctx2(640, 480, "Medium Window");
     VizContext ctx3(800, 600, "Large Window");
 
-    BOOST_REQUIRE(ctx1.has_gpu_device());
-    BOOST_REQUIRE(ctx2.has_gpu_device());
-    BOOST_REQUIRE(ctx3.has_gpu_device());
+    BOOST_REQUIRE(ctx1.has_device());
+    BOOST_REQUIRE(ctx2.has_device());
+    BOOST_REQUIRE(ctx3.has_device());
 
     ctx1.show();
     ctx2.show();
@@ -344,7 +344,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_dynamic_lifecycle,
 
     // Create persistent context
     VizContext persistent_ctx(640, 480, "Persistent Window");
-    BOOST_REQUIRE(persistent_ctx.has_gpu_device());
+    BOOST_REQUIRE(persistent_ctx.has_device());
     persistent_ctx.show();
 
     // Create and destroy temporary contexts while persistent one exists
@@ -352,7 +352,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_dynamic_lifecycle,
         BOOST_TEST_MESSAGE("Dynamic iteration " << i);
 
         VizContext temp_ctx(400, 300, "Temp Window " + std::to_string(i));
-        BOOST_REQUIRE(temp_ctx.has_gpu_device());
+        BOOST_REQUIRE(temp_ctx.has_device());
         temp_ctx.show();
 
         // Render to both
@@ -370,7 +370,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_dynamic_lifecycle,
     }
 
     // Persistent context should still work
-    BOOST_REQUIRE(persistent_ctx.has_gpu_device());
+    BOOST_REQUIRE(persistent_ctx.has_device());
     persistent_ctx.clear(0.0f, 1.0f, 0.0f); // Green to confirm still working
     persistent_ctx.poll_events();
 
@@ -388,8 +388,8 @@ BOOST_AUTO_TEST_CASE(test_viz_context_multi_visibility,
     VizContext ctx1(400, 300, "Visibility Test 1");
     VizContext ctx2(400, 300, "Visibility Test 2");
 
-    BOOST_REQUIRE(ctx1.has_gpu_device());
-    BOOST_REQUIRE(ctx2.has_gpu_device());
+    BOOST_REQUIRE(ctx1.has_device());
+    BOOST_REQUIRE(ctx2.has_device());
 
     // Both initially hidden
     BOOST_TEST(!ctx1.is_visible());

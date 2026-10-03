@@ -345,7 +345,7 @@ GPUDeviceInfo ComputeContext::get_device_info() const {
     // A getter is most likely to be called on a destroyed context from the
     // error-handling path that is trying to report what went wrong; aborting
     // there destroys the diagnostic being assembled. Matches
-    // VizContext::get_gpu_info(), which the two used to disagree about.
+    // VizContext::get_device_info(), which the two used to disagree about.
     if (impl_ && impl_->gpu_device) {
         // Get the backend driver name from SDL
         const char *driver_name = SDL_GetGPUDeviceDriver(impl_->gpu_device);

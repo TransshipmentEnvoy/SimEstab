@@ -149,7 +149,7 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
         impl_->window_claimed = true;
 
         // Log GPU info
-        auto gpu_info            = get_gpu_info();
+        auto gpu_info            = get_device_info();
         const char *backend_name = "Unknown";
         switch (gpu_info.backend) {
         case GPUBackend::Vulkan:
@@ -328,7 +328,7 @@ void VizContext::set_title(std::string_view title) {
 }
 
 // GPU queries - return defaults if impl_ is null
-GPUDeviceInfo VizContext::get_gpu_info() const {
+GPUDeviceInfo VizContext::get_device_info() const {
     GPUDeviceInfo info{};
     info.backend = GPUBackend::Unknown;
 
@@ -353,7 +353,7 @@ GPUDeviceInfo VizContext::get_gpu_info() const {
     return info;
 }
 
-bool VizContext::has_gpu_device() const noexcept {
+bool VizContext::has_device() const noexcept {
     if (!impl_) {
         return false;
     }

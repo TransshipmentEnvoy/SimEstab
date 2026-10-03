@@ -497,7 +497,7 @@ private:
   building. A query returns a value-initialized result, which every caller must already
   handle, because a live but empty context can return the same.
 - **Both contexts follow it**, and the rule is stated once here so they cannot drift apart.
-  `VizContext::get_gpu_info()` and the `VizContext` getters degrade, and so does
+  `VizContext::get_device_info()` and the `VizContext` getters degrade, and so does
   `ComputeContext::get_device_info()`.
 
 ### 5b. Opaque wrapper style (`record`, `record_ostream`, `logger`, `logger_mt`)

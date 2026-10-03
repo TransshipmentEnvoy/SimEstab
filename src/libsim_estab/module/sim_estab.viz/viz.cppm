@@ -106,9 +106,9 @@ public:
     void set_title(std::string_view title);
 
     // GPU queries
-    GPUDeviceInfo get_gpu_info() const;
+    GPUDeviceInfo get_device_info() const;
 
-    [[nodiscard]] bool has_gpu_device() const noexcept;
+    [[nodiscard]] bool has_device() const noexcept;
 
 private:
     // Fast Pimpl implementation using Small Buffer Optimization (SBO)
