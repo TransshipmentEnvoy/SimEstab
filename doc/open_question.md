@@ -14,33 +14,10 @@ so on).
 
 ## Blocks M1
 
-### Q10. Can the event ring fill within one tick?
-
-The event ring is sized `C × D`, which assumes events are bounded by commands (`engine_core`
-§5; `python_api` §7.1). Events the engine creates itself are not: cap rejections,
-participant changes, suspensions, failures. The backlog is only checked at the gate, so the
-ring could fill during a tick, and no doc says what happens then. `high_water` needs
-headroom for one tick, and that headroom is not bounded. Also unclear: which thread enqueues
-"mod suspended", since the ring has one producer.
-
-### Q11. How does draining events wake the sim?
-
-The event backlog is a plain count the sim computes as `write − read` (`engine_core` §5.2).
-For a drain to wake a sim parked on the backlog, the owner must store `read` under the gate
-mutex and notify a parked sim, and the sim must recompute the backlog inside its locked
-re-check (`engine_core` §3.3's wake-up rule). §5.2 requires the wake-up but does not give the
-drain's exact steps, and its pseudo-code recomputes the backlog "before the gate". The
-mechanism register (§1.1) has no row for it.
-
 ### Q13. Can `close()` be called from another thread?
 
 `python_api` §2 says `close()` never raises. The same section, and §8, say it is an
 owner-thread call that raises `EngineThreadError` elsewhere.
-
-### Q16. Which events exist?
-
-The event list is not designed (`python_api` §7.3). M1 needs at least session, integrity and
-participant events.
 
 ### Q17. Should resource failures have their own terminal state?
 
@@ -65,12 +42,6 @@ The catch-up clamp is named (`python_api` §4.3) with no value anywhere. Also bl
 
 No doc gives a slot size, so worst-case ring memory is a count, not bytes (`limits` §2.2).
 Depends on the payload schema (`engine_core` §2.3).
-
-### Q63. What is `high_water`?
-
-The event backlog size at which the gate pauses the sim (`engine_core` §5.2). The counter,
-its owner and its place in the gate are decided; the value needs a measured drain rate
-(`limits` §7). It must leave headroom for one tick of events (Q10).
 
 ### Q65. Which `failed` paths does `on_failed_stop` cover?
 

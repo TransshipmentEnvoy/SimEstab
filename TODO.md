@@ -58,9 +58,9 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
   + [ ] the endpoint lease: revoke closes admission, wakes producers parked on the
         admission wait, and waits for active submits before reclaim or reopen; a retry
         keeps the same ring (`doc/design_engine_core.md` §5.1)
-  + [ ] the event ring and the event backlog (`doc/design_engine_core.md` §5.2). How a drain
-        wakes a sim parked on the backlog is open
-        ([Q11](doc/open_question.md#q11-how-does-draining-events-wake-the-sim))
+  + [ ] the event ring and the event backlog, sized `(C + E) × (D + 1)` with the mark at
+        `(C + E) × D`, and the two event drains: the owner drain and the native sink
+        (`doc/design_engine_core.md` §5.2)
   + [ ] operation leases around every native call that can overlap `close()`:
         `OPEN → CLOSING` rejects new calls, running calls drain under the shutdown
         deadline, and a timeout enters `failed` and disarms rather than freeing native

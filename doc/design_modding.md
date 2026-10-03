@@ -1046,6 +1046,9 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
     `close()` ends it (`design_engine_core.md` §2.4, `design_python_api.md` §2). `load_mods`
     is the last step that knows the mod set is complete. That is not the same as knowing
     whether the caller is ready to fix session identity, and the freeze decides the latter.
+- **Logic mods need an owner drain.** The mod bus is fed from `drain_events()` on the owner
+  thread (`design_python_api.md` §4.1). A session whose event drain is the sink feeds no
+  bus, so `mods.start()` raises `EngineStateError` there (`design_python_api.md` §3).
 - **Shutdown is `mods.stop()`, the first step of the shutdown sequence**
   (`design_python_api.md` §2). It runs with the GIL held, because `on_unload` is Python.
   **It does not end the session**: the session is still `running` when it returns, and

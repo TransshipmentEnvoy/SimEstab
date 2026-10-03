@@ -392,9 +392,10 @@ class CommandPolicy:                     # doc/design_limits.md §2
     peer_source_capacity: int = 256      # a peer endpoint's capacity
                                          # Not fields and not properties: ring depth
                                          #   (capacity, or 2 x capacity at a margin
-                                         #   of 1 or more), C (sum of
-                                         #   capacities) and the event ring size (C x D).
-                                         #   All three are computed at the freeze (§7.1).
+                                         #   of 1 or more), C (sum of capacities), E,
+                                         #   high_water and the event ring size
+                                         #   ((C + E) x (D + 1)). All are computed at
+                                         #   the freeze (§7.1, §7.3).
                                          #   There is no drain quota and no
                                          #   ring_capacity_ticks
 
@@ -418,6 +419,10 @@ class EngineConfig:
                                          #   freeze and joins session identity
                                          #   (design_data_container.md §2.1, §2.2)
     seed: int | None = None              # None -> generated, then recorded
+    event_drain: str | None = None       # "owner" | "sink": who empties the event ring
+                                         #   (§7.3). No default: start_session() raises
+                                         #   ValueError while it is None. Not in
+                                         #   config.py yet
     on_failed_stop: str = "raise"        # "raise" | "terminate" (§4.3)
     projection_warn_bytes_per_second: int = 4_000_000_000
                                          # publish bandwidth above which the engine warns,
@@ -431,8 +436,9 @@ class EngineConfig:
 engine = Engine(config)                  # the only place config crosses the boundary
 ```
 
-The sketch matches `src/sim_estab/config.py`, which is the implementation. `window`, `log`
-and `HostPolicy`'s two mod-deadline fields are the only fields not in `config.py` yet
+The sketch matches `src/sim_estab/config.py`, which is the implementation. `window`, `log`,
+`event_drain` and `HostPolicy`'s two mod-deadline fields are the only fields not in
+`config.py` yet
 ([Q18](open_question.md#q18-what-goes-in-windowconfig-and-logconfig),
 [Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
 
@@ -527,6 +533,20 @@ Rules:
     is session-fatal, never a rejection. A rejection driven by machine memory would make
     two machines replaying one stream diverge by how much RAM they had
     (`design_data_container.md` §2.2).
+- **Every session declares its event drain, and nothing picks one for it.**
+  `event_drain` says who empties the event ring (`design_engine_core.md` §5.2). `"owner"`
+  means the owner thread calls `drain_events()` between ticks, as every windowed loop does
+  (§4.1). `"sink"` means the engine empties the ring itself after every tick, into a native
+  sink that counts the events, hashes their canonical encoding and keeps nothing: for CI,
+  golden replays and benchmarks (§4.2). A default would let a headless run that never
+  drains pause itself at the backlog mark, or let a windowed app lose its events into a
+  sink, so the field has none. `start_session()` raises `ValueError` while it is `None`,
+  before it freezes anything.
+  - Under a sink, `drain_events()` raises `EngineStateError`: the engine already empties the
+    ring. `engine.sink_digest()` returns the sink's count and hash, which a golden replay can
+    compare.
+  - The mod bus is fed from `drain_events()` (§4.1). So `mods.start()` under a sink raises
+    `EngineStateError`: a session with logic mods declares an owner drain.
 - **`tick_rate` is not the speed setting, and must not become one.** It defines what one
   tick *means*. A unit moving one cell per tick moves at a different world speed if the rate
   changes. So changing the rate changes outcomes, not pacing. That is why it is frozen at
@@ -632,10 +652,10 @@ Rules:
   and window events. `drain_events()` empties the engine's own event ring (§7.3). They have
   different producers. The loop pumps both, and the mod bus fans out only the second.
 
-  **Draining does not depend on having a mod bus.** The event ring is bounded, and letting
-  it back up pauses the simulation (§7.3). A mod-less application that skipped the drain
-  would stall its own session while doing nothing else wrong. A missing bus skips only the
-  fan-out.
+  **Draining does not depend on having a mod bus.** A windowed session declares an owner
+  drain (§3), and the event ring is bounded: letting it back up pauses the simulation
+  (§7.3). A mod-less application that skipped the drain would stall its own session while
+  doing nothing else wrong. A missing bus skips only the fan-out.
 - **No mod commands cross here.** Mods submit on their own endpoints, from their own threads
   (§7.1). The loop's only mod duty is the fan-out, `mods.publish`. A relay would submit mod
   commands on the host application's endpoint. That would tie capacity, capability checks,
@@ -676,14 +696,15 @@ verification harness of `design_engine_core.md` §2.3.
 
 ```python
 # pseudo-code — the verification harness (design_engine_core.md §2.3)
-with Engine(replace(config, headless=True)) as engine:
+with Engine(replace(config, headless=True, event_drain="sink")) as engine:
     engine.load_replay(path)                 # CONFIGURING: header (identities, versions,
                                              #   seed) + canonical command stream
                                              #   (design_engine_core.md §2.3)
     sim_estab.mod.load_mods(engine, policy)  # only what the header names; omit if none
     engine.start_session()                   # freeze: verifies identity vs the header
     engine.step(n_ticks)                     # exact ticks on this thread: no clock, no
-                                             #   render, GIL released
+                                             #   render, GIL released; the sink empties
+                                             #   the event ring after every tick
     assert engine.checksum() == golden
 ```
 
@@ -691,6 +712,11 @@ with Engine(replace(config, headless=True)) as engine:
   exist from the first build. It runs `n` ticks on the calling thread and returns the tick
   reached. The host is not paced, so a headless loop makes no per-tick call: commands the
   host submitted before `step(n)` run in its first tick.
+- **The harness declares a sink drain.** Nobody reads its events, so the engine empties the
+  ring itself after every tick, inside `step(n)` (§3). A long step therefore never reaches
+  the backlog mark. A notebook that wants the events declares an owner drain instead, and
+  calls `drain_events()` between steps. Its step then raises `EventBacklogError` at the mark
+  rather than wait for a drain only it can make (§4.3).
 
 - **A loaded replay puts the engine in `playback`, which closes every endpoint.** Every
   `submit*`, from every source including the host endpoint, returns `revoked`. `playback` is
@@ -847,21 +873,20 @@ call sites. Where ticks run follows from the kind of session:
     `step(n)`. It gives a fast-forward button without touching `tick_rate`. The frame loop
     is not involved: the host declares nothing, so nothing it does per frame bounds the
     speed.
-  - **"Unbounded" means unpaced, not free of every limit.** The event ring is sized `C × D`.
-    `D` is the drain interval the ring is sized for: the ticks between two `drain_events()`
-    calls (§7.1). A sim running free runs more ticks per drain, so a literally unbounded
-    mode would overflow the ring by using a documented feature correctly.
+  - **"Unbounded" means unpaced, not free of every limit.** The event backlog mark is
+    `(C + E) × D`: `D` drain intervals' worth of events, where `D` is the number of ticks
+    between two `drain_events()` calls the ring is sized for (§7.1). A sim running free runs
+    more ticks per drain, so a literally unbounded mode would overflow the ring by using a
+    documented feature correctly.
 
     So the sim stops at the gate when the event backlog reaches `high_water`, and it resumes
-    when the host drains. The backlog counts every entry the owner has not yet consumed.
+    when the host drains. The backlog counts every entry the drain has not yet consumed.
     This is the ordinary backlog pause of `design_engine_core.md` §5.2, not a special case.
     Like a `pause()`, it has no deadline. A host that stops draining altogether pauses the
     simulation and is reported; it is never timed out into `failed` (`design_engine_core.md`
     §3.3). `D` therefore keeps its meaning in every session, and the ring's size still holds
-    under fast-forward. The backlog is checked only at the gate, so whether the ring can
-    fill within one tick is open
-    ([Q10](open_question.md#q10-can-the-event-ring-fill-within-one-tick)). The value of
-    `high_water` is open too ([Q63](open_question.md#q63-what-is-high_water)).
+    under fast-forward. The ring holds one tick more than the mark, so the tick that passes
+    the gate just below it always fits.
   - Fast-forward is also what makes per-engine-view cadence (§7.2) worth having. At unbounded speed
     most publishes are never looked at, and publishing every tick is O(projection) of pure
     waste. Lowering an engine view's cadence during fast-forward costs nothing observable, since
@@ -894,8 +919,11 @@ call sites. Where ticks run follows from the kind of session:
     polls** (`design_engine_core.md` §3.3). A full host endpoint returns `queue_full`, and
     `outcome(h)` returns `pending` until its tick has run. The owner thread waits in only
     three places, and only on the sim or on a deadline: `snapshot()` (at most one tick,
-    §7.2), `step(n)` (above) and the shutdown calls (§2). If a step's next tick is blocked by something only the owner can clear, the
-    step returns or raises instead of waiting.
+    §7.2), `step(n)` (above) and the shutdown calls (§2). If a step's next tick is blocked
+    by something only the owner can clear, the step raises instead of waiting. The one such
+    blocker is the event backlog under an owner drain: the step raises `EventBacklogError`,
+    naming the tick reached, and the caller drains and steps again
+    (`design_engine_core.md` §5.2).
 
     That makes three waits on another party in the whole system. Anything else that waits
     is a defect, and so is any operation in this table that ever waits:
@@ -1030,7 +1058,9 @@ Rules:
     ([Q13](open_question.md#q13-can-close-be-called-from-another-thread)).
   - `drain_events()` is in this family because it empties a single queue. Two callers would
     each get a disjoint half, and each would conclude the other half never happened. The
-    owner thread drains, and the mod bus fans out (§4.1).
+    owner thread drains, and the mod bus fans out (§4.1). It exists only under an owner
+    drain (§3); under a sink it raises `EngineStateError`, because the engine already empties
+    the ring.
   - **`submit` and `submit_batch`**: callable from any thread, on any build, but **one
     thread at a time per endpoint**, because the ring is single-producer by contract (§7.1).
     Two threads sharing one endpoint is a usage error. Two threads on two endpoints never
@@ -1068,9 +1098,9 @@ Rules:
     - `pause`, `resume` and `step` serialize their compound grant changes under the gate
       mutex. `request_stop` sets the independent sticky stop atomic, under the same mutex.
       All of them notify a parked sim (`design_engine_core.md` §3.3).
-    - The event backlog is a plain value owned by the sim thread (`design_engine_core.md`
-      §5.2), so no control call writes it. How a drain wakes a sim parked on the backlog is
-      open ([Q11](open_question.md#q11-how-does-draining-events-wake-the-sim)).
+    - The event backlog is a plain value owned by the executor (`design_engine_core.md`
+      §5.2), so no control call writes it. A drain wakes a sim parked on the backlog by
+      storing the ring's `read` index under the gate mutex and notifying it.
     - `set_time_scale` uses its loop-level atomic. `set_log_level` calls a subsystem with
       its own mutex (`design_logging.md` §2).
 
@@ -1272,12 +1302,15 @@ Rules:
   |---|---|
   | endpoint ring depth | `capacity` at margin 0 and on the host endpoint, `2 × capacity` at a margin of 1 or more: computed, never configured |
   | engine-wide commands per tick, `C` | `Σ capacity(endpoint)` over *registered* endpoints: a bound checked at the freeze, not an allocation |
-  | reliable-class event volume to the host | `≤ C` per tick |
-  | event ring size | `≥ C × D`, where `D` is the drain interval: the ticks between two `drain_events()` calls that the ring is sized for |
+  | engine-created events per tick, `E` | `T·S + S + 3·P + V + 4` over object types, sources, participants and engine views, all closed at the freeze (`design_engine_core.md` §5.2) |
+  | events into the ring per tick | `≤ C + E` |
+  | `high_water`, the event backlog mark | `(C + E) × D`, where `D` is the drain interval: the ticks between two `drain_events()` calls that the ring is sized for |
+  | event ring size | `(C + E) × (D + 1)`: the mark plus one tick, which the gate check cannot stop |
 
-  This sizing assumes events are bounded by commands. Events the engine creates itself are
-  not, and what that means for the ring is open
-  ([Q10](open_question.md#q10-can-the-event-ring-fill-within-one-tick)).
+  `C` bounds the events commands can cause, and `E` the events the engine creates itself:
+  participant changes, protocol errors, bandwidth warnings, and from M3 cap refusals. Events
+  the engine raises outside a tick, on the owner thread or a mod host thread, never enter the
+  ring; the drain merges them (§7.3).
 
   `D` is not the catch-up clamp (§4.3). The clamp bounds ticks per *wake*, and a host
   stalled across several frames spans several wakes. `D` is the drain interval the event
@@ -1285,9 +1318,10 @@ Rules:
   exceeds it pauses the simulation (§7.3) instead of overflowing the ring.
 
   Endpoint capacity is decided in `design_limits.md` §2, which carries the reasoning and the
-  revisit trigger. It lives in `EngineConfig.command_policy` (§3). Ring depth, `C` and the
-  event ring size are **computed at the freeze, and are neither fields nor properties of
-  `CommandPolicy`**. The endpoint set and the stamp margins are not known before the freeze.
+  revisit trigger. It lives in `EngineConfig.command_policy` (§3). Ring depth, `C`, `E`,
+  `high_water` and the event ring size are **computed at the freeze, and are neither fields
+  nor properties of `CommandPolicy`**. The endpoint set and the stamp margins are not known
+  before the freeze.
   An implementation that writes any of them down has added a second source of truth.
 
 - **Order comes from the drain, and needs no sort.** `(source id, sequence)` is a total
@@ -1555,26 +1589,39 @@ Rules:
 
 ### 7.3 Events (outbound happenings)
 
-Events report what happened in the core. They travel on the event ring to the owner thread,
-which drains them once per frame.
+Events report what happened in the core. They travel on the event ring to the session's
+event drain: the owner thread, which drains them once per frame, or the engine's own sink
+(§3).
 
 ```python
-# pseudo-code
+# pseudo-code — under an owner drain
 for ev in engine.drain_events():     # one batch per frame; never blocks
     ...
 ```
 
 Rules:
 
+- **Every session declares one event drain** (§3, `design_engine_core.md` §5.2):
+
+  | Drain | Who empties the ring | Who reads the events |
+  |---|---|---|
+  | `"owner"` | the owner thread, in `drain_events()`, between ticks and never inside one | the application and, through the mod bus, the mods (§4.1) |
+  | `"sink"` | the engine, after every tick, even inside `step(n)` | nobody. The sink counts the events and hashes their canonical encoding; `engine.sink_digest()` returns both |
+
+  A session that declares neither cannot start (§3).
 - Events are tick-stamped, typed and drained in batches. `drain_events` never blocks, and it
-  has exactly one owner (§6). The event ring it drains is bounded, and lossless up to its
-  size. **That size is derived, not picked**: `≥ C × D` (§7.1).
+  has exactly one owner (§6). The event ring it drains is bounded and lossless. **Its size is
+  derived, not picked**: `(C + E) × (D + 1)` (§7.1).
 
   The ring is easy to size because neither of a command's two answers travels on it.
   Admission is `submit`'s return value, and the outcome is read from its handle (§7.1). What
-  remains is created by the engine, so no source can flood the ring. Whether the events the
-  engine creates stay within that size is open
-  ([Q10](open_question.md#q10-can-the-event-ring-fill-within-one-tick)).
+  remains is created by the engine, so no source can flood the ring. `E` bounds what the
+  engine creates in one tick, from counts closed at the freeze, so the ring holds the
+  backlog mark plus one tick and cannot overflow (`design_engine_core.md` §5.2).
+- **Events raised outside a tick never enter the ring.** `session.started` comes from the
+  freeze, and `participant.left` from a mod host stopping, on the owner thread or a mod host
+  thread. They wait in a short side list, and `drain_events()` merges them into its batch in
+  tick order (`design_engine_core.md` §5.2).
 - **Backing up is not a failure state, and never ends the session.** Who is at fault decides
   the response (`design_engine_core.md` §5.2):
 
@@ -1613,9 +1660,24 @@ Rules:
   the commands (`design_engine_core.md` §2.3, `design_modding.md` §4.3). So a new event type
   bumps the *event* schema version and leaves the replay format alone. The two version
   numbers move independently, which is why there are two.
-- The full list of events and their cadence are still a core-side design item
-  ([Q16](open_question.md#q16-which-events-exist)). This document fixes the binding shape,
-  the three delivery classes and the scope of the payload schema.
+- **The M1 events.** These exist from the first build. Each names its class and the
+  thread that raises it:
+
+  | Event | Class | Raised by | Means |
+  |---|---|---|---|
+  | `session.started` | reliable | the freeze, on the owner thread | the session exists, and tick 0 is published (`design_engine_core.md` §2.4 step 9) |
+  | `session.stopped` | reliable | the executor | the executor met the stop at the gate; no tick runs again (§2) |
+  | `sim.backlog_paused`, `sim.backlog_resumed` | coalescible | the executor | the gate paused at `high_water`, or passed again below it |
+  | `sim.behind` | coalescible | the sim thread | a wake hit the catch-up clamp (§4.3) |
+  | `participant.expired`, `participant.suspended`, `participant.resumed` | reliable | the executor | a participant's deadline expired; it left the conjunction under `SUSPEND`; it came back (`design_engine_core.md` §3.3) |
+  | `participant.left` | reliable | the owner thread or a mod host thread | a mod host stopped, and its participant left the gate (`design_engine_core.md` §3.3) |
+  | `command.protocol_error` | reliable | the executor, at the drain | an endpoint held entries for a tick already past (`design_engine_core.md` §5.1 (S3)). One report per endpoint per tick, with the count |
+  | `view.bandwidth_over` | coalescible | the executor | an engine view crossed `projection_warn_bytes_per_second` (`design_limits.md` §5) |
+
+  Later milestones add the cap refusal (M3), the checksum mismatch (M2) and the mod
+  suspension (M7). An event the executor raises adds its per-tick worst case to `E` in the
+  same change (`design_engine_core.md` §5.2). This document fixes the binding shape, the
+  three delivery classes and the scope of the payload schema.
 
 ## 8. Error handling
 
@@ -1669,9 +1731,11 @@ Rules:
   | Any call once the engine is `failed`; `stop_sim_async()` on the final join timeout (§2, §4.3) | `EngineFailedError` | no; terminal, and the process is poisoned |
   | `view.take()` while an array view on the previous snapshot is alive (§7.2) | `ViewBusyError` | yes: drop the array views, or copy |
   | `snap.find(...)` on a snapshot from an engine view that declared `identity=False` (§7.2) | `ValueError` | no; the declaration is closed at the freeze. Use `snapshot()`, which always carries `id` |
+  | `start_session()` while `EngineConfig.event_drain` is `None` (§3) | `ValueError` | no for this `Engine`: the config is frozen. Construct one that declares `"owner"` or `"sink"` |
+  | `step()` under an owner drain when the event backlog reaches `high_water` (§4.3, §7.3) | `EventBacklogError` | yes: drain with `drain_events()`, then step again. The error names the tick reached |
   | Any lifecycle or pump call off the owner thread (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
-  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `run_sim_async()` in a headless session; `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
+  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `run_sim_async()` in a headless session; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
   | `snap.column(...)` for a column outside the caller's capabilities (`design_modding.md` §4.1) | `ColumnNotGrantedError` | no; capabilities are fixed at load |
   | `load_mods` failing: a mod fails discovery, verification, handshake or column registration. Or `start_session` failing at the freeze's `on_session_start` (`design_modding.md` §6) | `ModLoadError` | only before the engine is touched. A policy-stage failure leaves the engine `configuring`, and `load_mods` may be retried. From `register_hosts` on, the engine is `load_failed`, and recovery is a new `Engine` |
   | A paced producer's `outcome(h)` for a tick it has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang. The host's `outcome(h)` never raises it: it returns `pending` |

@@ -108,7 +108,7 @@ margin (below).
 | — | host endpoint (source 0) capacity | **256** | The host gets the ceiling by default. Its endpoint is unpaced, so the number counts the commands waiting for the next drain, which every drain empties (`design_engine_core.md` §5.1). It needs no reserve carved out of an engine-wide pool, because rings are per endpoint: no mod can use up the host's capacity, whatever it submits |
 | — | peer endpoint capacity | **256** | A peer's endpoint carries a whole remote player's turn, so it gets the ceiling for the same reason as the host |
 | `D` | maximum ticks between `drain_events()` calls | **8** | 267 ms at 30 Hz: about sixteen frames of slack at 60 fps for a host that drains every frame, and short enough to catch a host that stopped draining. A tolerance, not a promise |
-| `high_water` | event backlog at which the gate pauses the sim | **open on purpose** ([Q63](open_question.md#q63-what-is-high_water)) | The counter has a name, a home and one writer (`design_engine_core.md` §5.2). Its threshold is a separate question, and this document does not answer it with a number nothing supports |
+| `high_water` | event backlog at which the gate pauses the sim | **derived**: `(C + E) × D` (below) | `D` drain intervals' worth of events. It is not a value to pick: the ring holds it plus one tick, so the tick that passes the gate just below it always fits (`design_engine_core.md` §5.2) |
 
 **Ring depth is derived from capacity and the endpoint's stamp margin**, never declared:
 
@@ -127,14 +127,17 @@ oldest tick in its ring has run, which cannot deadlock (`design_engine_core.md` 
 the depth does not depend on the margin's value, and a peer's input delay, which is open
 on purpose ([Q50](open_question.md#q50-input_delay_ticks)), does not size any ring.
 
-Three quantities are **derived** from these values. They are computed, never restated. An
-implementation that hardcodes any of them has created a second source of truth:
+Five quantities are **derived** from these values and from counts the freeze closes. They
+are computed, never restated. An implementation that hardcodes any of them has created a
+second source of truth:
 
 | Derived | Formula | Value at defaults | Where it binds |
 |---|---|---|---|
 | `C`: commands run per tick, engine-wide | `Σ capacity(endpoint)` | 256 + 64 × n_mod_endpoints | `design_engine_core.md` §5.1 |
 | endpoint ring depth | `capacity` at margin 0 and on the host endpoint; `2 × capacity` at a margin of 1 or more | `capacity` for every margin-0 producer and the host; 512 for a peer | `design_engine_core.md` §5.1 |
-| event ring size | `C × D` | `8 × C` | `design_python_api.md` §7.1, §7.3 |
+| `E`: engine-created events per tick | `T·S + S + 3·P + V + 4`, over object types, sources, participants and engine views | `S + 3·P + V + 4` before cap refusals exist (M3) | `design_engine_core.md` §5.2 |
+| `high_water` | `(C + E) × D` | `8 × (C + E)` | `design_engine_core.md` §5.2 |
+| event ring size | `(C + E) × (D + 1)` | `9 × (C + E)` | `design_python_api.md` §7.1, §7.3 |
 
 `C` is not a policy value. The drain assigns order by position and sorts nothing, so the
 per-tick cost is `O(C)`. That makes `C` a result of the endpoint set, not a budget to divide
@@ -189,7 +192,7 @@ At 256 sources, each holding 256 commands for one tick:
 |---|---|---|
 | `C`, commands per tick | **65,536** | ~2M/s at 30 Hz |
 | command ring entries | **at most 131,072** | `Σ depth ≤ 2 × C`: a ring with a margin is two ticks deep |
-| event ring entries | **524,288** | `C × D` |
+| event ring entries | **599,652** before cap refusals; plus `9 × T × 256` from M3 | `(C + E) × (D + 1)`, with `E = 256 + 3 × 256 + 64 + 4 = 1,092` at 256 sources and participants and 64 engine views |
 | total slot memory | **open** ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | no doc gives a per-slot size, on purpose |
 
 Both counts come from a `Σ` over what actually registered. A session reaches them only by
@@ -424,7 +427,7 @@ The bit-level specification is part of M2, with `fixed<>`, and is open
 
 ## 7. What this document does not decide
 
-**Eleven things are open on purpose.** Each has an entry in
+**Ten things are open on purpose.** Each has an entry in
 [open_question.md](open_question.md). Each site that would otherwise look unfinished says so
 and says what the value waits on. A reader who finds a missing number should find the reason
 next to it, without coming here to learn whether anyone noticed.
@@ -434,7 +437,6 @@ next to it, without coming here to learn whether anyone noticed.
 | **`input_delay_ticks`** ([Q50](open_question.md#q50-input_delay_ticks)): how far ahead of the current tick a peer stamps, that is, its endpoint's stamp margin | a transport | Unlike every number above, it needs measurement against a real round-trip time. It is not an engine value: the engine imposes no margin and bounds none. No ring depth depends on it | `design_multiplayer.md` §3.2, §7; here §1.1 (`ipc_deadline`) |
 | **`ipc_deadline`** ([Q43](open_question.md#q43-ipc_deadline-value-and-constraints)) | the same measurement | It is not a free parameter. Its ceiling is the input delay, so it lands with the row above and not before | §1.1 |
 | **The mod gate deadline**, default and cap ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)) | M7 | It trades tick latency against how often a busy mod is suspended, and needs a measured mod-loop time | §1.1 |
-| **`high_water`** ([Q63](open_question.md#q63-what-is-high_water)): the event backlog threshold | a measured drain rate | The counter has a name, a home and one writer (`design_engine_core.md` §5.2). Its threshold is a separate question, and a number invented here would read as an answer to it | §2 |
 | **Per-slot size**, and so total slot memory ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | M1 | No doc gives a per-slot size for a command or an event entry, on purpose, so the worst case in §2.2 is a count, not a number of bytes | §2.2 |
 | **An engine view's maximum rows, and the GPU allocator behind it** ([Q39](open_question.md#q39-the-gpu-allocator-for-growing-worlds)) | before M3 | Destination buffers cannot be resized after creation, so each is sized from its engine view's maximum rows, not from the current row count. The default maximum, how an engine view declares it, and whether destinations suballocate from a few large buffers need measurements. Choosing now would be guessing | `design_data_container.md` §5, §5.1 |
 | **The rolling checksum period N**, and the tick digest's exact contents ([Q67](open_question.md#q67-the-rolling-checksum-period-and-the-tick-digest)) | M2 | 30 ticks, one second, is proposed. N trades detection delay against per-tick cost, and a number with no profile behind it would read as an answer | §6 |
@@ -475,9 +477,9 @@ This section names the one place each value lives. The C++ side is the partition
 | default entity capacity | `DEFAULT_ENTITY_CAPACITY` | `default_entity_capacity` | build constant, 2²⁴ (§4) |
 | maximum entity capacity | `MAX_ENTITY_CAPACITY`, a module constant that `EngineConfig` checks against | `max_entity_capacity` | build constant, 2³²−1 (§4). The `u32` type of the C++ constant is what keeps a cap within a slot |
 | per-type caps | `EngineConfig.entity_capacity` | — | per-type override, closed at the freeze (§4), each entry 1 to 2³²−1 |
-| `C`, ring depth, event ring size | **nowhere** | **nowhere** | computed at the freeze from the closed endpoint set (`design_engine_core.md` §2.4 step 3a). Writing any of them down would create the engine-wide pool that per-endpoint rings avoid |
+| `C`, ring depth, `E`, `high_water`, event ring size | **nowhere** | **nowhere** | computed at the freeze from the closed endpoint, participant, engine view and object type sets (`design_engine_core.md` §2.4 step 3a). Writing any of them down would create the engine-wide pool that per-endpoint rings avoid |
 | `ipc_deadline` | `HostPolicy.ipc_deadline`, default `None` (unbounded) | — | value open (§7). `EngineConfig` rejects a set value that does not exceed one tick at the configured rate |
-| `high_water`, `input_delay_ticks`, per-slot size | **not yet anywhere** | **not yet anywhere** | values open (§7). `high_water` belongs to the event ring (`design_engine_core.md` §5.2) |
+| `input_delay_ticks`, per-slot size | **not yet anywhere** | **not yet anywhere** | values open (§7) |
 | mod gate deadline, default and cap | `HostPolicy.mod_deadline_ms`, `HostPolicy.max_mod_deadline_ms`, **not yet in `config.py`** | — | values open (§7) |
 
 Endpoint capacity and `D` are configurable at runtime, so only their defaults can be checked
@@ -511,7 +513,6 @@ Each value has a named trigger, so that revisiting it is a decision, not a drift
 | Engine view cap | A session legitimately wants a sixty-fifth engine view. The cap is meant not to bind, so hitting it is information |
 | the `SHARED` engine view mode itself | A process-host mod needs a snapshot. The mode is deferred, not deleted (`design_engine_core.md` Appendix A). A revival should re-derive the copy-per-reader cost against the row counts of §5 before restoring the pin count as written ([Q60](open_question.md#q60-reviving-the-shared-engine-view)) |
 | `D` | The event backlog reaches `high_water` under a host that is *not* defective |
-| `high_water` | As soon as there is a measured drain rate to set it against. It has no value ([Q63](open_question.md#q63-what-is-high_water)) |
 | commands executed per tick | The metric (`design_engine_core.md` §3.1) approaches `C` in a session anyone intends to ship. A tick runs everything it is given, so this is the number that turns a busy session into a long tick |
 | `HostPolicy` values | A legitimate mod host is being timed out |
 | chunk elements | A profile shows chunk-boundary overhead, or a column type wider than 8 bytes is approved |

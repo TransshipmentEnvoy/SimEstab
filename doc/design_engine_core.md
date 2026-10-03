@@ -152,7 +152,8 @@ specified:
 | **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it. A full ring parks the producer on the endpoint's mutex and condition variable, and the drain stores `read` under that mutex | drain wait-free (1 load), plus a short lock on each endpoint it frees space in; submit wait-free unless the ring is full, where a paced producer makes a **bounded wait** until the oldest tick in its ring has run and the host gets `queue_full` | §5.1 |
 | **Command outcome** | sim → producer | the outcome's release publication at the end of the tick that consumed the command, made visible by (G5) | a paced reader **blocks, bounded** by the named tick running, on the tick-progress wait, and is refused outright if it still holds that tick; the host polls and never blocks | §5.1 |
 | **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of `admission`; revocation: the `OPEN → REVOKING` exchange | submit side wait-free; revoker blocks under the shutdown deadline | §5.1 |
-| **Event ring** | sim → owner thread | enqueue: the release store of the ring's write index | wait-free | §5.2 |
+| **Event ring** | executor → the session's event drain | enqueue: the release store of the ring's write index | wait-free | §5.2 |
+| **Event drain wake** | owner thread → sim | the drain's store of `read` under `gate.m`, with a notify only if the sim is parked on `HOST_BACKLOG` | the drain takes one short lock per call; the sim's wait is the gate's | §5.2 |
 | **The gate** | participants and host controls → sim | a participant's `ready_through` store, or a host-control store, each under `gate.m` (G3). The sim re-checks under the same mutex before it waits, and a writer notifies only a parked sim | **the sim blocks, bounded** by each blocker's declared policy; a writer takes a short lock | §3.3 |
 | **Tick progress** | sim → threads waiting for a tick to run | the sim's store of `first_unexecuted` under `gate.m` after each tick's publish (G5) | the sim takes a short lock per tick; a waiter blocks until the tick runs, the owner thread in interruptible slices | §3.3 |
 | **Operation lease** | any-thread API caller ↔ owner's `close()` | successful lease: the second acquire load of the access state; close: the `OPEN → CLOSING` CAS | call side wait-free; close drains under the shutdown deadline | `design_python_api.md` §2, §6 |
@@ -160,13 +161,12 @@ specified:
 | **Snapshot request** | any thread → the thread that runs ticks, and back | request: the increment of `gate.snapshot_requests` under `gate.m`; serve: handing the copy to the pending requests under `gate.m` | the requester blocks for at most one tick plus one copy; the executor never waits for a requester | §3.1 |
 | **Staged join** | owner thread → sim | `stop_requested` stored under `gate.m`, with a notify if the sim is parked (§3.3); `std::thread::join` | owner blocks under a deadline | `design_python_api.md` §4.3 |
 
-That is eleven mechanisms. Most of their steady-state work is a few atomic operations and,
+That is twelve mechanisms. Most of their steady-state work is a few atomic operations and,
 on the sim, one short lock per tick. Five contain a declared wait, and all five are the same
 kind of wait. The core waits for a participant; a producer waits for ring space; a producer
 waits for a tick it has already released; the owner thread waits for the ticks a step
-granted; and a snapshot request waits for the next tick boundary. Every park in the engine follows the one wake-up rule of §3.3. How an event drain
-wakes a sim parked on the event backlog has no row yet
-([Q11](open_question.md#q11-how-does-draining-events-wake-the-sim)).
+granted; and a snapshot request waits for the next tick boundary. Every park in the engine
+follows the one wake-up rule of §3.3.
 
 **Any new cross-thread mechanism gets a row here, with all five items, in the same change
 that introduces it.** This mirrors `design_python_api.md` §9, where every new raise site
@@ -870,7 +870,7 @@ for (;;) {
 
 blocker_for(t), in priority order:
     if host.stop_requested.load(acquire): STOP
-    if backlog >= high_water: HOST_BACKLOG                   # plain local read (§5.2)
+    if backlog >= high_water: HOST_BACKLOG                   # recomputed from the ring (§5.2)
     if host.run_until.load(acquire) <= t: HOST_PAUSE
     first active p with p.ready_through.load(acquire) < t: p
     otherwise: NONE
@@ -1601,7 +1601,7 @@ The only artifacts peripherals ever see:
 |---|---|---|
 | `CommandRing` | in | one SPSC ring per endpoint; protocol in §5.1 |
 | `EngineView` | out, with a small return header back | 3 blocks, an exchange word, and a parallel reader-written `ret[3]`; stamped with its tick, row-filtered and converted to float at publish (§3.1, §3.2, §3.4, §3.5) |
-| `EventRing` | out | bounded SPSC from the sim to the owner thread, fanned out per subscriber (§5.2) |
+| `EventRing` | out | bounded SPSC from the executor to the session's event drain, fanned out per subscriber (§5.2) |
 
 **`CommandRing`** (`design_python_api.md` §7.1):
 
@@ -1621,14 +1621,12 @@ cannot fail. That is a synchronization property only. The projection copy it per
 budgeted sim-thread work, a sum over registered engine views, bounded per engine view by its row predicate
 (§3.4).
 
-**`EventRing`**: from the sim to the owner thread, bounded, and lossless up to its size. The
-size is derived, `≥ C × D`, from the per-tick command ceiling and the drain interval the
-ring is sized for. Overflow is a diagnosed condition, never a silent drop. A source cannot
-cause it by submitting, because an application that stops draining pauses the simulation
-first (§3.3, §5.2). This sizing assumes events are bounded by commands, which events the
-engine creates itself are not
-([Q10](open_question.md#q10-can-the-event-ring-fill-within-one-tick)). Fan-out to individual
-subscribers may drop or merge events by delivery class (`design_python_api.md` §7.3):
+**`EventRing`**: from the executor to the session's event drain, bounded, and lossless. The
+size is derived, `(C + E) × (D + 1)`: the per-tick command ceiling, a per-tick bound on the
+events the engine creates itself, and the drain interval (§5.2). It cannot overflow, because
+the gate stops the executor at the backlog mark, one tick's worth below the size. A source
+cannot cause it by submitting. Fan-out to individual subscribers may drop or merge events by
+delivery class (`design_python_api.md` §7.3):
 
 | Class | Examples | May drop? |
 |---|---|---|
@@ -2003,7 +2001,7 @@ for it. The ring depth follows:
 The engine-wide per-tick ceiling is `C = Σ capacity(e)` over registered endpoints
 (`design_limits.md` §2). It is a bound checked at the freeze, not an allocation, which is
 why the limit on sources can be generous at no cost to a session with four sources. The
-event ring's size, `C × D`, follows from it (§5).
+event ring's size, `(C + E) × (D + 1)`, follows from it (§5.2).
 
 **Memory orders.**
 
@@ -2063,11 +2061,24 @@ tests of §3.3, run under a watchdog timeout.
 
 ### 5.2 Event ring (normative)
 
-The event ring is a bounded single-producer, single-consumer ring. The sim thread enqueues,
-and the owner thread drains it in `drain_events()` (`design_python_api.md` §6 gives it
-exactly one owner for this reason). Publication uses the idiom of §1.1: fill the entry, then
-release-store the write index. The drainer's acquire load of that index makes the entry
-visible. It has the same shape as the ring of §5.1, with the direction reversed.
+The event ring is a bounded single-producer, single-consumer ring. The executor, the thread
+that runs ticks (§3.1), enqueues. The session's event drain empties it (below). Publication
+uses the idiom of §1.1: fill the entry, then release-store the write index. The drainer's
+acquire load of that index makes the entry visible. It has the same shape as the ring of
+§5.1, with the direction reversed.
+
+**Every session declares one event drain.** The drain says who empties the ring. The freeze
+refuses a session that declares none (`design_python_api.md` §3), because a ring nobody
+empties stalls the session while it does nothing else wrong.
+
+| Drain | Who empties the ring | For |
+|---|---|---|
+| **owner drain** | the owner thread, in `drain_events()`, between ticks and never inside one (`design_python_api.md` §6) | a session whose application or mods read events: every windowed session |
+| **sink drain** | the executor itself, after every tick, inside a `step(n)` too. The sink is a built-in native consumer: it counts the events and hashes their canonical encoding, and keeps nothing | a run nobody reads events from: CI, golden replays, benchmarks |
+
+Under a sink the backlog never grows, so `HOST_BACKLOG` never blocks, and `drain_events()`
+is refused: the ring already has its one consumer. The sink's count and hash are what a
+golden replay can compare.
 
 **Why it has exactly one producer.** The backlog rule below depends on this. Events are
 emitted at commit points, and commit points are single-threaded: the staged merge at every
@@ -2079,24 +2090,59 @@ records. It writes to a per-worker buffer, which the single thread running the p
 boundary drains in worker order (`design_patterns.md` §7). So the ring has one producer by
 construction, not by convention, and no emission site needs auditing for it.
 
-**The event backlog has one owner.** `backlog` counts the entries the owner thread has not
-yet consumed. It has exactly one writer, the sim thread, which is the only thread that adds
+**Events raised outside a tick never enter the ring.** `session.started` is raised by the
+freeze, and `participant.left` by a mod host stopping (§3.3), on the owner thread or a mod
+host thread. They wait in a short side list under its own mutex, and the drain takes them
+with the ring's events, in tick order. So the ring keeps its one producer, and these events
+need no room in it.
+
+**The ring's size and the backlog mark are derived.** One tick emits at most `C + E` events
+into the ring. `C` (§5.1) bounds the events commands can cause. `E` bounds the events the
+engine creates itself, and is computed at the freeze from counts the freeze closes (§2.4):
+
+| Quantity | Formula | What each term is |
+|---|---|---|
+| `E`: engine-created events per tick | `T·S + S + 3·P + V + 4` | `T·S`: one cap refusal per object type and source (`design_data_container.md` §2.2), from M3. `S`: one protocol-error report per endpoint (§5.1). `3·P`: expired, suspended and resumed, per participant. `V`: one bandwidth warning per engine view (§3.1). `4`: `session.stopped`, `sim.backlog_paused`, `sim.backlog_resumed` and `sim.behind` |
+| `high_water` | `(C + E) × D` | `D` drain intervals' worth of events: the backlog at which the gate pauses the sim |
+| ring size | `(C + E) × (D + 1)` | the mark plus one tick of headroom |
+
+`T` is the number of object types, `S` of sources, `P` of participants and `V` of engine
+views. The backlog is checked only at the gate, before a tick. A tick that passes just below
+the mark adds at most `C + E` entries, which the extra tick of headroom holds. **So the ring
+cannot overflow:** the gate stops the executor before any tick that could. The event list
+itself is in `design_python_api.md` §7.3, and a new engine-created event adds its term to `E`
+in the same change.
+
+**The event backlog has one owner.** `backlog` counts the entries the drain has not yet
+consumed. It has exactly one writer, the executor, which is the only thread that adds
 entries. It is a plain `u64`, not an atomic and not a flag, because the other thread never
 touches it:
 
 ```
-enqueue:           ++backlog                              # sim thread, plain
-before the gate:   backlog = write - read.load(acquire)   # sim thread; `read` is the owner's
-                                                          #   ordinary SPSC consumer index
-blocker_for(t):    if backlog >= high_water: HOST_BACKLOG  # a plain local comparison (§3.3)
+enqueue:           ++backlog                              # executor, plain
+blocker_for(t):    backlog = write - read.load(acquire)   # recomputed at every gate check,
+                   if backlog >= high_water: HOST_BACKLOG  #   the locked re-check (G2) too
 ```
 
-The owner publishes nothing new for this. `read` is the index it already stores as the
-ring's consumer, and the sim already loads it. The backlog is recomputed from two indices
-that only increase, at the one place the sim already evaluates the gate. A drain that clears
-the condition must wake a parked sim, following the wake-up rule of §3.3. Exactly how the
-drain stores `read` under `gate.m`, and where the recompute sits relative to the sim's
-re-check, are open ([Q11](open_question.md#q11-how-does-draining-events-wake-the-sim)).
+The drain publishes nothing new for this. `read` is the index it already stores as the
+ring's consumer. The backlog is recomputed from two indices that only increase, at the one
+place the executor already evaluates the gate.
+
+**How a drain wakes a parked sim.** This matters only with a sim thread (M6). An owner
+drain's `drain_events()` consumes its batch, then takes `gate.m` once: it stores `read`, and
+notifies the sim only if `gate.parked == HOST_BACKLOG`. The sim recomputes the backlog in its
+locked re-check (G2), from the `read` the drain stored under the same mutex. So the wake
+follows the wake-up rule of §3.3: a drain lands either before the re-check, which sees the
+freed space, or after the sim has parked, and then wakes it. The cost is one short lock per
+drain call, once per frame. The mechanism has its own row in §1.1.
+
+**What happens at the mark depends on who would wait.**
+
+| Executor | Drain | At `high_water` |
+|---|---|---|
+| any | sink | never reached |
+| the sim thread | owner | the sim parks on `HOST_BACKLOG`, with no deadline, like a pause. The frame loop's next drain wakes it |
+| a `step(n)`, on its calling thread or on a paused sim thread | owner | the owner thread is the one that must drain, and it is inside `step(n)`. So the step raises `EventBacklogError` at the tick boundary, naming the tick reached, instead of waiting. The caller drains and steps again (`design_python_api.md` §4.3) |
 
 **Why a derived value and not a cached flag.** A flag looks cheaper, but cannot be made
 correct. Both threads would have to write it: the enqueue sets it and the drain clears it,
@@ -2106,10 +2152,6 @@ backlog that does not exist, until some later enqueue happens to re-evaluate it.
 fixes one direction and not the other, because two writers deciding one fact from two stale
 readings is a mechanism with two owners, not a race to patch. One owner of a derived value
 removes the whole class of bug.
-
-`high_water` belongs to the ring. Its value is open
-([Q63](open_question.md#q63-what-is-high_water)): the threshold is a measurement question,
-separate from where the counter lives and who owns it.
 
 **Overflow: who is at fault decides the response.** These three cases are the engine's whole
 overflow policy. They are kept apart so that the mildest fault does not get the harshest
@@ -2127,7 +2169,7 @@ tick. **Suspension is reversible too.** The mod stops being fed, keeps its endpo
 resumes once it drains (`design_modding.md` §4.2). Unloading a suspended mod is a separate,
 deferred question ([Q47](open_question.md#q47-unloading-a-suspended-mod)).
 
-`D` means the same in every mode, and the `C × D` size still holds under fast-forward.
+`D` means the same in every session, and the ring's size still holds under fast-forward.
 
 ## 6. Agent-based systems: hybrid mind/body split
 
