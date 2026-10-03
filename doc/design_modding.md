@@ -65,8 +65,8 @@ section lists what follows from that.
 **TL;DR**: a logic mod is a non-deterministic brain whose recorded signals are deterministic
 inputs.
 
-- **Inbound**: only tick-stamped commands. They are validated and **recorded into the input
-  stream**, so replays capture mod behaviour for free.
+- **Inbound**: only commands. They are validated and **recorded into the input stream with
+  the tick that ran them**, so replays capture mod behaviour for free.
 - **Outbound**: immutable snapshots and the event stream. Reads can be stale; that models
   reaction latency and is not a bug.
 - **Consequences**: mod Python may use floats, the GC may pause, and hash randomization does
@@ -86,13 +86,10 @@ inputs.
 
   In every case sim *state* is untouched. Determinism is never lost; at worst the process
   is.
-- **A mod names the tick its command acts on**, and the engine runs the command at that tick
-  or refuses it (`design_engine_core.md` §5.1). So where a mod computed, and for how long,
-  never affects the core beyond what is recorded. A slow mod names a later tick, which is a
-  visible choice; no tick is chosen for it. A mod names the tick it is about to release,
-  and its stamp margin, 0 unless its manifest declares one (§3), bounds how far ahead of the
-  sim that tick may be. So naming any other tick is a bug that is rejected, not a surprise
-  that is queued.
+- **Where a mod computed, and for how long, never affects the core beyond what is
+  recorded.** A mod names no tick. Its command runs at the first tick whose drain finds it,
+  and the record says which (`design_engine_core.md` §5.1). A slow mod's command simply
+  lands later; nothing is refused for being late, and the session never waits for it.
 
 ## 3. Manifest and capabilities
 
@@ -138,35 +135,43 @@ private_view      = false                   # true = a dedicated PRIVATE engine 
                                             #   taken each publish. Default: none; the
                                             #   mod reads ctx.snapshot(), a copy made on
                                             #   request.
+deadline_ms       = 50                      # only with private_view = "paced": how long
+                                            #   the gate waits for the take before it
+                                            #   continues without this view. Optional:
+                                            #   absent, HostPolicy.mod_deadline_ms
+                                            #   applies; capped by
+                                            #   HostPolicy.max_mod_deadline_ms
 inbox_size        = 256                     # per-subscriber inbox capacity (§4.2);
                                             #   overflow behaviour is not declared —
                                             #   it follows the event's delivery class
-
-[pacing]                                    # only for a mod the gate waits for (§4.1)
-margin            = 0                       # stamp margin: how many ticks ahead of the sim
-                                            #   this mod's loop may run. 0 = only the tick
-                                            #   it is about to release
-deadline_ms       = 50                      # how long the gate waits for this mod before
-                                            #   its expiry policy applies. Optional: absent,
-                                            #   HostPolicy.mod_deadline_ms applies; capped
-                                            #   by HostPolicy.max_mod_deadline_ms
 ```
 
 The manifest holds the per-mod settings the rest of this document enforces: the endpoint's
-per-tick command capacity, the inbox size, the column capabilities, and the pacing a mod
-the gate waits for declares. There is no inbox overflow setting; overflow follows the
-event's delivery class (§4.2). There is no expiry-policy setting either: it follows from what
-the mod does (§4.1). One setting has no field yet: an endpoint per producer thread (§4.1,
+command capacity, the inbox size, the column capabilities, and the engine view a mod asks
+for. There is no inbox overflow setting; overflow follows the event's delivery class (§4.2).
+There is no expiry-policy setting either: it follows from what the mod is (§4.1). One
+setting has no field yet: an endpoint per producer thread (§4.1,
 [Q66](open_question.md#q66-how-does-a-mod-declare-an-endpoint-per-producer-thread)).
 
-**What the mod does decides whether the gate waits for it.** A mod that may submit gets an
-endpoint and a participant behind it, which its mod host loop declares for (§4.2). A paced
-engine view (`private_view = "paced"`) is a participant of its own, which declares by
-taking (`design_engine_core.md` §3.1). A mod with both is two participants, each with one
-writer, and `deadline_ms` applies to each. A mod with neither is an **observer**: the
-freeze gives it no endpoint and registers no participant for it, and its `[pacing]` table
-is ignored. The default and the cap behind `deadline_ms` are `HostPolicy` fields, and both
-values are open ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
+**A logic mod never holds the session.** It reads at its own pace, and it submits whenever
+it decides to. Its commands name no tick: its endpoint is unpaced, like the host's, and the
+first drain after a submit runs them (`design_engine_core.md` §5.1). So the gate never waits
+for a mod's Python loop, however slow it is. A planner, a slow analyser and an agent are all
+the same kind of mod. A mod whose capabilities grant no command type gets no endpoint, and
+only reads.
+
+**The one exception is a paced engine view.** A mod that must not miss a publish, such as a
+recorder or a training-data collector, declares `private_view = "paced"`. That view is then
+a participant: the gate waits until the mod has taken each publish, up to `deadline_ms`
+(`design_engine_core.md` §3.1). It is the only way a mod becomes a participant, so a mod is
+never more than one. The default and the cap behind `deadline_ms` are `HostPolicy` fields,
+and both values are open ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
+
+**Why no mod names a tick.** A command that must act at an exact tick, or a rule that must
+run identically on every peer every tick, belongs inside the tick: a Tier 3 core mod (§5).
+A Python loop outside the core cannot promise either without holding the session for every
+tick. In a networked session a logic mod runs once, on a mod client, and its commands reach
+every peer through the turn stream like a player's (`design_multiplayer.md` §4.2).
 
 The example requests `commands_per_tick = 4096`, above the endpoint capacity cap of 256
 (`design_limits.md` §2). Both numbers stay as they are until the field's meaning is settled
@@ -180,7 +185,7 @@ Rules:
   The source id is a `u32` the engine **assigns at the freeze**, from the deterministic load
   order below (`design_engine_core.md` §2.4 step 3). 0 is reserved for the host. For each
   Tier 2 principal that may submit, outside a replay, the freeze also allocates a stable
-  endpoint and binds the id to it. An observer gets an id but no endpoint.
+  endpoint and binds the id to it. A mod that may not submit gets an id but no endpoint.
   - Allocating an endpoint and opening it are separate moments. A replay assigns every id
     and creates no Tier 2 endpoint at all. A live mod host opens its pre-bound endpoint only
     at spawn. So a failed spawn cannot renumber the other mods.
@@ -193,16 +198,14 @@ Rules:
   - capability checks at submission: a command type outside the manifest is rejected and
     logged, never applied;
   - per-mod attribution in the replay;
-  - rate limiting and revocation. Each endpoint declares one number, its **per-tick
-    capacity**. The manifest declares it and the engine caps it. The ring depth derives from
-    it: `capacity` entries at margin 0, `2 × capacity` for a mod that declares a margin
-    (`design_limits.md` §2).
-    There is no separate drain quota to exceed, because a tick runs everything stamped for
-    it. A mod that submits more than it declared for one tick gets `queue_full` **from the
-    submitting call**, and nowhere else (`design_python_api.md` §7.1). A mod within its
-    capacity never finds its ring full (`design_engine_core.md` §5.1). Neither of a
-    command's two answers is an event, so a mod cannot flood the event ring by submitting hard. Rings
-    are per endpoint, so one mod's burst cannot use up another's capacity at all.
+  - rate limiting and revocation. Each endpoint declares one number, its **capacity**: the
+    most commands that may wait for the next drain. The manifest declares it and the engine
+    caps it, and the ring holds exactly that many (`design_limits.md` §2). There is no
+    separate drain quota to exceed, because every drain takes everything waiting. A mod that
+    submits more than its capacity before the next drain gets `queue_full` **from the
+    submitting call**, and nowhere else (`design_python_api.md` §7.1). Neither of a command's two
+    answers is an event, so a mod cannot flood the event ring by submitting hard. Rings are
+    per endpoint, so one mod's burst cannot use up another's capacity at all.
 - **The engine binds identity; a mod cannot declare it.** The source id is bound to the
   submission endpoint the engine allocates at the freeze and opens for each mod host at
   spawn: `ctx.submit*` in-process, or the per-process IPC channel for a process host. It is
@@ -222,7 +225,9 @@ Rules:
   header, so a replay knows exactly which mods produced it. The freeze writes it, after
   every mod has loaded (`design_engine_core.md` §2.4). It is never written piece by piece as
   mods arrive, so it cannot describe a load that did not finish. In multiplayer every peer
-  needs the same mod set; comparing it between peers is open
+  needs the same content and core mods. A logic mod runs on one mod client only, so other
+  peers know its source id but never load its code
+  (`design_multiplayer.md` §4.2). Comparing the set between peers is open
   ([Q54](open_question.md#q54-enforcing-the-same-mod-set-on-every-peer)).
 
 ### 3.1 `ModPolicy`: what the user allows
@@ -329,56 +334,32 @@ outcomes of the commands the mod submitted for that tick (§4.2).
 
 `ModContext` exposes exactly the following:
 
-- `submit(cmd, tick)` / `submit_batch(cmds, tick)`: **the only write path for this mod's
-  commands.** They submit on the mod's own endpoint, check capabilities, and name the tick
-  the commands act on. They return **admission** per command, which the mod must inspect:
-  `admitted{handle}`, `queue_full`, `too_late`, `out_of_order`, `over_margin`, `invalid`,
-  `revoked` or `host_error`.
+- `submit(cmd)` / `submit_batch(cmds)`: **the only write path for this mod's commands.**
+  They submit on the mod's own endpoint and check capabilities. They name no tick: the
+  endpoint is unpaced, like the host's, and the first drain after the call runs the
+  commands (`design_engine_core.md` §5.1). They return **admission** per command, which the
+  mod must inspect: `admitted{handle}`, `queue_full`, `invalid`, `revoked` or `host_error`.
   - There is no buffer-and-flush step: `submit_batch` *is* the batching primitive.
-  - The tick a mod names is the one it is about to release, `next_tick()`. Its stamp margin
-    is 0 unless its manifest declares one (§3), and a margin lets that tick be up to that
-    many ticks ahead of the sim. Any tick further ahead is `over_margin`.
-  - At margin 0 the ring never fills while the mod stays within its capacity, so `submit`
-    does not wait for space. A mod with a margin has a ring two ticks deep. If it runs
-    further ahead than that, `submit` waits until the oldest tick in its ring has run
-    (`design_engine_core.md` §5.1). `too_late` means the mod named a tick that has run, or
-    one it has already released.
-  - A pause wakes no waiting call. An outcome wait stays parked and continues when the
-    session does; only revocation wakes it early, with `revoked`.
-  - `queue_full` means one thing only: "more than the capacity this mod declared for one
-    tick". That is the mod's own contract, not backpressure.
+  - `submit` never waits. A full ring returns `queue_full` at once: the mod submitted more
+    than its capacity before the next drain. That is the mod's own contract, and also the
+    one sign that the sim is paused or behind.
   - The endpoint has a **single producer**, and a source has one endpoint in v1. A mod that
     submits from more than one of its own threads serializes them. Whether a mod may later
     declare an endpoint per thread is open
     ([Q66](open_question.md#q66-how-does-a-mod-declare-an-endpoint-per-producer-thread)),
     and so is how the drain would order two endpoints of one source
     ([Q62](open_question.md#q62-in-what-order-are-two-endpoints-of-one-source-drained)).
-- `paced`: true for a mod that may submit (§3). Its mod host loop declares ready for it. A
-  mod paced only by its engine view is not `paced` in this sense: its takes declare for it.
-- `next_tick()`: the tick this mod is about to act in. For a `paced` mod it is the tick after
-  its last declaration, which the mod host loop names in every submit and then releases.
-  Otherwise it is the tick the sim will run next (§4.2).
-- `declare_ready(tick)`: **releases the tick.** Submitting commands makes a mod a
-  participant (`design_engine_core.md` §3.3). So the engine does not advance past a tick
-  until the mod declares it has finished submitting for it. A mod that may submit is always
-  paced, because a mod the engine does not wait for is a mod whose commands can be dropped.
-  Its margin decides how far ahead it may declare: up to `margin` ticks past the tick the
-  sim runs next. So a mod with a margin runs ahead of the sim, and the gate waits for it only
-  when it falls behind. A mod that may not submit never calls it; a paced engine view
-  declares by taking.
-- `wait()`: sleeps until the mod may act for its next tick, an event arrives in its inbox,
-  or `stopping` is set. A paced mod may act again once its next tick is within its margin of
-  the sim; an observer, once the sim has run another tick. The mod host loop calls it after
-  each tick it acts in (§4.2). It parks on the engine's tick-progress wait
-  (`design_engine_core.md` §3.3). The mod bus records each delivery, and shutdown sets
-  `stopping`, under the same mutex with a notify, so no wake-up is lost.
+- `wait()`: sleeps until the sim has run another tick, an event arrives in the mod's inbox,
+  or `stopping` is set. The mod host loop calls it after each pass (§4.2). It parks on the
+  engine's tick-progress wait (`design_engine_core.md` §3.3). The mod bus records each
+  delivery, and shutdown sets `stopping`, under the same mutex with a notify, so no wake-up
+  is lost.
 - `outcome(handle)` / `outcomes(handles)`: **what a command did** when it ran: applied, or a
-  named rejection at application time. This is a second wait, and a different one. Admission
-  asks "is it queued?"; the outcome asks "what happened?", and that answer does not exist
-  until the tick runs. **Only ticks already released may be asked about.** Asking about a
-  tick the mod is itself holding up raises `CommandOrderError` at once, instead of hanging
-  the session (`design_engine_core.md` §5.1). So the natural order is submit, then
-  `declare_ready`, then outcome. The loop in §4.2 follows it.
+  named rejection at application time, and the tick it ran in. Admission asks "is it
+  queued?"; the outcome asks "what happened?", and that answer does not exist until the
+  tick runs. A mod may poll it, or wait for it. A mod holds no tick, so the wait can never
+  deadlock, and a pause leaves it parked: it continues when the session does. Only
+  revocation wakes it early, with `revoked`.
 - `snapshot()`: a copy the engine makes on request, at the next tick boundary
   (`design_python_api.md` §7.2). It waits at most one tick. A mod may take any number of
   them, from any thread, and a snapshot outlives everything. There is no lifetime rule and no refusal, though the call still
@@ -434,41 +415,40 @@ can see (§4.3).
 
 ### 4.2 Pattern: the mod host loop
 
-Each Tier 2 mod runs in its own mod host loop. The loop acts for one tick at a time: it
-feeds the mod the events already delivered, lets it submit, releases the tick, and then
-sleeps until there is something to do. This section also defines what happens when a mod
-falls behind (suspension) or fails (quarantine).
+Each Tier 2 mod runs in its own mod host loop. Each pass feeds the mod the events already
+delivered, lets it submit, reports outcomes whose ticks have run, and then sleeps until there
+is something to do. The loop never declares anything, so the session never waits for it.
+This section also defines what happens when a mod falls behind (suspension) or fails
+(quarantine).
 
 ```python
 # pseudo-code — one host per mod (thread variant)
 def host_loop(mod, ctx, inbox):
     mod.on_load(ctx)                  # session already running (§6)
-    pending = {}                      # released tick -> handles of this mod's commands
+    pending = []                      # handles of this mod's commands, not yet reported
     while not ctx.stopping:
-        t = ctx.next_tick()           # the tick this mod acts in (§4.1)
         for ev in inbox.take():       # events already delivered; never waits
-            mod.on_event(ctx, ev)     # a paced mod submits via ctx.submit*(cmd, t) itself,
-        mod.on_idle(ctx)              #   on this thread, collecting handles in pending[t]
-        if ctx.paced:
-            ctx.declare_ready(t)      # RELEASES t, up to `margin` ticks ahead of the sim
-        ctx.wait()                    # until the mod may act for its next tick, an event
-                                      #   arrives, or `stopping` is set
-        for tk in [tk for tk in pending if ctx.has_run(tk)]:
-            mod.on_outcomes(ctx, ctx.outcomes(pending.pop(tk)))   # never waits: tk ran
+            mod.on_event(ctx, ev)     # the mod submits via ctx.submit*(cmd) itself, on this
+        mod.on_idle(ctx)              #   thread, and keeps the handles in `pending`
+        ctx.wait()                    # until the sim runs another tick, an event arrives,
+                                      #   or `stopping` is set
+        ran = [h for h in pending if ctx.has_run(h)]
+        if ran:                       # never waits: their ticks have run
+            mod.on_outcomes(ctx, ctx.outcomes(ran))
+            pending = [h for h in pending if h not in ran]
 
     for ev in inbox.drain():          # shutdown step 2 (§6): what was already delivered
         mod.on_event(ctx, ev)         #   is still delivered — the inbox is not discarded
     mod.on_unload(ctx)                # endpoint already revoked (§6): may not submit
 ```
 
-**The loop never waits before it declares.** It takes only the events already in its inbox,
-so a quiet inbox cannot hold a tick back. It sleeps after declaring, in `ctx.wait()`, and
-wakes for the first of three things: the mod may act for its next tick, an event arrives, or
-`stopping` is set. `on_idle` therefore runs once per tick the mod acts in. A paced mod with
-margin 0 acts in every tick; one with a margin acts in every tick too, but may do so up to
-`margin` ticks before the sim runs it. An observer acts in the ticks it keeps up with, and
-skips the rest. An event that wakes the loop early is handled in the next pass, for the same
-`next_tick()`.
+**The loop never waits before it acts.** It takes only the events already in its inbox, so
+a quiet inbox cannot delay a pass. It sleeps after acting, in `ctx.wait()`, and wakes for the
+first of three things: the sim runs another tick, an event arrives, or `stopping` is set.
+`on_idle` therefore runs at most once per tick, and less often when the mod is slow: a mod
+acts in the ticks it keeps up with and skips the rest. A mod with a paced engine view takes
+it in its callbacks; the gate waits for that take, never for the loop itself
+(`design_engine_core.md` §3.1).
 
 Rules:
 
@@ -476,11 +456,9 @@ Rules:
   with `bus.publish()`, which never blocks (see the reference loop in `design_python_api.md`
   §4.1). A mod submits from its own mod host thread. So no mod's batch can make the main
   loop pay O(commands) before `render()`.
-- **The loop's shape is the deadlock rule** (`design_engine_core.md` §5.1), not a matter of
-  style. Submit for `t`, release `t`, *then* read outcomes for `t`, and only once `t` has
-  run. A mod that read outcomes before `declare_ready` would be waiting on the tick it is
-  itself holding up. The engine refuses that call outright instead of letting the session
-  hang.
+- **No order of calls can deadlock a mod.** A mod holds no tick, so nothing the engine
+  does waits for it. It may submit, wait for an outcome or wait for the next tick in any
+  order (`design_engine_core.md` §5.1).
 - **Backpressure.** A slow mod lags *its own* inbox, never the main loop, the core or
   another mod. A mod that stays behind risks **suspension** (below), not a growing queue.
   - Overflow follows the event's delivery class, not a per-mod setting: coalescible state is
@@ -498,16 +476,17 @@ Rules:
     | Reversible | yes. Suspension is not a partial unload |
     | The mod | stops being fed: no events, no snapshots |
     | Its endpoint | **kept**, with whatever it already holds. Nothing is discarded and nothing is renumbered |
-    | Pacing | it **leaves the gate's conjunction** while suspended (`design_engine_core.md` §3.3, `on_expiry = SUSPEND`) |
-    | Resuming | once it drains. Feeding restarts, and it re-enters pacing at the current tick |
+    | Pacing | if it is a participant, it **leaves the gate's conjunction** while suspended (`design_engine_core.md` §3.3, `on_expiry = SUSPEND`) |
+    | Resuming | once it drains. Feeding restarts, and a participant re-enters pacing at the current tick |
     | Reported | yes, as a reliable-class event naming the mod |
 
-    Leaving pacing is required. A paced mod is a participant, so a suspended mod that stayed
-    in the conjunction would hold the gate forever. One mod's overflow would then stop the
+    Leaving pacing is required. A mod with a paced engine view is a participant, so a
+    suspended one that stayed in the conjunction would hold the gate forever. One mod's overflow would then stop the
     simulation. The only two answers are "the mod leaves pacing" and "the simulation
-    pauses". A paced mod leaves pacing in two cases: suspension, and its mod host stopping
-    (below). Both clear its participant's `active` under the gate mutex and notify a parked
-    sim; resuming re-enters it at the current tick (`design_engine_core.md` §3.3).
+    pauses". A participant mod leaves pacing in two cases: suspension, and its mod host
+    stopping (below). Both clear its participant's `active` under the gate mutex and notify
+    a parked sim; resuming re-enters it at the current tick (`design_engine_core.md` §3.3).
+    A mod without a paced view has no pacing to leave.
 
     **Unloading a suspended mod is out of scope**
     ([Q47](open_question.md#q47-unloading-a-suspended-mod)). It is a separate question.
@@ -531,8 +510,8 @@ Rules:
     belong in a process host, where OS limits are the hard enforcement.
 - **A mod exception is caught by its mod host.** It is logged with the mod id, and the mod
   is **quarantined**: its mod host stops and its commands stop flowing. The engine keeps
-  running. The quarantined mod leaves the gate at once, reported as a reliable
-  `participant.left` event, so the session never waits out its deadline
+  running. If it is a participant, the quarantined mod leaves the gate at once, reported as
+  a reliable `participant.left` event, so the session never waits out its deadline
   (`design_engine_core.md` §3.3). A retry re-enters it at the current tick.
   `HostPolicy.mod_retry_limit` sets how many times the mod may be re-spawned
   (`design_python_api.md` §3); `0` leaves it disabled. The limit lives on the engine side,
@@ -607,12 +586,12 @@ Rules:
   work.** Once process-host engine views exist, the sim thread publishes straight into the child's
   segment (below), so there is no broker and no second copy.
 - **A waiting call needs its own frame shape, and the hot-path deadline must not apply to
-  it.** A process mod has two waits: the admission wait and the outcome
-  (`design_engine_core.md` §5.1). Both waits can rightly
-  span a tick. Measured against a 33.3 ms tick, a 10 ms hot-path deadline would expire on
-  every one of them. So a single request-and-reply frame shape cannot carry them:
+  it.** A process mod has one wait: the outcome (`design_engine_core.md` §5.1). Its submit
+  never waits, but an outcome wait can rightly span a tick. Measured against a 33.3 ms tick,
+  a 10 ms hot-path deadline would expire on every one of them. So a single
+  request-and-reply frame shape cannot carry both:
 
-  | Aspect | Hot-path submit | Waiting call (admission wait or outcome) |
+  | Aspect | Hot-path submit | Waiting call (an outcome) |
   |---|---|---|
   | Frame | request → reply | request → *pending* → reply; the child can cancel it |
   | Bounded by | `ipc_deadline` | nothing of that kind: the engine answers when the tick runs |
@@ -1058,9 +1037,9 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   **It does not end the session**: the session is still `running` when it returns, and
   `close()` ends it. This is the rule of `mods.start()` read backwards: no loading function
   starts a session, and no unloading function ends one. A caller may stop its mods and keep
-  simulating. Each stopped mod leaves the gate as its mod host stops, with a reliable
-  `participant.left` event, so the session never waits for a mod that is gone
-  (`design_engine_core.md` §3.3).
+  simulating. Each stopped mod that is a participant leaves the gate as its mod host stops,
+  with a reliable `participant.left` event, so the session never waits for a mod that is
+  gone (`design_engine_core.md` §3.3).
   1. Set `ctx.stopping`, and change the mod's endpoint lease from `OPEN` to `REVOKING`. Stop
      feeding its inbox and stop serving it snapshots. From then on a new endpoint lease
      returns `revoked`; a call that entered its lease before the change may finish. Wait for
@@ -1117,13 +1096,12 @@ New **logic mod** (for mod authors):
 1. Write the manifest: tier `logic`, with the fewest command and event capabilities you
    need.
 2. Implement the protocol (§4.1) against `ModContext` only.
-3. Change the world only through `ctx.submit*(cmd, tick)`, naming the tick you are about to
-   release. **Inspect both answers**: admission from the call, and the outcome from its
-   handle. They always arrive, and they are the only report you get (`design_python_api.md`
-   §7.1).
-   - `queue_full`: you asked for more than your declared per-tick capacity. Declare more or
-     submit less. It is not backpressure, and retrying the same tick will not help.
-   - `over_margin` / `out_of_order`: you named the wrong tick.
+3. Change the world only through `ctx.submit*(cmd)`. **Inspect both answers**: admission
+   from the call, and the outcome from its handle, which also says which tick ran the
+   command. They always arrive, and they are the only report you get
+   (`design_python_api.md` §7.1).
+   - `queue_full`: more commands than your capacity are waiting for the next drain. Declare
+     more capacity, or submit less often. It also means the sim is paused or behind.
    - `revoked`: your endpoint is going away; stop.
    - `invalid`: a bug in your mod.
 
@@ -1137,12 +1115,11 @@ New **logic mod** (for mod authors):
    `with ctx.view().take() as snap:` **in its own function**, so the array views die with
    the frame. `take()` is refused (`ViewBusyError`, retryable) while array views on the
    previous snapshot are alive (§4.1).
-6. **Your mod host releases each tick for you.** If your capabilities grant a command type,
-   you are a participant, and the mod host loop declares ready after your callbacks return
-   (§4.2). Keep the callbacks short, or declare a `margin` so your loop may run ahead of the
-   sim (§3). A mod that only reads is an observer and holds nothing back. Read outcomes only
-   for ticks you have already released. The engine raises instead of letting you wait on a
-   tick you are holding up.
+6. **You never hold the sim back.** You submit whenever you like, and your commands run at
+   the next drain (§3, §4.1). Your reaction latency is however long you take. If you must
+   not miss a publish, declare `private_view = "paced"`: the gate then waits for your take,
+   up to `deadline_ms`, so take promptly. A command that must act at an exact tick belongs in
+   a Tier 3 core mod instead.
 7. **Drain your inbox.** A mod that lets it overflow is suspended: fed nothing, out of
    pacing, and resumed when it catches up (§4.2). Its endpoint and the commands already in
    it are kept, and nothing is unloaded. But the mod loses events: overflow drops

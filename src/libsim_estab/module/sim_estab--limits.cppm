@@ -109,8 +109,8 @@ export inline constexpr std::uint32_t max_sources = 256;
 export inline constexpr std::uint32_t max_views = 64;
 
 /// Anything the gate waits for, with a declared deadline and an expiry policy. Shares
-/// the source ceiling: submitting is what makes a peripheral a participant, so the two sets
-/// nearly coincide. They wait concurrently, so the worst case is max(deadline) rather than
+/// the source ceiling: a paced producer is both a source and a participant, so the two sets
+/// mostly overlap. They wait concurrently, so the worst case is max(deadline) rather than
 /// a sum, and a 256-entry array scanned once per tick costs nothing. This is a server
 /// node's worst case, not a client's normal one.
 export inline constexpr std::uint32_t max_paced_participants = 256;
@@ -199,12 +199,13 @@ static_assert(max_sources > max_players,
               "a full lobby allocates one source per peer, so the source ceiling must leave "
               "room for the host and for mods beside the players it was sized for");
 static_assert(max_paced_participants <= max_sources,
-              "participants share the source ceiling: submitting makes a peripheral a "
-              "participant, so the two sets nearly coincide");
+              "participants share the source ceiling: a paced producer is both a source "
+              "and a participant, so the two sets mostly overlap");
 
 static_assert(max_views > 0, "a cap of zero would forbid the renderer's engine view, so no window could draw");
 static_assert(max_paced_participants > 0,
-              "every paced producer is a participant, so a cap of zero would forbid every mod and peer");
+              "every paced producer and paced engine view is a participant, so a cap of "
+              "zero would forbid every peer and every recorder");
 
 static_assert(default_entity_capacity > 0, "a cap of zero admits no entity, so no type could exist");
 static_assert(default_entity_capacity <= max_entity_capacity,

@@ -46,13 +46,13 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | owner thread | The thread that created the `Engine`. Only it may make lifecycle calls and pump the engine. | python_api §2 |
 | owner-thread rule | The frame loop never waits on the engine; it polls. Only `snapshot()`, `step(n)` and the shutdown calls wait, and only on the sim or a deadline. | engine_core §3.3 |
 | host endpoint | The host's own command endpoint: source 0. Its producer is the owner thread. Unpaced: its commands name no tick, and the first drain after a submit runs them. | python_api §7.1 |
-| unpaced | Of an endpoint: its commands name no tick, so the gate never waits for it. Only the host endpoint, in single-player. | engine_core §5.1 |
+| unpaced | Of an endpoint: its commands name no tick, so the gate never waits for it. The host endpoint and every logic mod's, in single-player; in a networked session their submits go through the turn assembler. | engine_core §5.1 |
 | sim thread | The C++ thread that runs ticks once `run_sim_async()` starts it: always in a windowed session, and in a headless one that wants real time. | python_api §4.3 |
 | sim-thread mode | Ticks run on the sim thread, started by `run_sim_async()`, while the owner thread submits, drains and, when windowed, renders. Every windowed session runs this way; a headless one does when it wants real time, and otherwise runs ticks in `step(n)`. | python_api §4.3 |
 | participant | A peripheral the core waits for before each tick, up to that participant's deadline. Every producer that names ticks is one; others can opt in with `paced=True`. | engine_core §3.3 |
 | recorder | A peripheral that submits nothing but must not miss a tick; it registers as a participant explicitly. | engine_core §3.3 |
 | conjunction | The set of active participants the gate waits for: a tick runs only when all of them are ready. | engine_core §3.3 |
-| observer | A peripheral the core never waits for. It only reads its engine view. A mod whose capabilities grant no command type, and whose engine view is not paced, is one. | engine_core §3.3 |
+| observer | A peripheral the core never waits for. It only reads its engine view. A logic mod is one unless it paces its engine view. | engine_core §3.3 |
 | gate | The one place the core waits: before each tick, until nothing blocks the tick (stop, event backlog, pause, or a participant that is not ready). | engine_core §3.3 |
 | run grant | The host's `run_until` value: the core may run ticks below it. `U64_MAX` means running; pause and `step(n)` lower it. | engine_core §3.3 |
 | `stop_requested` | Sticky flag that stops the core at the gate. Highest priority. | engine_core §3.3 |
@@ -99,7 +99,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | command ring | An endpoint's ring buffer. Its depth is `capacity` at margin 0 and on the host endpoint, `2 × capacity` at a margin of 1 or more. Computed at the freeze. | engine_core §5.1 |
 | capacity | The most commands one endpoint may hold for one tick. Default 64, maximum 256. Exceeding it returns `queue_full`. The only number an endpoint declares. | limits §2 |
 | stamp | The tick a command names. | engine_core §5.1 |
-| stamp margin | How far past the current tick an endpoint may stamp, and so how far ahead its producer may declare ready. 0 for engine sources and, unless its manifest declares one, for a mod; the input delay for a peer. The unpaced host endpoint stamps nothing. | engine_core §5.1 |
+| stamp margin | How far past the current tick an endpoint may stamp, and so how far ahead its producer may declare ready. 0 for engine sources; the input delay for a peer. The unpaced host endpoint stamps nothing. | engine_core §5.1 |
 | admission | The immediate answer to a submit: `admitted` with a handle, or a rejection (`queue_full`, `too_late`, `out_of_order`, `over_margin`, `invalid`, `revoked`, `host_error`). | engine_core §5.1 |
 | `too_late` | The named tick is past, or its producer has already declared it ready. | engine_core §5.1 |
 | admission wait | A paced submit that finds its ring full waits, on the endpoint's mutex and condition variable, until the oldest tick in the ring has run. Only a ring with a margin can fill. A pause leaves it parked; only revocation wakes it early. | engine_core §5.1 |
@@ -159,7 +159,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | Term | Meaning | Where |
 |---|---|---|
 | Tier 1 mod | Content: data only. | modding §1 |
-| Tier 2 mod | Logic: Python outside the core, acting only through commands. | modding §1 |
+| Tier 2 mod | Logic: Python outside the core, acting only through commands. Also called a logic mod. Its commands name no tick, so it never holds the session; it is a participant only through a paced engine view. | modding §1, §3 |
 | Tier 3 mod | Core: native code inside the tick, trusted. | modding §1 |
 | mod host | Where a Tier 2 mod runs: a thread host (in-process, the default) or a process host (a separate process). | modding §4 |
 | supervisor | The engine-side thread that runs each process host: its endpoint's single producer. | modding §4.3 |
@@ -186,7 +186,9 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | turn | The set of commands for one tick, sent as one network message. One turn is one tick. | multiplayer §5 |
 | input delay | A peer endpoint's stamp margin (`input_delay_ticks`). Value open. | multiplayer §3.2 |
 | server tier | The few server nodes that alone may decide a peer has dropped, and at which turn. | multiplayer §4.1 |
-| authority | The one node that computes and broadcasts commands from a non-deterministic peripheral. | multiplayer §4 |
+| authority | The one node that computes and broadcasts commands from a non-deterministic peripheral. For a logic mod, the mod client that runs it. | multiplayer §4 |
+| turn assembler | The part of the transport that builds a machine's outgoing turns. It stamps a tick-less submit (the local player's, a logic mod's) with the next open turn plus the source's margin, and never waits for the source. | multiplayer §3.2 |
+| mod client | A headless engine instance, run by the operator, that joins a networked session as a client node only to run logic mods. It sits next to a server node in the session's most central region. | multiplayer §4.2 |
 
 ## Errors and shutdown
 
@@ -221,7 +223,7 @@ the replacement for the other senses.
 
 | Word | Means only | For the other senses, write |
 |---|---|---|
-| host | the host application (source 0) | "mod host" (where a mod runs); "the engine" (for Tier 3 mods); "owner thread" (the thread) |
+| host | the host application (source 0) | "mod host" (where a mod runs); "mod client" (a machine that runs logic mods in a networked session); "the engine" (for Tier 3 mods); "owner thread" (the thread) |
 | owner | owner thread | "reader" (an engine view's single reader); "authority" (multiplayer) |
 | phase | a compute phase within a tick | "sim-thread mode"; "shutdown step"; "engine state"; "registration" / "session start" (Tier 3 mods) |
 | tier | mod tiers | "server tier" / "client nodes" (multiplayer) |

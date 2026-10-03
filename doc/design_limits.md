@@ -85,7 +85,7 @@ and leave their values to this document.
 | `ipc_deadline` | **open on purpose** ([Q43](open_question.md#q43-ipc_deadline-value-and-constraints)); its ceiling is the input delay | It is not a free parameter, so no number stands here. Its ceiling is the input delay: the window of ticks a peer's command may legitimately be in flight for (`design_multiplayer.md` §3.2). Inside that window nothing is wrong; past it, something is. It must also exceed one tick. A deadline under 33.3 ms can only detect that the other side is mid-tick, which is not a fault. It would also expire on any hot-path round trip that crosses a tick boundary. So its value waits for `input_delay_ticks` (§7). It bounds the **hot-path round trip only**. A process mod's wait for an outcome is a separate, cancellable operation with no deadline of this kind. A wait that may legitimately span a tick cannot share a bound with one that must not (`design_modding.md` §4.3). |
 | `mod_retry_limit` | **0** | A failed mod stays disabled: quarantine restarts nothing by default. This is the default the other docs already give, recorded here so the set is complete. |
 | `max_inbox_size` | **1024** | The engine ceiling on the `inbox_size` a manifest requests (`design_modding.md` §4.2). The example manifest requests 256 (`design_modding.md` §3). Each mod declares its own inbox size, so without a cap total inbox memory would grow with the number of installed mods, not with anything the engine chose. 1024 is four times the example request. It does not bind a normal mod and still bounds a pathological manifest. |
-| `mod_deadline_ms`, `max_mod_deadline_ms` | **open on purpose** ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)) | A mod's gate deadline: the value when its manifest declares no `deadline_ms`, and the engine's cap on one it does declare (`design_modding.md` §3). It is how long one slow mod may hold a tick before it is suspended, so it trades tick latency against how often a busy mod is suspended. That needs a measured mod-loop time, which nothing has yet. |
+| `mod_deadline_ms`, `max_mod_deadline_ms` | **open on purpose** ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)) | The gate deadline of a mod's paced engine view: the value when its manifest declares no `deadline_ms`, and the engine's cap on one it does declare (`design_modding.md` §3). It is how long one slow mod's take may hold a tick before the gate continues without the view, so it trades tick latency against how often a busy mod's view drops out. That needs a measured mod-loop time, which nothing has yet. |
 
 ### 1.2 Catch-up clamp: 0.25 s
 
@@ -134,13 +134,13 @@ margin (below).
 
 | Endpoint | Depth |
 |---|---|
-| margin 0: engine sources, and mods by default | `capacity` |
-| margin 1 or more: a peer, or a mod that declares a margin | `2 × capacity` |
-| the host endpoint, unpaced | `capacity` |
+| margin 0: engine sources | `capacity` |
+| margin 1 or more: a peer | `2 × capacity` |
+| unpaced: the host endpoint, a logic mod's | `capacity` |
 
 A margin-0 producer acts inside the tick it is about to release, so it never has more than
-one tick's worth outstanding. The host endpoint names no tick, and every drain empties it,
-so it holds at most what the frame loop submits between two drains
+one tick's worth outstanding. An unpaced endpoint names no tick, and every drain empties
+it, so it holds at most what its producer submits between two drains
 (`design_engine_core.md` §5.1). An endpoint with a margin holds two ticks' worth: the tick
 being filled and one already released. A producer further ahead waits for space until the
 oldest tick in its ring has run, which cannot deadlock (`design_engine_core.md` §5.1). So
@@ -181,8 +181,9 @@ beside the players. So the two counts must differ, and 256 gives a full lobby 12
 non-player sources.
 
 **Why participants share that number.** Sources and participants differ in role, not in
-size. Submitting makes a peripheral a participant, so the two sets nearly coincide. The
-exception is a recorder, which is paced without submitting (`design_engine_core.md` §3.3).
+size. A paced producer, such as a peer, is both. The host and logic mods are sources but
+not participants, because their commands name no tick. A paced engine view,
+such as a recorder's, is a participant but not a source (`design_engine_core.md` §3.3).
 One common ceiling means neither needs a smaller invented number, and scanning a 256-entry
 participant array once per tick costs nothing. `sim_estab:limits` asserts that the
 participant cap does not exceed the source cap. That holds because both caps are 256, not
@@ -457,7 +458,7 @@ next to it, without coming here to learn whether anyone noticed.
 |---|---|---|---|
 | **`input_delay_ticks`** ([Q50](open_question.md#q50-input_delay_ticks)): how far ahead of the current tick a peer stamps, that is, its endpoint's stamp margin | a transport | Unlike every number above, it needs measurement against a real round-trip time. It is not an engine value: the engine imposes no margin and bounds none. No ring depth depends on it | `design_multiplayer.md` §3.2, §7; here §1.1 (`ipc_deadline`) |
 | **`ipc_deadline`** ([Q43](open_question.md#q43-ipc_deadline-value-and-constraints)) | the same measurement | It is not a free parameter. Its ceiling is the input delay, so it lands with the row above and not before | §1.1 |
-| **The mod gate deadline**, default and cap ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)) | M7 | It trades tick latency against how often a busy mod is suspended, and needs a measured mod-loop time | §1.1 |
+| **The mod gate deadline**, default and cap ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)) | M7 | It trades tick latency against how often a busy mod's paced view drops out, and needs a measured mod-loop time | §1.1 |
 | **Per-slot size**, and so total slot memory ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | M2, with the command payload schema | A slot holds one command or event payload, and the payload schema is M2's (`design_engine_core.md` §2.3). M1 uses a provisional constant until then, so the worst case in §2.2 is a count, not a number of bytes | §2.2 |
 | **An engine view's maximum rows, and the GPU allocator behind it** ([Q39](open_question.md#q39-the-gpu-allocator-for-growing-worlds)) | before M3 | Destination buffers cannot be resized after creation, so each is sized from its engine view's maximum rows, not from the current row count. The default maximum, how an engine view declares it, and whether destinations suballocate from a few large buffers need measurements. Choosing now would be guessing | `design_data_container.md` §5, §5.1 |
 | **The rolling checksum period N**, and the tick digest's exact contents ([Q67](open_question.md#q67-the-rolling-checksum-period-and-the-tick-digest)) | M2 | 30 ticks, one second, is proposed. N trades detection delay against per-tick cost, and a number with no profile behind it would read as an answer | §6 |

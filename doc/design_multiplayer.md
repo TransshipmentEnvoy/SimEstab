@@ -46,7 +46,7 @@ Lockstep has real costs:
 | Cost | Detail |
 |---|---|
 | The session runs at the speed of the slowest node it waits for | Every instance must finish tick `t` before anyone runs `t+1` (§3.1). The server tier moves this cost rather than removing it. A client waits on one server node. The server nodes absorb the wait between peers, over a few reliable links instead of across 128 clients (§4.1) |
-| Every peer needs the identical mod set | A Tier 3 mod is native code inside the tick. One different version causes a desync |
+| Every peer needs the identical content and core mods | A Tier 3 mod is native code inside the tick. One different version causes a desync. Logic mods are the exception: each runs on one mod client only (§4.2) |
 | Late join needs a state transfer | A joining peer must replay from tick 0 or receive a full snapshot, which is the transfer lockstep otherwise avoids |
 | Every client knows the whole map | Every peer simulates everything. Hiding information is a UI feature and gives no security |
 
@@ -169,19 +169,30 @@ may stamp a command.
   - Above that, `margin ≈ ceil(RTT / tick period)`. Each extra tick of margin adds one tick
     of input latency.
   - The value itself is open ([Q50](open_question.md#q50-input_delay_ticks)).
-- **An engine source has a margin of 0, and so does a mod unless its manifest declares one.
-  The engine checks it.** A margin-0 producer acts within the turn it is about to release, so
-  it never has more than one turn in flight. Its command stamped for a later tick is a bug
-  and is rejected with `over_margin`. A mod's margin is local: it lets the mod's own loop run
-  ahead of the sim, and has nothing to do with the network.
-- **The local player submits through its own peer endpoint, with the input delay.** In
-  single-player the host endpoint is unpaced: its commands name no tick, and each runs at
+- **An engine source has a margin of 0, and the engine checks it.** It acts within the turn
+  it is about to release, so it never has more than one turn in flight. Its command stamped
+  for a later tick is a bug and is rejected with `over_margin`.
+- **A source that names no tick goes through the turn assembler.** In single-player the
+  host endpoint and a logic mod's are unpaced: their commands name no tick, and each runs at
   the first tick that drains it (`design_engine_core.md` §3.3, §5.1). That cannot work
   across machines, which would each drain the command at a different tick. So in a
-  networked session the local player's commands are stamped and paced like every other
-  peer's, and carry the same source id on every machine. How that endpoint is produced, and
-  what the host endpoint does in a networked session, are open
-  ([Q55](open_question.md#q55-the-local-players-source-id)).
+  networked session such a source never submits into its own machine's engine. Its
+  tick-less submit goes to the machine's **turn assembler**, the part of the transport that
+  builds each outgoing turn. The assembler stamps the command with the next open turn plus
+  the source's stamp margin, and sends it out. Every machine, the sending one included,
+  receives it through that source's peer endpoint, whose producer is the receive thread
+  (§3.1). So the command runs at the same tick everywhere, under the same source id.
+  - The local player is such a source: its input makes the same trip out and back as
+    everyone else's.
+  - A logic mod is one too, on the mod client that runs it (§4.2).
+  - **The source never holds the session.** The assembler closes each turn on schedule,
+    with whatever the source has submitted, or an empty message (§1). It never waits for
+    the frame loop or for a mod's Python loop. Only a dead process or link stalls a turn,
+    and that is the ordinary drop case of §4.1.
+  - The API does not change. The source calls the same tick-less submit as in
+    single-player, and the outcome reports the tick the command ran in.
+  - Whether the host endpoint itself is closed in a networked session, and the assembler's
+    protocol, are open ([Q55](open_question.md#q55-the-local-players-source-id)).
 
 ### 3.3 Pause, step and time scale apply to the whole session
 
@@ -225,20 +236,21 @@ authority only for commands from non-deterministic peripherals:
 |---|---|---|
 | Player input (every player's peer endpoint, the local player's included) | No | The gate is enough. The submitting peer names the tick and broadcasts it, and every other peer waits for that tick |
 | Deterministic core mods, and agent minds inside the determinism boundary | No | Every peer computes the identical command from identical state (`design_engine_core.md` §6) |
-| Non-deterministic peripherals: float, GPU or LLM-based minds outside the boundary | Yes | Peers would compute *different* commands. Either one peer computes and broadcasts them, or the mind moves inside the boundary |
+| Logic mods (Tier 2) | Yes: the mod client that runs it | It runs once, on one machine, and its commands travel in the turn stream like a player's (§4.2) |
+| Other non-deterministic peripherals: float, GPU or LLM-based minds outside the boundary | Yes | Peers would compute *different* commands. Either one peer computes and broadcasts them, or the mind moves inside the boundary |
 
-So commands do not need a server. They need a rule for the third row: move the mind inside
+So commands do not need a server. They need a rule for the last two rows. For a logic mod
+the rule is fixed: it runs on one mod client (§4.2). For other minds, move the mind inside
 the boundary, or pick one peer to own it. `design_engine_core.md` §6 describes both options.
-Which one, and whether per subsystem or globally, is open
-([Q53](open_question.md#q53-non-deterministic-peripherals-in-multiplayer)).
+The open parts of both are in
+[Q53](open_question.md#q53-non-deterministic-peripherals-in-multiplayer).
 
 Source ids must be identical on every peer. They are `u32` values assigned at the freeze,
 with 0 reserved for the host. Session formation assigns them, and they become part of
 session identity, like the mod manifest hashes. The participant and endpoint sets close at
 the same freeze step, so a peer that joins later starts a new session (§1). The local
-player's own commands use that player's peer endpoint, so they carry the same source id on
-every machine (§3.2). How that endpoint is produced is open
-([Q55](open_question.md#q55-the-local-players-source-id)).
+player's own commands go through the turn assembler to that player's peer endpoint, so they
+carry the same source id on every machine (§3.2).
 
 ### 4.1 Two network tiers
 
@@ -248,7 +260,7 @@ the one place this design needs distinguished nodes.
 | Tier | What it is | What it may decide |
 |---|---|---|
 | Server nodes | A small set of nodes that agree among themselves over links treated as reliable | That a peer has dropped, and the turn at which the drop takes effect |
-| Client nodes | Everyone else. Each client receives from one server node | Nothing about liveness. A client reports an expired deadline upward and waits |
+| Client nodes | Everyone else: players, and the operator's mod clients (§4.2). Each client receives from one server node | Nothing about liveness. A client reports an expired deadline upward and waits |
 
 Two rules follow.
 
@@ -267,6 +279,63 @@ needed.
 The tiers also decide where lockstep's waiting cost is paid. Waiting for the slowest player
 cannot be avoided (§1). With tiers, that wait happens among a few server nodes on reliable
 links, instead of across 128 clients on the open internet. Each client waits on one server.
+
+### 4.2 Logic mods run on central mod clients
+
+A logic mod (`design_modding.md` §3) is a mind outside the determinism boundary. It must run
+only once in a session, because two copies would submit different commands. It runs on a
+**mod client**: a headless engine instance that joins the session as a client node and
+exists only to run logic mods. The operator runs mod clients, as it runs server nodes.
+
+**Why a client and not a server node.** A mod client is one more peer, so it needs no new
+mechanism. Its logic mods submit through its turn assembler (§3.2), and server nodes treat its
+turns like any player's. Server nodes stay relays and ordering points, placed close to
+players; they never simulate the world or run third-party Python. A mod client simulates
+the session headless, with its sim thread running in real time (`design_python_api.md`
+§4.3), so its mods read snapshots and events from their own machine.
+
+**Where it runs.** Server nodes exist to keep players' paths short. A player far from one
+central machine could see 300 ms or more, so each player connects to a nearby server node,
+and server nodes talk to each other over good links. A command's path is then:
+
+```
+source → its server node → server-to-server link → the far server node → farthest client
+         (last mile)                                                      (last mile)
+```
+
+The input delay has to cover that whole path, and the speed of light still bounds the link
+between regions. A mod client belongs **in the same datacenter as a server node**, so its
+own last mile is about a millisecond, and **in the session's most central region**: the one
+whose longest server-to-server link is shortest. A logic mod placed there reaches every
+client sooner than any player does, because every player also pays a last mile at the
+sending end.
+
+**Its stamp margin is sized for its own path.** The margin is per endpoint, and the engine
+imposes none (`design_engine_core.md` §5.1). A central mod client can declare a margin
+shorter than a far player's input delay, so its mods react sooner. The margin is fixed at the
+freeze. So it must cover the farthest place the mod client could fail over to; otherwise a
+failover makes the mod's commands late and stalls the session.
+
+Rules:
+
+- Session formation binds each logic mod to one mod client. Its source id is part of session
+  identity, like a peer's. Other peers know the source but never load the mod's code
+  (`design_modding.md` §3).
+- If a mod client drops, the server tier decides the turn at which the drop takes effect, as
+  for any peer (§4.1). The mod's source then goes quiet, or the mod restarts on another mod
+  client. It loses its private state and rebuilds from a snapshot in `on_load`, as a
+  quarantine retry does (`design_modding.md` §4.2).
+- A logic mod that acts for one player, such as that player's own bot, may instead run on
+  that player's client and ride in that player's turns. It then pays that player's latency,
+  which is the right trade for something that serves one player.
+- Third-party Python on the operator's machines belongs in process hosts
+  (`design_modding.md` §4.3).
+- A rule that must run identically on every peer, every tick, is not a logic mod. It is a
+  Tier 3 core mod: deterministic, inside the tick, run by every peer in lockstep, and it
+  sends nothing over the network.
+
+How session formation assigns mods to mod clients, failover, the margin's value and
+player-owned mods are open ([Q53](open_question.md#q53-non-deterministic-peripherals-in-multiplayer)).
 
 ## 5. One turn is one tick
 
@@ -332,12 +401,13 @@ These are tracked in [open_question.md](open_question.md). None of them blocks M
 - [Q52](open_question.md#q52-checksum-comparison-between-peers) How often peers compare
   checksums, and what a detected desync does.
 - [Q53](open_question.md#q53-non-deterministic-peripherals-in-multiplayer) Non-deterministic
-  peripherals: elect an owning peer, or require the mind inside the boundary (§4).
+  peripherals: assigning logic mods to mod clients, failover and player-owned mods (§4.2);
+  for other minds, elect an owning peer or require the mind inside the boundary (§4).
 - [Q54](open_question.md#q54-enforcing-the-same-mod-set-on-every-peer) Enforcing an
   identical mod set between peers. Session identity records the mod set but does not compare
   it.
-- [Q55](open_question.md#q55-the-local-players-source-id) Who produces on the local player's
-  peer endpoint, and whether the host endpoint is closed in a networked session (§3.2, §4).
+- [Q55](open_question.md#q55-the-local-players-source-id) Whether the host endpoint is closed
+  in a networked session, and the turn assembler's protocol (§3.2).
 
 ---
 
