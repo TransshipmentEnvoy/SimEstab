@@ -209,7 +209,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | rendezvous point | An owner-thread engine call where a stored async error is raised: a pump call, `stop_sim_async()` or `raise_if_failed()`. | python_api §8 |
 | quiescent | The sim is parked and no tick is running, so state can be read safely (for example `checksum()` after `step()`). | python_api §4.3 |
 | `ipc_deadline` | How long one process-host round trip may take before it becomes `host_error`. Value open. | limits §1.1 |
-| catch-up clamp | The most ticks sim-thread mode runs in one go after falling behind. | python_api §4.3 |
+| catch-up clamp | The most real time one wake of the sim thread makes up after a stall: 0.25 s, applied before the time scale, so a requested speed is never clamped. A build constant. | limits §1.2 |
 | build constant | A limit fixed when the library compiles, such as the chunk size. Changing it needs a rebuild. | limits |
 | policy default | The shipped default of an `EngineConfig` field, which a session may override. | limits |
 | warn threshold | A bandwidth above which the engine logs a warning, never a rejection: projection, per engine view. | limits §5 |

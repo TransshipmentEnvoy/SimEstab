@@ -4,7 +4,8 @@ This document gives every number that the other design docs leave to measurement
 later decision. For each value it gives the value, where it lives in code, the reasoning,
 and what would make it change (§9).
 
-Status: M0 is done: every decided value below is in `sim_estab:limits` or `config.py`.
+Status: M0 is done: every decided value below is in `sim_estab:limits` or `config.py`,
+except the catch-up clamp (§1.2), which lands with the sim thread in M6.
 
 Terms are defined in [glossary.md](glossary.md). Five sites send readers here for their
 values: `design_engine_core.md` §3.1, `design_python_api.md` §3 and §7.1, and
@@ -85,6 +86,25 @@ and leave their values to this document.
 | `mod_retry_limit` | **0** | A failed mod stays disabled: quarantine restarts nothing by default. This is the default the other docs already give, recorded here so the set is complete. |
 | `max_inbox_size` | **1024** | The engine ceiling on the `inbox_size` a manifest requests (`design_modding.md` §4.2). The example manifest requests 256 (`design_modding.md` §3). Each mod declares its own inbox size, so without a cap total inbox memory would grow with the number of installed mods, not with anything the engine chose. 1024 is four times the example request. It does not bind a normal mod and still bounds a pathological manifest. |
 | `mod_deadline_ms`, `max_mod_deadline_ms` | **open on purpose** ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)) | A mod's gate deadline: the value when its manifest declares no `deadline_ms`, and the engine's cap on one it does declare (`design_modding.md` §3). It is how long one slow mod may hold a tick before it is suspended, so it trades tick latency against how often a busy mod is suspended. That needs a measured mod-loop time, which nothing has yet. |
+
+### 1.2 Catch-up clamp: 0.25 s
+
+The catch-up clamp bounds how much real time one wake of the sim thread may make up after a
+stall (`design_python_api.md` §4.3). It is a build constant.
+
+`catch_up_clamp_seconds = 0.25`, in `sim_estab:limits`. It is not in code yet: it lands
+with the sim thread (M6).
+
+It is real time, not ticks, and the time scale applies after it. A wake that owes more than
+a quarter second keeps a quarter second, multiplies it by the time scale, and runs that many
+ticks: 7.5 at normal speed. A tick count would cut a requested fast-forward. A machine that
+sustains `set_time_scale(8)` never owes a quarter second, so the clamp never touches it.
+
+**Why a quarter second.** It is far above ordinary jitter: a 60 fps frame is 16.7 ms, and a
+GC pause or a scheduler hiccup is a few frames at most. So a clamped wake means a real
+stall, such as a breakpoint, a dragged window or a swapped-out process, and it is reported
+as `sim.behind`. It is also short enough that the work a wake owes stays small: 7.5 ticks at
+30 Hz. Gaffer On Games' "Fix Your Timestep" caps frame time at the same 0.25 s.
 
 ## 2. Command endpoints, the three counts, and the engine view cap
 
@@ -193,7 +213,7 @@ At 256 sources, each holding 256 commands for one tick:
 | `C`, commands per tick | **65,536** | ~2M/s at 30 Hz |
 | command ring entries | **at most 131,072** | `Σ depth ≤ 2 × C`: a ring with a margin is two ticks deep |
 | event ring entries | **599,652** before cap refusals; plus `9 × T × 256` from M3 | `(C + E) × (D + 1)`, with `E = 256 + 3 × 256 + 64 + 4 = 1,092` at 256 sources and participants and 64 engine views |
-| total slot memory | **open** ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | no doc gives a per-slot size, on purpose |
+| total slot memory | **open** ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | M1 uses a provisional per-slot size; the real one is decided with the command payload schema in M2 |
 
 Both counts come from a `Σ` over what actually registered. A session reaches them only by
 registering 256 full-capacity sources; a four-player game never pays for them. **Commands
@@ -437,7 +457,7 @@ next to it, without coming here to learn whether anyone noticed.
 | **`input_delay_ticks`** ([Q50](open_question.md#q50-input_delay_ticks)): how far ahead of the current tick a peer stamps, that is, its endpoint's stamp margin | a transport | Unlike every number above, it needs measurement against a real round-trip time. It is not an engine value: the engine imposes no margin and bounds none. No ring depth depends on it | `design_multiplayer.md` §3.2, §7; here §1.1 (`ipc_deadline`) |
 | **`ipc_deadline`** ([Q43](open_question.md#q43-ipc_deadline-value-and-constraints)) | the same measurement | It is not a free parameter. Its ceiling is the input delay, so it lands with the row above and not before | §1.1 |
 | **The mod gate deadline**, default and cap ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)) | M7 | It trades tick latency against how often a busy mod is suspended, and needs a measured mod-loop time | §1.1 |
-| **Per-slot size**, and so total slot memory ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | M1 | No doc gives a per-slot size for a command or an event entry, on purpose, so the worst case in §2.2 is a count, not a number of bytes | §2.2 |
+| **Per-slot size**, and so total slot memory ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)) | M2, with the command payload schema | A slot holds one command or event payload, and the payload schema is M2's (`design_engine_core.md` §2.3). M1 uses a provisional constant until then, so the worst case in §2.2 is a count, not a number of bytes | §2.2 |
 | **An engine view's maximum rows, and the GPU allocator behind it** ([Q39](open_question.md#q39-the-gpu-allocator-for-growing-worlds)) | before M3 | Destination buffers cannot be resized after creation, so each is sized from its engine view's maximum rows, not from the current row count. The default maximum, how an engine view declares it, and whether destinations suballocate from a few large buffers need measurements. Choosing now would be guessing | `design_data_container.md` §5, §5.1 |
 | **The rolling checksum period N**, and the tick digest's exact contents ([Q67](open_question.md#q67-the-rolling-checksum-period-and-the-tick-digest)) | M2 | 30 ticks, one second, is proposed. N trades detection delay against per-tick cost, and a number with no profile behind it would read as an answer | §6 |
 | **`commands_per_tick`** as a manifest field ([Q44](open_question.md#q44-what-commands_per_tick-in-a-manifest-means)) | a design step before M2 | The example manifest requests 4096, and this document caps endpoint capacity at 256. Both stand. The field's *meaning* is not settled, and reconciling the numbers first would settle the wrong question | `design_modding.md` §3; here §2 |
@@ -462,6 +482,7 @@ This section names the one place each value lives. The C++ side is the partition
 | Value | Python (`config.py`) | C++ (`sim_estab:limits`) | Notes |
 |---|---|---|---|
 | tick rate | `EngineConfig.tick_rate` | `default_tick_rate` | policy default |
+| catch-up clamp | — | `catch_up_clamp_seconds`, **not yet in code** (M6) | build constant (§1.2) |
 | `D` | `CommandPolicy.drain_interval_ticks` | `default_drain_interval_ticks` | policy default |
 | endpoint capacity, default | `CommandPolicy.source_capacity` | `default_source_capacity` | policy default |
 | host endpoint capacity | `CommandPolicy.host_source_capacity` | `default_host_source_capacity` | policy default |
@@ -506,6 +527,7 @@ Each value has a named trigger, so that revisiting it is a decision, not a drift
 | Value | Revisit when |
 |---|---|
 | `tick_rate` | Never casually. It is in the replay header, so a change invalidates every existing replay |
+| catch-up clamp | `sim.behind` fires in ordinary play, with no stall behind it, or a real stall recovers too slowly. It is a pacing value outside determinism, so a change touches no replay |
 | endpoint capacity | `queue_full` reaches a producer that is not exceeding its own declaration. Capacity is per tick and per endpoint, so this means the declaration is wrong, not the engine |
 | source cap | A legitimate session wants a 257th source. Raising it costs almost nothing (§2.1), so hitting it is information, not a wall |
 | participant cap | The same, with more suspicion: every participant is one more way for the core to stop. Raising it does not admit more *pacing*. Submitting already paces a peripheral, so the cap bounds how many distinct things are paced, not whether they are |

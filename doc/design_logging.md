@@ -97,16 +97,28 @@ refcount.
   already returns early when initialized, but `log_deinit` tears down unconditionally.
   Without a count, the first `close()` would tear down logging under an application that set
   it up for its own use. This is the `acquire` / `release` shape of `design_patterns.md` §3,
-  applied in Python over the unchanged triad. Its thread safety in the free-threaded build
-  is open ([Q19](open_question.md#q19-is-the-python-logging-refcount-thread-safe)).
+  applied in Python over the unchanged triad.
+- **A module-level `threading.Lock` guards the count.** `acquire` and `release` take it
+  around the count and the triad call it decides on. So "the first holder initializes" and
+  "the last holder tears down" are each one step, from any thread, on both the GIL and the
+  free-threaded build. An atomic count alone would not do it: a second `acquire` could see
+  the count already raised and log before the first holder's `log_init` had finished. The
+  lock is taken twice per `Engine` lifetime, so its cost does not matter.
 - **The first caller's configuration wins**, with a warning. A later `acquire` with a
   different `LogConfig` does not reconfigure the sinks, following "immutable creation
-  options, first caller wins" (`design_patterns.md` §3). The fields of `LogConfig` are open
-  ([Q18](open_question.md#q18-what-goes-in-windowconfig-and-logconfig)).
+  options, first caller wins" (`design_patterns.md` §3). `LogConfig` has three fields
+  (`design_python_api.md` §3):
 
-**Per-session file sink.** It opens at the **freeze**, not when the engine is constructed,
-because the freeze is the first moment a session identity exists to name it after
-(`design_engine_core.md` §2.4 step 8). It is a sink toggle (§3), owned by the engine and
+  | Field | Default | Meaning |
+  |---|---|---|
+  | `console` | `True` | the console sink of §1 |
+  | `level` | `"info"` | the starting severity filter |
+  | `session_dir` | `None` | the directory for the per-session file sink (below). `None` opens no per-session file |
+
+**Per-session file sink.** It opens at the **freeze**, in `LogConfig.session_dir`, not when
+the engine is constructed, because the freeze is the first moment a session identity exists
+to name it after (`design_engine_core.md` §2.4 step 8). With no `session_dir`, there is no
+per-session file. It is a sink toggle (§3), owned by the engine and
 removed at `close()`, so it is separate from the refcount above. Its name adds a
 **run-unique part** to the session identity. Every run of the same replay has the same
 identity, so without that part repeated replay runs would overwrite or interleave one file.
@@ -131,9 +143,10 @@ hierarchy, not an import path, and the two never resolve against each other.
   `enable_file(...)` / `disable_file()` following the console toggle's shape. They are a
   general rotating file sink, an error-and-above sink, and an opt-in debug sink.
 - **Runtime severity filter API**: `set_severity(level)`, global at first and later per
-  channel prefix. The filter is currently fixed at `info` inside `log_init`.
+  channel prefix. The filter is currently fixed at `info` inside `log_init`; `LogConfig.level`
+  sets the starting value once the wrapper exists.
 - **Session integration**: the per-session file sink of §2, named from the session identity
-  plus a run-unique part, opened at the freeze (`design_engine_core.md` §2.4) and closed by
-  `Engine.close()`.
-- **Refcounted Python wrapper**: `acquire()` / `release()` in `sim_estab.upkeep.log` (§2).
-  The C++ triad needs no change.
+  plus a run-unique part, opened at the freeze in `LogConfig.session_dir`
+  (`design_engine_core.md` §2.4) and closed by `Engine.close()`.
+- **Refcounted Python wrapper**: `acquire()` / `release()` in `sim_estab.upkeep.log`, with
+  the count under a module-level `threading.Lock` (§2). The C++ triad needs no change.

@@ -14,25 +14,15 @@ so on).
 
 ## Blocks M1
 
-### Q18. What goes in `WindowConfig` and `LogConfig`?
+No open question blocks M1.
 
-Both are named in `EngineConfig` without fields (`python_api` §3; `design_logging.md` §3).
-
-### Q19. Is the Python logging refcount thread-safe?
-
-The logging wrapper is reference-counted (`design_logging.md` §2), but the free-threaded
-build has no stated synchronization for that count (`python_api` §6).
-
-### Q21. What are the catch-up clamp and `IDLE_SLICE`?
-
-The catch-up clamp is named (`python_api` §4.3) with no value anywhere. Also blocks M6.
+## Blocks M2
 
 ### Q22. How large is one command or event slot?
 
-No doc gives a slot size, so worst-case ring memory is a count, not bytes (`limits` §2.2).
-Depends on the payload schema (`engine_core` §2.3).
-
-## Blocks M2
+A ring slot holds one command or event payload, and no doc gives its size, so worst-case
+ring memory is a count, not bytes (`limits` §2.2, §7). M1 uses a provisional constant. The
+real rule depends on the payload schema (`engine_core` §2.3), which M2 specifies.
 
 ### Q23. What does "engine build" mean in session identity?
 

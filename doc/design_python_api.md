@@ -158,8 +158,8 @@ Rules:
   before constructing the engine keeps its sinks. The engine releases exactly once, on the
   first `close()`. `close()` is idempotent (below), and a count decremented by a repeated
   close would tear down logging under a running application. The C++ triad is unchanged
-  (`design_logging.md` §2). Whether the count is thread-safe on free-threaded builds is open
-  ([Q19](open_question.md#q19-is-the-python-logging-refcount-thread-safe)).
+  (`design_logging.md` §2). A module-level `threading.Lock` guards the count, so `acquire`
+  and `release` are safe from any thread on both the GIL and the free-threaded build.
 - **Two engine states come before the loop** (`design_engine_core.md` §2.4). The constructor
   leaves the engine `configuring`: it holds resources but no world. `start_session()`
   freezes the session and moves the engine to `running`.
@@ -406,12 +406,26 @@ class CommandPolicy:                     # doc/design_limits.md §2
                                          #   ring_capacity_ticks
 
 @dataclass(frozen=True, slots=True)
+class WindowConfig:                      # not in config.py yet; ignored when headless
+    width: int = 1280
+    height: int = 720
+    title: str = "SimEstab"
+    resizable: bool = True
+
+@dataclass(frozen=True, slots=True)
+class LogConfig:                         # not in config.py yet; design_logging.md §2
+    console: bool = True                 # the console sink
+    level: str = "info"                  # starting severity filter
+    session_dir: Path | None = None      # where the freeze opens the per-session file
+                                         #   sink; None = no per-session file
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     headless: bool = False
     tick_rate: int = 30                  # fixed sim Hz; the tick counter IS time
                                          #   (doc/design_limits.md §1)
-    window: WindowConfig = ...           # not in config.py yet; fields open (Q18)
-    log: LogConfig = ...                 # not in config.py yet; fields open (Q18)
+    window: WindowConfig = field(default_factory=WindowConfig)
+    log: LogConfig = field(default_factory=LogConfig)
     host_policy: HostPolicy = field(default_factory=HostPolicy)
                                          # what the ENGINE enforces on mod hosts (above);
                                          #   which mods load is ModPolicy, an argument to
@@ -429,24 +443,27 @@ class EngineConfig:
                                          #   (§7.3). No default: start_session() raises
                                          #   ValueError while it is None. Not in
                                          #   config.py yet
-    on_failed_stop: str = "raise"        # "raise" | "terminate" (§4.3)
+    on_failed_stop: str = "raise"        # "raise" | "terminate" (§2, below)
     projection_warn_bytes_per_second: int = 4_000_000_000
                                          # publish bandwidth above which the engine warns,
-                                         #   naming the rate AND THE ENGINE VIEW; checked per engine view,
-                                         #   not against the session total, because
-                                         #   every remedy belongs to one engine view. Uncapped
-                                         #   by design and measured instead
-                                         #   (design_engine_core.md §3.1,
+                                         #   naming the rate AND THE ENGINE VIEW; checked
+                                         #   per engine view, not against the session
+                                         #   total, because every remedy belongs to one
+                                         #   engine view. Uncapped by design and measured
+                                         #   instead (design_engine_core.md §3.1,
                                          #   doc/design_limits.md §5)
 
 engine = Engine(config)                  # the only place config crosses the boundary
 ```
 
-The sketch matches `src/sim_estab/config.py`, which is the implementation. `window`, `log`,
-`event_drain` and `HostPolicy`'s two mod-deadline fields are the only fields not in
-`config.py` yet
-([Q18](open_question.md#q18-what-goes-in-windowconfig-and-logconfig),
-[Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
+The sketch matches `src/sim_estab/config.py`, which is the implementation. `WindowConfig`,
+`LogConfig`, `event_drain` and `HostPolicy`'s two mod-deadline fields are the only parts not
+in `config.py` yet. The mod-deadline values are open
+([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
+
+`WindowConfig` holds only what the window needs at creation; anything a running window can
+change is a control call. `LogConfig` is described in `design_logging.md` §2. The catch-up
+clamp is not a field: it is a build constant (§4.3, `design_limits.md` §1.2).
 
 Rules:
 
@@ -917,8 +934,14 @@ call sites. Where ticks run follows from the kind of session:
     not "behind", and must not be clamped per wake. Otherwise a deliberate fast-forward
     would silently cap itself and report itself as a problem. The clamp applies to the ticks
     owed that the accumulator reports. Unbounded mode has none, because it has no
-    accumulator at all. The clamp's value is open
-    ([Q21](open_question.md#q21-what-are-the-catch-up-clamp-and-idle_slice)).
+    accumulator at all.
+
+    **The clamp is 0.25 s of real time per wake, applied before the time scale.** A wake
+    that finds more than a quarter second owed keeps a quarter second, multiplies it by the
+    time scale, and runs that many ticks: 7.5 at normal speed, 60 at `set_time_scale(8)`. So
+    a requested speed is never clamped, because a machine that sustains it never owes a
+    quarter second. Only a stall is. It is a build constant in `sim_estab:limits`, not a
+    config field (`design_limits.md` §1.2).
   - **Every wait is named, and every wait on another party is bounded.** The core blocks in
     one place only, the gate. Every participant it waits for has a declared deadline and a
     declared expiry policy (`design_engine_core.md` §3.3). A pause and a backed-up event
