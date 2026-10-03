@@ -184,7 +184,7 @@ export [[nodiscard]] bool GPU_device_is_init() noexcept;
  * requiring a window or display. It manages GPU device lifecycle,
  * compute pipelines, and data transfer operations.
  *
- * @note This is a move-only type (non-copyable)
+ * @note Non-copyable and non-movable
  */
 export class ComputeContext {
 public:

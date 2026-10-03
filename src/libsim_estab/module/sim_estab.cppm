@@ -6,8 +6,8 @@
  * Consumers can import this module to gain access to the entire library API.
  *
  * Usage:
- *   import sim_estab;           // Import the module
- *   #include <sim_estab/log.h>  // Include macro headers as needed
+ *   import sim_estab;             // Import the module
+ *   #include <sim_estab/macro.h>  // Include macro headers as needed
  *
  * Note: Macros (like SIM_ESTAB_LOG_*) must still be included from headers
  * as C++20 modules cannot export preprocessor macros.
@@ -26,7 +26,7 @@ export import :util;
  * @brief Root namespace for the SimEstab simulation framework
  *
  * SimEstab is a hybrid Python/C++ simulation framework providing:
- * - High-performance C++ core with modern C++23 features
+ * - High-performance C++ core with modern C++26 features
  * - Python bindings via nanobind
  * - Modular architecture with C++20 modules
  * - Comprehensive logging system

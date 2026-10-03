@@ -1,7 +1,7 @@
 #ifndef LIBSIM_ESTAB__COMPAT_H
 #define LIBSIM_ESTAB__COMPAT_H
 
-// For compat reasons, g++14 can not handle header export well.
+// For compat reasons: g++ header export support is incomplete.
 // Using a hybrid approach: export module + include headers.
 //
 // With the opaque wrapper implementation, Boost.Log headers are no longer

@@ -4,10 +4,10 @@
  *
  * This module provides the logging subsystem API as a C++20 module interface.
  * It exports all public functions and types while keeping macro definitions
- * in the traditional header file (log.h) for consumer use.
+ * in the traditional header file (macro.h) for consumer use.
  *
  * Design notes:
- * - Macros (SIM_ESTAB_LOG_*, etc.) remain in log.h and must be #include'd
+ * - Macros (SIM_ESTAB_LOG_*, etc.) remain in macro.h and must be #include'd
  * - Boost.Log dependencies are kept in implementation files only
  * - All exported entities use modern C++ features
  */
@@ -43,13 +43,13 @@ export module sim_estab:log;
  * This namespace provides a complete logging solution with the following features:
  * - Hierarchical channel-based organization
  * - Multiple severity levels (trace through critical)
- * - Direct Boost.Log integration without wrapper overhead
- * - Convenient logging macros (in log.h)
+ * - Boost.Log hidden behind opaque fast-pimpl wrappers (design_patterns.md §5b)
+ * - Convenient logging macros (in macro.h)
  * - No stringstream usage for optimal performance
  *
  * Basic usage:
- * 1. Import the module: import sim_estab:log;
- * 2. Include the macro header: #include <sim_estab/log.h>
+ * 1. Import the module: import sim_estab;
+ * 2. Include the macro header: #include <sim_estab/macro.h>
  * 3. Initialize the logging system: log_init()
  * 4. Use logging macros: SIM_ESTAB_LOG("channel", info, "Message content")
  */
@@ -472,7 +472,7 @@ export template <typename T> record_ostream& stream_via_ostream(record_ostream& 
 // abbreviated function template
 //
 // - `auto`/`LogStreamable auto` are placeholder types (abbreviated templates)
-// - export makes it usable from other translation units via `import sim_estab.log;`
+// - export makes it usable from other translation units via `import sim_estab;`
 export void sim_estab_log(const std::string& ch,     // channel (string, string_view, etc.)
                           severity_level sev,        // severity type (your enum, etc.)
                           LogStreamable auto&&...msg // parts of the message, all LogStreamable
