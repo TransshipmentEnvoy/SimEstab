@@ -22,10 +22,8 @@ Scope of v1. In v1, simplicity comes before progress guarantees:
   affordable; choosing columns alone cannot.
 - The reader sends a small return header back to the publisher on every take (§3.5).
 - Publishing may allocate memory. It never waits (§3.1).
-
-Whether the mechanism register's progress terms (§1.1), the gate's `seq_cst` arming (§3.3)
-and the endpoint lease (§5.1) can be simplified the same way is open
-([Q15](open_question.md#q15-simplify-the-gate-and-the-endpoint-lease)).
+- Every thread that parks does so on a mutex and a condition variable, under one wake-up
+  rule (§3.3). No wake-up depends on `seq_cst` ordering.
 
 Terms are defined in [glossary.md](glossary.md). Related designs: `design_python_api.md`
 (Python lifecycle, options, main loop), `design_modding.md` (mod tiers) and
@@ -114,6 +112,10 @@ Progress classes, used in exactly this sense throughout:
   is stated where the claim is made. Every steady-state mechanism below is wait-free.
 - **Lock-free**: a retry always means another thread made progress. No v1 mechanism is
   lock-free without being wait-free. (Reading a `SHARED` engine view would be, in Appendix A.)
+- **Short lock**: takes a mutex whose every critical section is a few loads and stores and
+  at most one notify. Nobody waits, logs or calls out while holding it, so the wait is
+  bounded by those instructions, not by another party. A gate declaration and the drain's
+  side of the admission wait are short locks.
 - **Bounded wait**: the core may block on another party. An unbounded or undeclared wait is
   forbidden. Every wait follows three rules. It is the gate (§3.3) or one of the shutdown
   and revocation drains below. It is bounded by a declared deadline. Its expiry has a
@@ -147,19 +149,22 @@ specified:
 | Mechanism | Direction | Linearization point | Progress | Specified in |
 |---|---|---|---|---|
 | **Engine view** | sim → one reader; the reader's return header travels back on the same edge | publish: the release exchange of the engine view's control word (§3.2 (P2)); take: the release exchange at (T2), which also publishes the return header | publisher wait-free (1 exchange); reader wait-free (1 exchange) | §3.2, §3.5 |
-| **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it | drain wait-free (1 load); submit wait-free unless the ring is full, where a paced producer makes a **bounded wait** of at most one tick and the host gets `queue_full` | §5.1 |
-| **Command outcome** | sim → producer | the outcome's release publication at the end of the tick that consumed the command | a paced reader **blocks, bounded** by the named tick running, and is refused outright if it still holds that tick; the host polls and never blocks | §5.1 |
+| **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it. A full ring parks the producer on the endpoint's mutex and condition variable, and the drain stores `read` under that mutex | drain wait-free (1 load), plus a short lock on each endpoint it frees space in; submit wait-free unless the ring is full, where a paced producer makes a **bounded wait** of at most one tick and the host gets `queue_full` | §5.1 |
+| **Command outcome** | sim → producer | the outcome's release publication at the end of the tick that consumed the command, made visible by (G5) | a paced reader **blocks, bounded** by the named tick running, on the tick-progress wait, and is refused outright if it still holds that tick; the host polls and never blocks | §5.1 |
 | **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of `admission`; revocation: the `OPEN → REVOKING` exchange | submit side wait-free; revoker blocks under the shutdown deadline | §5.1 |
 | **Event ring** | sim → owner thread | enqueue: the release store of the ring's write index | wait-free | §5.2 |
-| **The gate** | participants and host controls → sim | a participant's `ready_through.store(t, seq_cst)`, or a `seq_cst` update of a host-control field; the sim's `seq_cst` loads. `gate_waiting` is armed before the sim re-reads, so a signal goes only to a sleeping sim | **the sim blocks, bounded** by each blocker's declared policy | §3.3 |
+| **The gate** | participants and host controls → sim | a participant's `ready_through` store, or a host-control store, each under `gate.m` (G3). The sim re-checks under the same mutex before it waits, and a writer notifies only a parked sim | **the sim blocks, bounded** by each blocker's declared policy; a writer takes a short lock | §3.3 |
+| **Tick progress** | sim → threads waiting for a tick to run | the sim's store of `first_unexecuted` under `gate.m` after each tick's publish (G5) | the sim takes a short lock per tick; a waiter blocks until the tick runs, the owner thread in interruptible slices | §3.3 |
 | **Operation lease** | any-thread API caller ↔ owner's `close()` | successful lease: the second acquire load of the access state; close: the `OPEN → CLOSING` CAS | call side wait-free; close drains under the shutdown deadline | `design_python_api.md` §2, §6 |
 | **Async error handoff** | sim → owner thread | `error_state.store(READY, release)` after the winning producer fills the slot | wait-free; read at the next rendezvous | `design_python_api.md` §8 |
-| **Staged join** | owner thread → sim | `stop_requested.store(1, seq_cst)`, then signal the gate if the sim is parked (§3.3); `std::thread::join` | owner blocks under a deadline | `design_python_api.md` §4.3 |
+| **Staged join** | owner thread → sim | `stop_requested` stored under `gate.m`, with a notify if the sim is parked (§3.3); `std::thread::join` | owner blocks under a deadline | `design_python_api.md` §4.3 |
 
-That is nine mechanisms, and most of their steady-state work is a few atomic operations.
-Three contain a declared wait, and all three are the same kind of wait. The core waits for a
-participant; a producer waits for ring space; and a producer waits for a tick it has already
-released. How an event drain wakes a sim parked on the event backlog has no row yet
+That is ten mechanisms. Most of their steady-state work is a few atomic operations and, on
+the sim, one short lock per tick. Four contain a declared wait, and all four are the same
+kind of wait. The core waits for a participant; a producer waits for ring space; a producer
+waits for a tick it has already released; and the owner thread waits for the ticks a step
+granted. Every park in the engine follows the one wake-up rule of §3.3. How an event drain
+wakes a sim parked on the event backlog has no row yet
 ([Q11](open_question.md#q11-how-does-draining-events-wake-the-sim)).
 
 **Any new cross-thread mechanism gets a row here, with all five items, in the same change
@@ -770,22 +775,34 @@ struct Participant {
 struct HostControl {
     std::atomic<u64> run_until;        // exclusive tick ceiling; U64_MAX = resumed
     std::atomic<u32> stop_requested;   // sticky: 0 -> 1 only
-    std::mutex       transition;       // pause/resume/step compound transitions only
-    bool             step_in_flight;   // guarded by transition; never read by sim
+    bool             step_in_flight;   // guarded by gate.m; never read by the sim
 };
-Participant                participants[N_PARTICIPANTS];   // fixed at the freeze
-HostControl                host;
-std::counting_semaphore<>  gate;                           // blocking + deadline ONLY
-std::atomic<u32>           gate_waiting;                   // 1 only while the sim is parked
-std::atomic<u64>           first_unexecuted;               // sim-written; the tick ledger
-std::atomic<u32>           tick_epoch;                     // 4 bytes; sim -> owner wakeups
-u64                        backlog;                        // §5.2; PLAIN, sim-thread-only
+struct Gate {
+    std::mutex              m;          // held for loads, stores and notifies only
+    std::condition_variable sim_cv;     // the sim parks here, and nothing else does
+    std::condition_variable progress_cv;  // threads waiting for a tick to run park here
+    Blocker                 parked;     // why the sim is parked; NONE while it runs
+    u32                     progress_waiters;
+};
+Participant       participants[N_PARTICIPANTS];   // fixed at the freeze
+HostControl       host;
+Gate              gate;
+std::atomic<u64>  first_unexecuted;               // sim-written; the tick ledger
+u64               backlog;                        // §5.2; PLAIN, sim-thread-only
 ```
 
+**Every gate input changes under `gate.m`.** That covers each `ready_through` and `active`,
+`run_until`, `stop_requested` and `first_unexecuted`; `parked`, `step_in_flight` and
+`progress_waiters` are read and written only under it. The inputs stay atomics so that the
+sim can check them without the mutex while nothing blocks.
+
 Each cross-thread host field is its own naturally aligned atomic, on purpose. A stop, a
-pause and a run grant are independent facts, so storing one must never erase another. The
-mutex serializes control callers on the cold path only. The sim thread never takes it, so
-the gate's hot path stays plain loads.
+pause and a run grant are independent facts, so storing one must never erase another.
+
+**Nothing waits, logs or calls out while holding `gate.m`.** Every critical section is a few
+loads and stores and at most one notify, except the condition-variable waits themselves,
+which release the mutex while they sleep. So taking it costs one uncontended lock, never a
+wait on another party.
 
 **The event backlog is not a host field.** `backlog` is a plain `u64` owned by the sim
 thread alone. The gate reads it like any other local variable. It is not an atomic, and in
@@ -796,27 +813,33 @@ the one marked:
 
 ```
 for (;;) {
-    for (;;) {
-        gate_waiting.store(1, seq_cst);                   # (G1) ARM, then re-read
-        if ((blocker = blocker_for(t)) == NONE) break;    # (G2) predicate reads: seq_cst
-        if (blocker == STOP) { gate_waiting.store(0, relaxed); return; }
-        if (!gate.try_acquire_until(absolute_deadline(blocker, t)))
-            on_gate_timeout(blocker, t);                  # THE ONE WAIT
+    while ((blocker = blocker_for(t)) != NONE) {             # (G1) no lock: acquire loads
+        if (blocker == STOP) return;
+        std::unique_lock lk(gate.m);
+        if (blocker_for(t) != blocker) continue;             # (G2) re-check under the mutex
+        gate.parked = blocker;
+        woke = gate.sim_cv.wait_until(lk, absolute_deadline(blocker, t),
+                                      [&] { return blocker_for(t) != blocker; });
+                                                             # THE ONE WAIT; releases gate.m
+        gate.parked = NONE;
+        lk.unlock();
+        if (!woke) on_gate_timeout(blocker, t);
     }
-    gate_waiting.store(0, relaxed);
-    drain_commands(t);                                    # §5.1
-    execute(t);                                           # §4.1 phases + commits
-    publish(t);                                           # §3.2, per due engine view
-    first_unexecuted.store(t + 1, release);
-    tick_epoch.fetch_add(1, release); tick_epoch.notify_all();
+    drain_commands(t);                                       # §5.1
+    execute(t);                                              # §4.1 phases + commits
+    publish(t);                                              # §3.2, per due engine view
+    {   std::lock_guard lk(gate.m);
+        first_unexecuted.store(t + 1, release);              # (G5) the tick has run
+        if (gate.progress_waiters) gate.progress_cv.notify_all();
+    }
     ++t;
 }
 
 blocker_for(t), in priority order:
-    if host.stop_requested.load(seq_cst): STOP
-    if backlog >= high_water: HOST_BACKLOG               # plain local read (§5.2)
-    if host.run_until.load(seq_cst) <= t: HOST_PAUSE
-    first active p with p.ready_through.load(seq_cst) < t: p
+    if host.stop_requested.load(acquire): STOP
+    if backlog >= high_water: HOST_BACKLOG                   # plain local read (§5.2)
+    if host.run_until.load(acquire) <= t: HOST_PAUSE
+    first active p with p.ready_through.load(acquire) < t: p
     otherwise: NONE
 ```
 
@@ -824,61 +847,62 @@ With no sim thread, `step(n)` runs this loop on the calling thread. Where the si
 would park on the host's own grant (`HOST_PAUSE`) or stop, the calling thread returns
 instead.
 
-A participant becomes ready with two operations and no other coordination:
+A participant becomes ready, and a control call changes a host field, the same way:
 
 ```
-ready_through.store(t, seq_cst);                   # (G3) LINEARIZATION POINT
-if (gate_waiting.load(seq_cst)) gate.release();    # (G4) wakeup, and only if one is needed
+change(input, value):                                        # declare ready, pause, stop, ...
+    std::lock_guard lk(gate.m);
+    input.store(value, release);                             # (G3) LINEARIZATION POINT
+    if (gate.parked != NONE) gate.sim_cv.notify_one();       # (G4) wake only a parked sim
 ```
 
-**Signal only a sleeping sim.** The condition in (G4) is required, not an optimization.
-Every participant becomes ready once per tick, and a healthy session never blocks. If
-participants signalled every time, one unused credit per participant per tick would pile up
-in the semaphore for hours. The first real wait would then spin through all of them at full
-CPU, re-checking a predicate that is false each time, before it finally blocked. The
-semaphore's count is not the condition (below), so the extra credits would waste time rather
-than corrupt state. But the one wait in the engine must not burn a core for as long as the
-session has been healthy.
+**The wake-up rule (normative).** Every predicate a parked thread waits on changes only while
+holding that park's mutex, and the change is followed by a notify. Every park in the engine
+follows it: the gate, the progress waits below, the admission wait (§5.1) and the event
+backlog (§5.2). A change made outside the mutex can land between a waiter's check and its
+wait, and the waiter then sleeps through it. No ordering argument repairs that, so none is
+attempted.
 
-**Why both sides use `seq_cst`, and nothing else in the engine does.** (G1) with (G2), and
-(G3) with (G4), are each a store followed by a load, on opposite sides of the same two
-objects. Acquire/release cannot order that pattern. Without one total order over the four
-operations, the sim could read an old `ready_through` while the participant reads an old
-`gate_waiting`, and the wake-up would be lost for the whole deadline. Under `seq_cst` the
-four operations fall into one total order, so at least one side sees the other: either (G2)
-sees the readiness and does not sleep, or (G4) sees the arm and signals.
+**Why the rule makes the wake-up correct.** The sim decides to sleep only after re-checking
+under `gate.m` (G2), and `wait_until` releases the mutex in the same step as it sleeps. A
+writer stores under the same mutex (G3). So the writer either finishes before the re-check,
+which then sees the new value and does not sleep, or starts after the sim is parked, sees
+`parked` set and notifies (G4). There is no third order. The condition variable's
+notifications are never the condition: the sim re-evaluates `blocker_for` every time it
+wakes, so a spurious wake-up costs one loop iteration and a notify to a sim that has already
+left costs nothing.
 
-This costs one fenced store per participant per tick, and one per tick on the sim. It
-replaces one semaphore `release()` per participant per tick, which is a system-call-class
-operation, so arming is cheaper than what it replaces even before counting the pile-up.
-Every control write that can change what `blocker_for` returns, namely `run_until` and
-`stop_requested`, arms the same way: store `seq_cst`, then signal only if `gate_waiting`
-reads 1. The same rule is reused wherever one side parks on another's store (the admission
-wait, §5.1). How an event drain wakes a sim parked on `HOST_BACKLOG` is open
-([Q11](open_question.md#q11-how-does-draining-events-wake-the-sim)). A lost wake-up is a
-hang, not a data race, so how to test these handshakes is also open
-([Q6](open_question.md#q6-how-are-the-wake-up-handshakes-tested)).
+**Why this costs almost nothing.** While nothing blocks, (G1) finds no blocker and the sim
+takes no lock before the tick. It takes one uncontended lock per tick at (G5). Each
+participant takes one per declaration, and each control call one per change. These are tens
+of nanoseconds on paths that run once per tick. Waking only a parked sim (G4) keeps
+notifications off the healthy path. `wait_until` also gives the deadline that atomics lack:
+C++26 `<atomic>` has no timed wait.
 
-**Why a semaphore, and why its count is not the condition.** C++26 has no timed atomic wait:
-`<atomic>` has no `wait_for` or `wait_until`, and neither do `latch` or `barrier`. So
-`std::counting_semaphore::try_acquire_until` is the only standard primitive that gives both
-a happens-before edge and a deadline. It is used only for blocking and the deadline. The
-condition is always re-evaluated from `ready_through`, never inferred from the semaphore's
-count. A stray or duplicated `release()` then costs one extra loop iteration that finds the
-predicate already satisfied. If the count were the condition, an abandoned wake-up could be
-consumed by an unrelated later wait and report progress that never happened.
+`ready_through` only ever increases, and so does `first_unexecuted`. A waiter that wakes late
+still finds a true condition true. Neither is ever a flag that is true only briefly.
 
-Arming makes stray credits rare, since a release needs an observed `gate_waiting == 1`, but
-not impossible: a signaller may see the arm just as the sim leaves (G2). One leftover credit
-costing one extra iteration is acceptable. What arming rules out is credits piling up
-without bound. `ready_through` only ever increases for the same reason: `atomic::wait` and
-any flag-style condition are defined against transient values and can miss a condition that
-is true only briefly.
+**Waiting for a tick to run.** A thread that waits for the sim to reach a tick parks on
+`gate.progress_cv` under `gate.m`. The stepping owner thread waits there
+(`design_python_api.md` §4.3), and so does a paced producer reading an outcome (§5.1):
+
+```
+wait_for_tick(target, until):                                # a stepping owner, an outcome read
+    std::unique_lock lk(gate.m);
+    ++gate.progress_waiters;
+    ok = gate.progress_cv.wait_until(lk, until,
+             [&] { return first_unexecuted.load(relaxed) >= target || other_wake_reason(); });
+    --gate.progress_waiters;
+```
+
+The sim stores `first_unexecuted` under the mutex after each tick's publish and notifies if
+anyone waits (G5), so this park follows the wake-up rule like the gate does. `until` lets a
+caller wait in slices: the owner thread checks for signals between them.
 
 **Deadlines are absolute and share one anchor.** On the first blocker for tick `t` that is
 not a pause, the sim records one `wait_started[t]`. Every participant's deadline for that
 tick is `wait_started[t] + participant.deadline`, even if `blocker_for` reaches that
-participant later. A stray semaphore credit never recomputes either value from `now`. So
+participant later. A spurious wake-up never recomputes either value from `now`. So
 participants use up their budgets at the same time, and the total first-attempt latency is
 bounded by the largest deadline, not the sum. An explicitly documented retry gets one new
 anchored budget.
@@ -905,14 +929,14 @@ a hang. So a pause wakes all of them with `session_paused`, which means "the wai
 yours to retry", never "your operation failed". Whether callers actually see
 `session_paused` is open ([Q7](open_question.md#q7-does-a-caller-ever-see-session_paused)).
 
-`HOST_PAUSE` is intentionally indefinite. Each semaphore wait uses a bounded diagnostic
-slice whose expiry means `remain parked`, never `FAIL`. `HOST_BACKLOG` works the same way,
+`HOST_PAUSE` is intentionally indefinite. Each wait uses a bounded diagnostic slice whose
+expiry means `remain parked`, never `FAIL`. `HOST_BACKLOG` works the same way,
 for the same reason (§5.2): an application that stops draining events pauses the simulation
 and is reported, rather than timed out into a dead session.
 
 **Progress.** The sim blocks, bounded by the smallest declared deadline among participants
-that are not ready yet. Each participant publishes its readiness wait-free, in one store.
-Participants wait at the same time, so the worst latency the gate adds to a tick is the
+that are not ready yet. Each participant declares readiness with one store under `gate.m`:
+a short lock, never a wait on the sim. Participants wait at the same time, so the worst latency the gate adds to a tick is the
 largest deadline in the blocking set, not the sum. That is what makes several participants
 affordable.
 
@@ -924,10 +948,10 @@ independent fields rather than one overloaded word:
 | Host state | Representation |
 |---|---|
 | running | `run_until = U64_MAX`, `stop_requested = 0`, `backlog < high_water` |
-| `pause()` | under `transition`, set `run_until = first_unexecuted` |
-| `step(n)` | under `transition`, reserve `step_in_flight`, then set `run_until = first_unexecuted + n` (checked for overflow) |
+| `pause()` | under `gate.m`, set `run_until = first_unexecuted` |
+| `step(n)` | under `gate.m`, reserve `step_in_flight`, then set `run_until = first_unexecuted + n` (checked for overflow) |
 | event backlog at its high-water mark (§5.2) | **not a host field at all**: `backlog` is a plain sim-local value, so a resume cannot race it and a drain cannot erase it |
-| `request_stop()` | `stop_requested.store(1, seq_cst)`; sticky and highest priority |
+| `request_stop()` | under `gate.m`, `stop_requested.store(1, release)`; sticky and highest priority |
 
 **A host command cannot miss its tick, because it names none.** The host endpoint is
 unpaced (§5.1). The engine applies each host command at the first tick whose drain finds
@@ -963,18 +987,18 @@ waits (§5.1). They run on their own threads, and the owner thread never waits f
 
 Pause, single-step, backpressure and shutdown still form one gate predicate, but no two
 share storage, so concurrent controls cannot lose a stop or unblock a backed-up ring.
-`pause`, `resume`, and the setup and teardown of `step` serialize on `transition`. So
-`resume()`'s "no step in flight" check and its store form one transition, not a
-check-then-act race. `request_stop()` needs no mutex, because nothing ever clears it. The
-backlog needs none, because it has one writer.
+`pause`, `resume`, and the setup and teardown of `step` serialize on `gate.m`, the mutex
+every gate input already changes under. So `resume()`'s "no step in flight" check and its
+store form one transition, not a check-then-act race. The backlog itself has one writer,
+the sim; what the owner changes is the ring's `read` index (§5.2).
 
 `run_until` is an exclusive ceiling, so pausing before tick 0 can be represented without
 unsigned underflow: tick `t` may run exactly when `t < run_until`.
 
 `step(n)` records `start = first_unexecuted`, sets `run_until = start + n`, and returns when
-`first_unexecuted >= start + n`, waiting on `tick_epoch`. The host's own run grant then
-blocks the gate, so a sim thread is provably parked when the call returns. That makes
-`checksum()` on the next line a well-defined read of quiet state rather than a race
+`first_unexecuted >= start + n`, waiting on `gate.progress_cv` (above). The host's own run
+grant then blocks the gate, so a sim thread is provably parked when the call returns. That
+makes `checksum()` on the next line a well-defined read of quiet state rather than a race
 (`design_python_api.md` §4.3, §6). The wait has no deadline, and an interrupt ends it
 (`design_python_api.md` §4.3).
 
@@ -1029,6 +1053,14 @@ the host's run grant is `U64_MAX`, `stop_requested` is clear and the backlog is 
 mark. So the gate costs two loads and one plain comparison per tick, and it blocks only on a
 pause, the end of a step or the event backlog. The gate built for multiplayer costs only
 this at its default setting (`design_multiplayer.md` §6).
+
+**Verification.** A lost wake-up is a hang, not a data race, so ThreadSanitizer does not
+report it. The wake-up rule makes each park correct by construction, and stress tests check
+that the construction was followed. Each test drives one park against its writers many times
+under a watchdog timeout, and a timeout fails the test. The tests cover the gate against
+declarations and control calls, the progress waits against the sim, the admission wait
+against the drain (§5.1), and the backlog wake (§5.2). They run under CTest. Data handed
+between threads is still checked by the sanitizer tests of §3.2 and §5.1.
 
 ### 3.4 Row predicate (normative)
 
@@ -1626,8 +1658,8 @@ The transport owns a peer's margin, and its value is open
 The host endpoint has no margin, because it stamps nothing.
 
 **State.** Per endpoint: two hot 8-byte ring atomics on separate cache lines, two cold
-4-byte lease atomics, one cold waiter count, a plain slot array, and three words touched
-only by the producer thread.
+4-byte lease atomics, a cold mutex and condition variable for the admission wait, a plain
+slot array, and three words touched only by the producer thread.
 
 ```
 struct Entry { payload…; u64 tick; };        // the tick this command acts on; unused on
@@ -1639,7 +1671,9 @@ struct Endpoint {                            // one per producer, fixed at the f
     alignas(hardware_destructive_interference_size) std::atomic<u64> read;    // sim
     std::atomic<u32>  admission;             // OPEN | REVOKING | REVOKED
     std::atomic<u32>  active_submit;         // successful/validating calls in flight
-    std::atomic<u32>  waiters;               // producers parked on the admission wait
+    std::mutex        m;                     // the admission wait's park (§3.3's rule)
+    std::condition_variable space_cv;        // a producer waiting for ring space parks here
+    u32               waiters;               // producers parked on space_cv; guarded by m
     u32               capacity;              // commands this endpoint may hold for ONE tick
     u32               margin;                // 0 for mods and engine sources
     bool              unpaced;               // the host endpoint in single-player
@@ -1669,8 +1703,9 @@ leave:
     if active_submit.fetch_sub(1, release) == 1: notify revoker
 
 revoke:
-    admission.exchange(REVOKING, acq_rel)              # closes new leases
-    wake every parked producer with `revoked`          # an admission wait is not a lease leak
+    { std::lock_guard lk(m);                           # admission is a park predicate input
+      admission.exchange(REVOKING, acq_rel);           # closes new leases
+      space_cv.notify_all(); }                         # an admission wait is not a lease leak
     wait under the shutdown deadline for active_submit == 0
     admission.store(REVOKED, release)                   # revocation complete
 
@@ -1683,7 +1718,9 @@ A lease that linearized before `REVOKING` completes normally, including publishi
 after revocation began; revocation waits for it. A later call returns `revoked` before
 touching an index or slot. Revocation also **wakes every parked producer**. A producer
 asleep on the admission wait holds a lease, and would otherwise be waited on for the whole
-shutdown deadline; it wakes with `revoked` and leaves.
+shutdown deadline; it wakes with `revoked` and leaves. The change of `admission` happens
+under the endpoint's mutex, as §3.3's wake-up rule requires of anything a parked thread
+waits on.
 
 The endpoint and its control storage stay alive until the producer has been joined. If the
 deadline expires, the engine follows the existing `failed` and disarm path instead of
@@ -1706,11 +1743,13 @@ submit(cmd, t):
     if t != last_stamped:  last_stamped = t; stamped_for_tick = 0      # producer-local
     if stamped_for_tick == capacity: leave(); return queue_full        # (C1d)
     w = write.load(relaxed)                                            # (C2) our own word
-    while w - read.load(seq_cst) == DEPTH:                             # (C3) THE ADMISSION WAIT
-        waiters.fetch_add(1, seq_cst)                                  #      arm, then re-read
-        if w - read.load(seq_cst) < DEPTH: { waiters.fetch_sub(1, relaxed); break; }
-        park until woken; on `session_paused` retry, on `revoked` leave and return revoked
-        waiters.fetch_sub(1, relaxed)
+    if w - read.load(acquire) == DEPTH:                                # (C3) THE ADMISSION WAIT
+        std::unique_lock lk(m); ++waiters                              #      re-check under m
+        space_cv.wait(lk, [&] { return w - read.load(relaxed) < DEPTH
+                                     || admission.load(relaxed) != OPEN
+                                     || session_paused(); })
+        --waiters
+        on `session_paused` retry (C3); on `revoked` leave and return revoked
     slot[w % DEPTH] = cmd; slot[w % DEPTH].tick = t                    # (C4) plain; the slot is ours
     ++stamped_for_tick
     write.store(w + 1, release)                                        # (C5) LINEARIZATION POINT
@@ -1753,8 +1792,10 @@ for e in endpoints (ascending source id):
         if st > t: break                                      # (S2) stamped for a later tick
         if st < t: protocol_error(e, st, t)                   # (S3) NEVER executed late
         emit(slot[r % DEPTH], source(e), seq++); ++r
-    e.read.store(r, seq_cst)                                  # (S4)
-    if e.waiters.load(seq_cst): wake e's parked producers     # (S5) §3.3's arming discipline
+    if r != e.read.load(relaxed):                             # freed space: §3.3's rule
+        std::lock_guard lk(e.m)
+        e.read.store(r, release)                              # (S4)
+        if e.waiters: e.space_cv.notify_all()                 # (S5) only a parked producer
 record; execute                                               # §2.3, §6
 first_unexecuted.store(t + 1, release)                        # (S6)
 ```
@@ -1887,19 +1928,25 @@ event ring's size, `C × D`, follows from it (§5).
 
 - (C5) `release` pairs with (S1) `acquire`: one edge per publish, making every entry up to
   `w` visible.
-- (S4) `seq_cst` pairs with the load in (C3). This makes a slot safe to overwrite: the sim's
-  reads of it happen before the producer's next write to it. It is `seq_cst` rather than
-  `release` for the same reason as the gate in §3.3. (S4)/(S5) and (C3)'s arm and re-read
-  are a store followed by a load on each side of the same two objects, and only a single
-  total order rules out a lost wake-up in both directions.
+- (S4) `release` pairs with the `acquire` load in (C3), or with the endpoint mutex when the
+  producer re-checks under it. This makes a slot safe to overwrite: the sim's reads of it
+  happen before the producer's next write to it.
+- The admission wait follows the wake-up rule of §3.3. The drain stores `read` under the
+  endpoint's mutex and notifies a parked producer (S4, S5). The producer re-checks under the
+  same mutex before it sleeps (C3). So a drain that frees space either lands before the
+  re-check, which sees it, or after the producer is parked, and then notifies it. Nothing
+  depends on `seq_cst`.
 - (C1a)'s load of `first_unexecuted` is `acquire`, pairing with (S6).
 - (C2), (C4) and each side's load of its own index are relaxed or plain.
 - On the host endpoint, (H3) `release` pairs with (S1) like (C5), and (H1)'s `acquire` load
-  of `read` pairs with (S4). Nothing parks, so nothing needs a wake-up.
+  of `read` pairs with (S4). Nothing parks there, so nothing needs a wake-up, and the drain
+  may store its `read` without taking the mutex.
 
 **Progress.** An uncontended submit is wait-free: two lease loads, two active-count
-read-modify-writes, three bounded validity checks, one relaxed index load, one `seq_cst`
-load, a copy and one release store, with no loop. A submit that finds the ring full is a
+read-modify-writes, three bounded validity checks, one relaxed index load, one acquire
+load, a copy and one release store, with no loop. The drain takes the endpoint's mutex only
+when it frees space there: one short lock per active endpoint per tick, a few microseconds
+per tick for 256 endpoints. A submit that finds the ring full is a
 **bounded wait** in the sense of §1.1: declared, bounded by one tick, and with no expiry on
 the normal path. The only other ways out are the two named wake reasons, `session_paused`
 (retry) and `revoked` (leave). The drain is `O(commands stamped for this tick)` with no
@@ -1930,8 +1977,8 @@ be tested:
   `session_paused`, and a resume needs no second wake.
 
 The wake-up parts of these races (a parked producer woken by revocation, by a drain, or by a
-pause) are properties a sanitizer cannot fully check
-([Q6](open_question.md#q6-how-are-the-wake-up-handshakes-tested)).
+pause) are hangs, not data races, so the sanitizer does not see them. They are the stress
+tests of §3.3, run under a watchdog timeout.
 
 ### 5.2 Event ring (normative)
 
@@ -1958,7 +2005,7 @@ touches it:
 
 ```
 enqueue:           ++backlog                              # sim thread, plain
-before the gate:   backlog = write - read.load(seq_cst)   # sim thread; `read` is the owner's
+before the gate:   backlog = write - read.load(acquire)   # sim thread; `read` is the owner's
                                                           #   ordinary SPSC consumer index
 blocker_for(t):    if backlog >= high_water: HOST_BACKLOG  # a plain local comparison (§3.3)
 ```
@@ -1966,9 +2013,9 @@ blocker_for(t):    if backlog >= high_water: HOST_BACKLOG  # a plain local compa
 The owner publishes nothing new for this. `read` is the index it already stores as the
 ring's consumer, and the sim already loads it. The backlog is recomputed from two indices
 that only increase, at the one place the sim already evaluates the gate. A drain that clears
-the condition must wake a parked sim, and an unparked sim must never be signalled, using the
-arming rule of §3.3. The exact store order of `read`, and where the recompute sits relative
-to arming, are open ([Q11](open_question.md#q11-how-does-draining-events-wake-the-sim)).
+the condition must wake a parked sim, following the wake-up rule of §3.3. Exactly how the
+drain stores `read` under `gate.m`, and where the recompute sits relative to the sim's
+re-check, are open ([Q11](open_question.md#q11-how-does-draining-events-wake-the-sim)).
 
 **Why a derived value and not a cached flag.** A flag looks cheaper, but cannot be made
 correct. Both threads would have to write it: the enqueue sets it and the drain clears it,

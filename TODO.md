@@ -25,9 +25,10 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
   + [ ] session lifecycle: `configuring → freeze → running`, with the freeze's ordered
         steps; every step that can fail runs before any step with a visible effect
         (`doc/design_engine_core.md` §2.4)
-  + [ ] the gate: one `ready_through` per participant (only ever increases), one counting
-        semaphore for blocking and deadlines, and `first_unexecuted` as the next tick to
-        run. The host controls it with two independent atomics, `run_until` and
+  + [ ] the gate: one `ready_through` per participant (only ever increases), one mutex and
+        condition variable for blocking and deadlines, and `first_unexecuted` as the next
+        tick to run. Every gate input changes under the mutex, followed by a notify (the
+        wake-up rule). The host controls it with two independent atomics, `run_until` and
         `stop_requested`; the event backlog is a plain value owned by the sim. Pause,
         resume and step serialize so one cannot overwrite another. The host is not a
         participant. M1 runs headless: `step(n)` runs ticks on the calling thread, and with
@@ -76,8 +77,8 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         still writing it; endpoint revoke racing submit; `close()` racing each any-thread
         API; async-error writers racing; and every `admitted` command appearing exactly once
         in drain order. A functional test cannot tell a correct implementation from a broken
-        one on x86-64. Lost wake-ups need more than a sanitizer
-        ([Q6](doc/open_question.md#q6-how-are-the-wake-up-handshakes-tested))
+        one on x86-64. Lost wake-ups are hangs, not data races: CTest stress tests drive
+        each park under a watchdog timeout (`doc/design_engine_core.md` §3.3)
   + [ ] a test that the defaults in `config.py` and `sim_estab:limits` agree
 + [ ] **M2: fixed-point, PRNG, checksum, replay** (`doc/design_engine_core.md` §2, §7 step 2)
   + [ ] the `fixed<>` type ([Q25](doc/open_question.md#q25-the-fixed-specification))

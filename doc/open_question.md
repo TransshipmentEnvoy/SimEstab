@@ -44,15 +44,6 @@ engine view need not carry it, and `python_api` §7.2 also offers `identity=Fals
 left out, it must become one of the declarations closed at the freeze (`engine_core` §2.4),
 and snapshot lookups by id cannot work on such an engine view. Also blocks M5.
 
-### Q6. How are the wake-up handshakes tested?
-
-The docs (`engine_core` §3.2, §5.1) and `CLAUDE.md` say a mis-ordered variant of either
-protocol fails only under ThreadSanitizer. That holds for data handed between threads. It
-does not hold for the `seq_cst` wake-up handshakes in the gate (§3.3), the admission wait
-(§5.1) and the backlog wake (§5.2). A lost wake-up is a hang, not a data race, so
-ThreadSanitizer does not report it. These need another method, such as a model checker or
-stress tests that detect timeouts.
-
 ### Q7. Does a caller ever see `session_paused`?
 
 `engine_core` §3.3 and `python_api` §7.1 say a paused session wakes waiting submitters with
@@ -66,7 +57,6 @@ A ring's depth is `(margin + 1) × capacity`, each tick holds at most `capacity`
 stamps stay within the margin, and the drain empties every earlier tick first (`engine_core`
 §5.1). Together these seem to guarantee there is always room, so the admission wait, its
 wake-ups and its tests may be dead code. Either name the case that reaches it or remove it.
-Related: Q15.
 
 ### Q9. How does a stopped participant leave the gate?
 
@@ -88,11 +78,11 @@ headroom for one tick, and that headroom is not bounded. Also unclear: which thr
 ### Q11. How does draining events wake the sim?
 
 The event backlog is a plain count the sim computes as `write − read` (`engine_core` §5.2).
-For a drain to wake a sim parked on the backlog, the owner's store of `read` must be
-`seq_cst` followed by a signal to a parked sim, and the sim must recompute the backlog
-inside the gate loop, after arming. §5.2 requires the wake-up but does not give the store
-order of `read`, and its pseudo-code recomputes the backlog "before the gate". The mechanism
-register (§1.1) has no row for it.
+For a drain to wake a sim parked on the backlog, the owner must store `read` under the gate
+mutex and notify a parked sim, and the sim must recompute the backlog inside its locked
+re-check (`engine_core` §3.3's wake-up rule). §5.2 requires the wake-up but does not give the
+drain's exact steps, and its pseudo-code recomputes the backlog "before the gate". The
+mechanism register (§1.1) has no row for it.
 
 ### Q12. Does `step()` publish every engine view regardless of cadence?
 
@@ -109,13 +99,6 @@ owner-thread call that raises `EngineThreadError` elsewhere.
 An engine view registered with `paced=True` holds the core back until it is taken (`python_api`
 §7.2). Neither `engine_core` §3.2 nor §3.3 says how a take counts as readiness, or how that
 combines with a cadence above 1.
-
-### Q15. Simplify the gate and the endpoint lease?
-
-The v1 simplification pass left three parts unrevised: the progress vocabulary of the
-mechanism register (`engine_core` §1.1), the gate's `seq_cst` arming (§3.3), and the
-endpoint lease (§5.1). Whether they survive the same simplicity argument is open. Related:
-Q8.
 
 ### Q16. Which events exist?
 

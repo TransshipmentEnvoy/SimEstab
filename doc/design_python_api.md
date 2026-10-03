@@ -756,7 +756,7 @@ call sites. Where ticks run follows from the kind of session:
     |---|---|
     | `run_until` | exclusive tick ceiling set by pause, resume and step; `U64_MAX` means resumed |
     | `stop_requested` | sticky stop request; once set, it is never cleared |
-    | `step_in_flight` | keeps step and resume apart; protected by the transition mutex |
+    | `step_in_flight` | keeps step and resume apart; guarded by the gate mutex |
 
     The event backlog feeds the same predicate but is not a host field. It is a plain value
     owned by the sim thread, derived from the event ring's two indices
@@ -766,8 +766,8 @@ call sites. Where ticks run follows from the kind of session:
 
     Between ticks the sim evaluates one predicate: stop first, then the event backlog, then
     the finite or unlimited `run_until` grant. Pause, resume and step serialize their
-    compound changes under the host-control transition mutex. `request_stop()` is an
-    independent store. So a concurrent resume cannot erase a stop, and draining the backlog
+    compound changes under the gate mutex, which every gate input changes under
+    (`design_engine_core.md` §3.3). `request_stop()` is an independent store. So a concurrent resume cannot erase a stop, and draining the backlog
     cannot resume a sim the operator paused. **A backed-up event ring pauses the
     simulation.** It does not time the application out and does not end the session (§7.3).
   - **`step(n)` on a running sim thread is legal only while paused.** A paused sim thread
@@ -787,20 +787,17 @@ call sites. Where ticks run follows from the kind of session:
     return once tick `t+n` has published, and both return the tick reached.
   - **The return guarantee needs no bookkeeping of its own.** `step(n)` records `start =
     first_unexecuted` and sets the exclusive `run_until = start + n`, after checking for
-    overflow. It then waits while `first_unexecuted.load(acquire) < start + n`, woken by the
-    sim after each tick's publish (`tick_epoch`, `design_engine_core.md` §3.3).
-    `first_unexecuted` only ever increases, so nothing new is needed to make the wait
-    correct. The release/acquire pair orders the sim thread's tick and its publish before
-    `step()` returns. That makes `checksum()` on the next line well-defined, instead of a
-    race against the thread that owns core state.
+    overflow. It then waits on the gate's tick-progress condition variable while
+    `first_unexecuted < start + n` (`design_engine_core.md` §3.3). The sim stores
+    `first_unexecuted` under the gate mutex after each tick's publish and notifies a waiter,
+    so the wait follows the engine's one wake-up rule. The release/acquire pair orders the
+    sim thread's tick and its publish before `step()` returns. That makes `checksum()` on
+    the next line well-defined, instead of a race against the thread that owns core state.
 
-    Two properties of this design are required. First, the waited-on condition is a counter
-    that only increases, never a flag. `atomic::wait` is specified against transient values
-    and may miss a condition that is true only briefly. Second, the gate's semaphore is
-    never the condition. Suppose `step(n)` acquired it `n` times instead. An abandoned wait
-    would leave a release behind. The next `step(1)` would consume it and report success
-    after advancing the sim by zero ticks: a debugger that silently lies about having
-    stepped.
+    The waited-on condition is a counter that only increases, never a flag, so a waiter
+    that wakes late still finds it true. And the notifications are never the condition: the
+    waiter re-reads `first_unexecuted` every time it wakes, so a stray notification cannot
+    make a step report ticks that never ran.
   - **Quiescence needs no separate rendezvous.** After `step(n)` returns, `run_until` equals
     `first_unexecuted`, so the gate blocks the sim thread by the same predicate that
     released it. The sim is provably parked. With no sim thread, nothing runs between calls
@@ -809,7 +806,7 @@ call sites. Where ticks run follows from the kind of session:
     remains a non-blocking control call. The gate, not the call, makes the sim stand still.
   - **The wait has no deadline, and Ctrl+C interrupts it.** The owner thread waits in short
     slices and checks for signals between them. A `KeyboardInterrupt` revokes the rest of
-    the grant: under the transition mutex it sets `run_until = first_unexecuted`, so the sim
+    the grant: under the gate mutex it sets `run_until = first_unexecuted`, so the sim
     parks at the gate after the tick it is running, and the exception propagates. A long
     tick is not a fault, and the host is not a participant whose lateness could be one. So
     nothing times the step out. A sim thread that never finishes its tick is caught at
@@ -902,9 +899,9 @@ call sites. Where ticks run follows from the kind of session:
 
     The join is `stop_sim_async()`, and it is staged:
 
-    1. `stop_requested.store(1, seq_cst)`, then `gate.release()` if the sim is parked (the
-       arming rule of `design_engine_core.md` §3.3). A sim thread at the gate then wakes and
-       sees the stop;
+    1. set `stop_requested` under the gate mutex, and notify the sim if it is parked (the
+       wake-up rule of `design_engine_core.md` §3.3). A sim thread at the gate then wakes
+       and sees the stop;
     2. wait a generous first timeout, sized to cover a slow tick, since the flag is read
        only at the gate, between ticks;
     3. on expiry, log `critical` with the current tick and system name for attribution, then
@@ -1054,9 +1051,9 @@ Rules:
     verification harness's own idiom a contract violation.
   - **Control calls** (`pause`, `resume`, `set_time_scale`, `request_stop`,
     `stop_requested`, `set_log_level`): thread-safe from any thread, on any build.
-    - `pause`, `resume` and `step` serialize their compound grant changes under the
-      host-control mutex. `request_stop` sets the independent sticky stop atomic. All of
-      them wake the gate (§4.3).
+    - `pause`, `resume` and `step` serialize their compound grant changes under the gate
+      mutex. `request_stop` sets the independent sticky stop atomic, under the same mutex.
+      All of them notify a parked sim (`design_engine_core.md` §3.3).
     - The event backlog is a plain value owned by the sim thread (`design_engine_core.md`
       §5.2), so no control call writes it. How a drain wakes a sim parked on the backlog is
       open ([Q11](open_question.md#q11-how-does-draining-events-wake-the-sim)).
@@ -1066,7 +1063,7 @@ Rules:
     These calls are not owner-only, on purpose. `request_stop` from a watchdog thread and
     `pause` from a debug console are both ordinary uses, and making them safe costs nothing.
     `resume()` still raises if a `step()` is in flight (§4.3). It decides this while holding
-    the same transition mutex that creates the grant.
+    the same gate mutex that creates the grant.
   - **`raise_if_failed()`**: owner thread only. It is one of the async-error rendezvous
     points (§8), and those are defined on the driving thread.
 - **Release timing follows scope, not reference counts.** Do not rely on rebinding or `del`
@@ -1077,8 +1074,8 @@ Rules:
   without `with` behaves differently on `cp314` and `cp314t`.
 - Do not add per-call binding locks (`nb::arg().lock()` and similar) to make the pump
   "safe". Paying for a lock every frame to hide a usage error is the wrong trade. The
-  operation lease is an atomic lifetime guard, not mutual exclusion. The host-control mutex
-  exists only for the documented compound control changes.
+  operation lease is an atomic lifetime guard, not mutual exclusion. The gate mutex guards
+  only the gate's inputs, and nothing holds it across a wait.
 - On GIL builds, Python mod threads take turns with the main loop. On free-threaded builds
   they run truly in parallel. `design_modding.md` §4 handles the consequence for mod
   hosting: heavy or untrusted mods go to a process host.

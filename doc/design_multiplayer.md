@@ -79,7 +79,7 @@ peer is one more participant:
 
 ```
 while (!ready_for(t))                                   // every participant, incl. peers
-    if (!gate.try_acquire_until(deadline_for(t))) on_gate_timeout(t);
+    if (!wait_at_gate_until(deadline_for(t))) on_gate_timeout(t);   // gate mutex + cv
 drain_commands(t);                                      // §5.1: per-endpoint rings
 execute(t); publish(t);
 first_unexecuted.store(t + 1, release);
@@ -95,8 +95,8 @@ For each turn, the receive thread does two things, in this order:
 
 ```
 for each command in turn(t):  submit(cmd, t)            // that peer's endpoint; may wait
-ready_through.store(t, seq_cst)                         // "my turn t is complete"
-if (gate_waiting.load(seq_cst)) gate.release()          // wake the sim only if it is parked
+{ lock(gate.m); ready_through.store(t, release);        // "my turn t is complete"
+  if (gate.parked) gate.sim_cv.notify_one(); }          // wake the sim only if it is parked
 ```
 
 This order is the deadlock rule of `design_engine_core.md` §5.1: submit, then release the
@@ -117,7 +117,7 @@ Peer C is the slowest.
 |---|---|---|
 | 0 ms | finishes tick 999, `first_unexecuted = 1000` | — |
 | 0 ms | `ready_for(1000)` → false (C's `ready_through` is 999); blocks on the gate | relay is still waiting on C's input for 1000 |
-| 12 ms | *blocked: 12 ms of the 33 ms budget* | turn-1000 packet lands; `submit(…, 1000)` on C's endpoint; `C.ready_through = 1000`; the sim is parked, so `gate.release()` |
+| 12 ms | *blocked: 12 ms of the 33 ms budget* | turn-1000 packet lands; `submit(…, 1000)` on C's endpoint; `C.ready_through = 1000` under the gate mutex; the sim is parked, so it is notified |
 | 12 ms | wakes, drains, executes, publishes | sends tick 1000's tick digest and rolling-checksum slice upstream |
 | 20 ms | `ready_for(1001)` → true, already buffered, so no wait | turn 1002 arrives |
 

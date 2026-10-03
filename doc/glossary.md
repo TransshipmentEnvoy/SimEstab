@@ -59,7 +59,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | declare ready | A participant stores `ready_through = t` to say it has finished submitting for tick `t`. | engine_core §3.3 |
 | deadline | How long the gate waits for one participant. Each participant declares one. A pause stops the clock. | engine_core §3.3 |
 | expiry policy | What happens when a participant's deadline passes: `FAIL`, `CONTINUE_WITHOUT`, `SUSPEND` or `DROP`. | engine_core §3.3 |
-| arming | The wake-up rule used wherever one thread parks on another's store: both sides store `seq_cst` and re-read, and the signaller wakes only a thread that is actually parked. | engine_core §3.3 |
+| gate mutex | `gate.m`: the mutex every gate input changes under. The sim re-checks under it before it parks, and tick-progress waiters park on it too. Held only for loads, stores and a notify. | engine_core §3.3 |
+| wake-up rule | Every predicate a parked thread waits on changes only while holding that park's mutex, followed by a notify. Every park in the engine follows it, so no wake-up can be lost. | engine_core §3.3 |
 | mechanism register | The table of every cross-thread mechanism in the engine, each with its atomics, memory orders, linearization point, progress guarantee and failure behaviour. | engine_core §1.1 |
 
 ## Engine views and snapshots
@@ -97,7 +98,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | stamp | The tick a command names. | engine_core §5.1 |
 | stamp margin | How far past the current tick an endpoint may stamp. 0 for mods and engine sources, the input delay for a peer. The unpaced host endpoint stamps nothing. | engine_core §5.1 |
 | admission | The immediate answer to a submit: `admitted` with a handle, or a rejection (`queue_full`, `too_late`, `out_of_order`, `over_margin`, `invalid`, `revoked`, `host_error`). | engine_core §5.1 |
-| admission wait | A submit that finds its ring full waits for space, for at most one tick. | engine_core §5.1 |
+| admission wait | A paced submit that finds its ring full waits for space, for at most one tick, on the endpoint's mutex and condition variable. | engine_core §5.1 |
 | endpoint lease | An endpoint's lifecycle state, which every submit enters and which `revoke` closes. | engine_core §5.1 |
 | outcome | The second answer to a command: whether it was applied when its tick ran. Read from the handle after that tick. For a host command it also reports the tick, and reads `pending` until then. | engine_core §5.1 |
 | deadlock rule | A paced producer may wait only for outcomes of ticks it has already declared ready. Breaking it raises `CommandOrderError`. | engine_core §5.1 |
