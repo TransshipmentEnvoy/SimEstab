@@ -6,7 +6,7 @@ support is mostly a problem of loading, isolation and contracts, not of embeddin
 
 Status: designed, not implemented. Nothing here is built. v1 ships the thread host first
 (§4.3). Process hosts come later, and their snapshots are deferred together with the
-`SHARED` View mode (`design_engine_core.md` Appendix A).
+`SHARED` engine view mode (`design_engine_core.md` Appendix A).
 
 Terms are defined in [glossary.md](glossary.md). This design builds on
 `design_python_api.md` (main loop, boundary artifacts, thread contract) and
@@ -15,12 +15,12 @@ Terms are defined in [glossary.md](glossary.md). This design builds on
 
 Scope of v1:
 
-- **A process host has no snapshot.** Its snapshot design (§4.3) is a View placed in shared
+- **A process host has no snapshot.** Its snapshot design (§4.3) is an engine view placed in shared
   memory, and that needs the multi-reader `SHARED` mode, which v1 does not build. A
-  `PRIVATE` View cannot face a sandbox. A process host keeps its commands, events and
+  `PRIVATE` engine view cannot face a sandbox. A process host keeps its commands, events and
   lifecycle. How `SHARED` returns is open
-  ([Q60](open_question.md#q60-reviving-the-shared-view)).
-- Thread hosts are trusted, so `ctx.snapshot()` and an opt-in `PRIVATE` View both work as
+  ([Q60](open_question.md#q60-reviving-the-shared-engine-view)).
+- Thread hosts are trusted, so `ctx.snapshot()` and an opt-in `PRIVATE` engine view both work as
   described here.
 
 How to read this doc:
@@ -81,8 +81,8 @@ inputs.
     thread host has no crash boundary. This is why mods heavy on native code should declare
     the process host.
   - **Native crash, process host**: fully contained. The engine reaps the dead process once
-    its death is confirmed (§4.3). Once process-host Views exist, it also unlinks the
-    process's View segment then.
+    its death is confirmed (§4.3). Once process-host engine views exist, it also unlinks the
+    process's engine view segment then.
 
   In every case sim *state* is untouched. Determinism is never lost; at worst the process
   is.
@@ -130,10 +130,10 @@ commands_per_tick = 4096                    # requested per-tick endpoint capaci
                                             #   meaning is still shifting, so reconciling
                                             #   the numbers first would fix the wrong thing
                                             #   (doc/design_limits.md §7)
-private_view      = false                   # true = a dedicated PRIVATE View over the
+private_view      = false                   # true = a dedicated PRIVATE engine view over the
                                             #   granted columns; costs one projection
                                             #   copy per publish (§4.1). Default: copy
-                                            #   from the engine's default View.
+                                            #   from the engine's default engine view.
 inbox_size        = 256                     # per-subscriber inbox capacity (§4.2);
                                             #   overflow behaviour is not declared —
                                             #   it follows the event's delivery class
@@ -151,7 +151,7 @@ The example requests `commands_per_tick = 4096`, above the endpoint capacity cap
 (`design_limits.md` §2). Both numbers stay as they are until the field's meaning is settled
 ([Q44](open_question.md#q44-what-commands_per_tick-in-a-manifest-means)). When
 `private_view` is false, a thread-host mod reads the world through `ctx.snapshot()`, a copy
-out of the default View (§4.1). A process host has no snapshot in v1.
+out of the default engine view (§4.1). A process host has no snapshot in v1.
 
 Rules:
 
@@ -295,7 +295,7 @@ class TrafficMod:
     def on_unload(self, ctx): ...
 
     def _pick_target(self, ctx):                 # own frame: views die on return
-        with ctx.snapshot() as snap:             # a copy out of the engine's default View
+        with ctx.snapshot() as snap:             # a copy out of the engine's default engine view
             ids = snap.column("vehicle.id")
             return int(ids[0])
 
@@ -343,7 +343,7 @@ the commands the mod submitted for that tick (§4.2).
   tick the mod is itself holding up raises `CommandOrderError` at once, instead of hanging
   the session (`design_engine_core.md` §5.1). So the natural order is submit, then
   `declare_ready`, then outcome. The loop in §4.2 follows it.
-- `snapshot()`: a copy out of the engine's default View (`design_python_api.md` §7.2). A mod
+- `snapshot()`: a copy out of the engine's default engine view (`design_python_api.md` §7.2). A mod
   may take any number of them, from any thread
   ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)), and a snapshot
   outlives everything. There is no lifetime rule and no refusal, though the call still
@@ -353,7 +353,7 @@ the commands the mod submitted for that tick (§4.2).
     nothing special. There is no pin to hold and no quota to split. What one mod reads never
     affects what another can read.
   - **Zero-copy is opt-in and declared.** A mod that reads a large slice every tick may
-    declare a `PRIVATE` View in its manifest. It is registered at the freeze and costs one
+    declare a `PRIVATE` engine view in its manifest. It is registered at the freeze and costs one
     projection copy per publish. The manifest shows that cost, and the mod that asked for it
     pays it. The mod reads it through `view()`, below.
   - The default is `snapshot()`, and most mods should stay on it.
@@ -365,10 +365,10 @@ the commands the mod submitted for that tick (§4.2).
   - **The snapshot catalog holds only the columns in the mod's capabilities.** Asking
     `snap.column(...)` for any other column raises `ColumnNotGrantedError`. On a thread host
     this is not a security boundary. It keeps the *observable surface* the same as on a
-    process host, whose View (once process-host Views exist) contains only those columns
+    process host, whose engine view (once process-host engine views exist) contains only those columns
     (§4.3). So moving a mod to another mod host by policy cannot silently change what it can
     read.
-- `view()`: the mod's own `PRIVATE` View, if its manifest sets `private_view = true`. It
+- `view()`: the mod's own `PRIVATE` engine view, if its manifest sets `private_view = true`. It
   follows the one rule of `design_python_api.md` §7.2: `take()` is refused while array views
   on the previous snapshot are still alive.
 - `log(...)`: logs on the channel `sim_estab.mod.<id>`, following the hierarchical channel
@@ -393,8 +393,8 @@ the commands the mod submitted for that tick (§4.2).
 On a thread host, the API shape is the supported surface and guards against accidental
 misuse. It is not security enforcement, because in-process Python can reflect past it
 (§4.3). The peripheral rule is enforced where enforcement is physical. Writes are checked at
-the command ring, on every mod host. Reads are limited by the View's projection spec. Once
-process-host Views exist, the columns in a process host's capabilities are the only bytes it
+the command ring, on every mod host. Reads are limited by the engine view's projection spec. Once
+process-host engine views exist, the columns in a process host's capabilities are the only bytes it
 can see (§4.3).
 
 ### 4.2 Pattern: the mod host loop
@@ -473,7 +473,7 @@ Rules:
     capacity: `min(inbox_size, HostPolicy.max_inbox_size)`, with the reliable-class
     reservation as its floor (`design_python_api.md` §3, §7.3). Without a cap, total inbox
     memory would grow with the number of mods the user installed, and would be unknown at
-    construction. A per-mod View allowance would have the same scaling defect
+    construction. A per-mod engine view allowance would have the same scaling defect
     (`design_engine_core.md` §3.1).
   - Reliable-class events are never silently lost. The inbox reserves space for them or
     keeps a sticky loss counter (`design_python_api.md` §7.3). This section uses both: the
@@ -522,17 +522,17 @@ first.
 
 | Aspect | Thread host (default) | Process host (opt-in, by manifest or policy) |
 |---|---|---|
-| Snapshot access | a View in engine memory: the default View through `ctx.snapshot()`, or a dedicated `PRIVATE` View if the manifest asks for one | **none in v1.** A `PRIVATE` View cannot face a sandbox, so process-host snapshots wait for the `SHARED` mode (`design_engine_core.md` Appendix A). Their design is below |
+| Snapshot access | an engine view in engine memory: the default engine view through `ctx.snapshot()`, or a dedicated `PRIVATE` engine view if the manifest asks for one | **none in v1.** A `PRIVATE` engine view cannot face a sandbox, so process-host snapshots wait for the `SHARED` mode (`design_engine_core.md` Appendix A). Their design is below |
 | Commands | submitted in-process, straight into the endpoint's ring | IPC, using the canonical command payload schema (identical to replay files) inside a transport-specific envelope |
 | Events | delivered in-process, into the inbox | IPC, using the canonical **event** payload schema: the same encoding rules, but **not** in replay files (below) |
 | `ctx.submit_batch` | a direct call; the call returns admission | one frame out and one reply frame back from the supervisor; the call returns admission |
 | `ctx.outcome` | a direct call; blocks until the named tick has run | **its own operation**, not a hot-path round trip (see the rule below) |
-| Crash isolation | none: a bad C extension kills the engine | full. Once process-host Views exist, the View segment is unlinked when process death is confirmed |
-| Column read capabilities (`design_data_container.md` §7.2) | **enforced at the `ModContext` API**: other columns are absent from the catalog | no snapshot in v1. Once process-host Views exist: enforced at the API **and physically**, because the View's projection spec *is* the capability set, so the segment contains nothing else |
+| Crash isolation | none: a bad C extension kills the engine | full. Once process-host engine views exist, the engine view segment is unlinked when process death is confirmed |
+| Column read capabilities (`design_data_container.md` §7.2) | **enforced at the `ModContext` API**: other columns are absent from the catalog | no snapshot in v1. Once process-host engine views exist: enforced at the API **and physically**, because the engine view's projection spec *is* the capability set, so the segment contains nothing else |
 | CPU isolation, GIL builds | **none**: a busy mod takes main-loop time through GIL contention | full |
 | CPU isolation, free-threaded builds | good (true parallelism) | full |
 | Security boundary | none: Python can reflect into anything | real: a subprocess with rlimits and reduced privileges |
-| Cost | about zero | IPC mod host machinery, plus shared memory once process-host Views exist |
+| Cost | about zero | IPC mod host machinery, plus shared memory once process-host engine views exist |
 
 Rules:
 
@@ -558,7 +558,7 @@ Rules:
   trip is child ↔ supervisor, under a transport deadline, `HostPolicy.ipc_deadline`
   (`design_python_api.md` §3). When it expires, the call returns `host_error` and the
   endpoint is marked broken, which leads to quarantine. **The supervisor does no snapshot
-  work.** Once process-host Views exist, the sim thread publishes straight into the child's
+  work.** Once process-host engine views exist, the sim thread publishes straight into the child's
   segment (below), so there is no broker and no second copy.
 - **A waiting call needs its own frame shape, and the hot-path deadline must not apply to
   it.** A process mod has two waits: the admission wait and the outcome
@@ -604,14 +604,14 @@ Rules:
 
 #### Process-host snapshots (deferred)
 
-**Deferred with `SHARED`.** Everything in this part rests on the multi-reader `SHARED` View,
+**Deferred with `SHARED`.** Everything in this part rests on the multi-reader `SHARED` engine view,
 which is designed but not built in v1 (`design_engine_core.md` Appendix A). Until it exists,
 a process host has **no snapshot access**. Its commands, events and lifecycle are
 unaffected. The rules are kept because they are why `SHARED` would come back at all: no
-other reader needs a View that a sandbox can read. How to revive it is open
-([Q60](open_question.md#q60-reviving-the-shared-view)).
+other reader needs an engine view that a sandbox can read. How to revive it is open
+([Q60](open_question.md#q60-reviving-the-shared-engine-view)).
 
-**Snapshots over shared memory are a View with its blocks somewhere else.** There is no
+**Snapshots over shared memory are an engine view with its blocks somewhere else.** There is no
 broker, no mailbox protocol and no second copy. The sim thread's ordinary publish
 (`design_engine_core.md` §3.2) writes into the child's segment, just as it writes into heap
 blocks for every other reader. What the process boundary adds is a split mapping and these
@@ -621,20 +621,20 @@ rules:
 |---|---|
 | Mode | **always `SHARED`.** A `PRIVATE` reader chooses the publisher's next block. `SHARED` exposes only bounded pin counts. The publisher may read them as availability, but never derives an address, index, epoch or loop bound from bytes the child can write |
 | Mappings | the payload blocks and the published `(epoch,index)` word are read/write for the engine and read-only for the child. The four aligned block-state words sit in a separate region that is read/write for both, because pin and unpin are part of the reader protocol. Page separation is required. Permissions may not be weakened just to simplify the layout |
-| What a scribble can do | corrupt the child's own read, or pin all candidate blocks so that the publisher skips only that View. The publisher claims only a state word exactly equal to zero, uses engine-private block addresses, cursor and epoch, and scans at most three candidates. Child bytes cannot steer core memory or delay the tick |
-| Contents | the View's projection spec **is** the capability set, so the segment holds only the columns the mod may read, plus the `id` column. Filtering happens at projection time, where the schema is, not in a later copy step |
+| What a scribble can do | corrupt the child's own read, or pin all candidate blocks so that the publisher skips only that engine view. The publisher claims only a state word exactly equal to zero, uses engine-private block addresses, cursor and epoch, and scans at most three candidates. Child bytes cannot steer core memory or delay the tick |
+| Contents | the engine view's projection spec **is** the capability set, so the segment holds only the columns the mod may read, plus the `id` column. Filtering happens at projection time, where the schema is, not in a later copy step |
 | Mod-side read | load the published word; atomically pin that block unless it is `WRITING`; reload and require the exact same published word; then copy the payload and unpin. Ordinary pointer or payload access starts only after this revalidation |
-| ABI | a shared-memory View **is** a stable cross-boundary layout: fixed aligned `u32` state words and a `u64` published word at pinned literal offsets. It never uses `hardware_destructive_interference_size` or a native struct memcpy. Heap Views use `std::atomic`. Shared memory uses platform interprocess-atomic wrappers over raw aligned integers (`__atomic_*` on supported Unix, `Interlocked*` on Windows). Startup refuses a platform on which these widths are not always lock-free, and the protocol is tested across processes |
+| ABI | a shared-memory engine view **is** a stable cross-boundary layout: fixed aligned `u32` state words and a `u64` published word at pinned literal offsets. It never uses `hardware_destructive_interference_size` or a native struct memcpy. Heap engine views use `std::atomic`. Shared memory uses platform interprocess-atomic wrappers over raw aligned integers (`__atomic_*` on supported Unix, `Interlocked*` on Windows). Startup refuses a platform on which these widths are not always lock-free, and the protocol is tested across processes |
 | Reclamation | **only after process death is confirmed** (pidfd/waitpid). Never on a drop message or a deadline, since a live process may still be mid-copy |
-| Size | **the segment is sized once, at the freeze, from the View's maximum rows** (`design_data_container.md` §5.1). Matched rows vary below that maximum, so the segment is never resized and the child never remaps |
+| Size | **the segment is sized once, at the freeze, from the engine view's maximum rows** (`design_data_container.md` §5.1). Matched rows vary below that maximum, so the segment is never resized and the child never remaps |
 
-**The segment never moves.** Every object type has a cap, and every View has a maximum
+**The segment never moves.** Every object type has a cap, and every engine view has a maximum
 number of rows (`design_data_container.md` §2.2, §5.1). So the engine sizes the segment once
 and commits its pages as matched rows reach them, the same way it treats a heap block
 (`design_engine_core.md` §3.1). No publish waits for the child, and the child's read
 protocol has no remap step.
 
-So a slow, hung or hostile mod loses only the freshness of its own View. It cannot delay a
+So a slow, hung or hostile mod loses only the freshness of its own engine view. It cannot delay a
 tick, corrupt the engine or affect another reader. The publisher does read the four fixed
 state words. But it treats every nonzero or malformed value the same way, as "candidate
 unavailable", and skips it after the bounded scan.
@@ -651,7 +651,7 @@ could never end.
 
 These constraints come from operating-system behaviour. None has been exercised yet. The
 first applies to every process host, from the first one that ships. The others apply once
-process-host Views exist.
+process-host engine views exist.
 
 - **Create the containment unit before spawning the mod host.** On Windows, a process
   started through `Win32_Process.Create` escapes Job objects. On Linux, moving a process
@@ -906,8 +906,8 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
             case "logic":   pass                    # manifest only — spawn comes later
 
     for m in [m for m in manifests if m.tier == "logic"]:
-        # The freeze closes the View set. A process host's grant-projected
-        # View is deferred with the SHARED mode (engine_core Appendix A);
+        # The freeze closes the engine view set. A process host's grant-projected
+        # engine view is deferred with the SHARED mode (engine_core Appendix A);
         # a thread host may opt into a PRIVATE one.
         if policy.host_for(m) == "process":
             pass                              # no snapshot access in v1
@@ -921,7 +921,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
 # the caller, in this order and no other (design_python_api.md §2):
 #   mods = load_mods(engine, policy)
 #   engine.start_session()          # THE FREEZE (design_engine_core.md §2.4): column ids,
-#                                   #   source ids + stable live endpoints, closed View set,
+#                                   #   source ids + stable live endpoints, closed engine view set,
 #                                   #   seed, identity, log file, tick-0 snapshot,
 #                                   #   then each core mod's on_session_start
 #                                   #   -> engine is `running`
@@ -943,7 +943,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   | Fails during | Outcome |
   |---|---|
   | **policy work**: discovery, parsing, toposort, signature verification, capability resolution | `ModLoadError`, and the engine is still **`configuring`**. None of this touches the engine: the whole block runs before `register_hosts`, the boundary between policy work and engine load. So a bad path or a refused capability is *retryable*: fix the policy and call `load_mods` again |
-  | **engine load**: from `register_hosts` on, meaning content, `dlopen` and handshake, column registration, and registration of mod-host Views | `ModLoadError`, and the engine is `load_failed` (`design_python_api.md` §2). No identity was computed, no header written, no mod host spawned, and no log file named for a session. Recovery is a new `Engine`. A Tier 3 failure is also final for that mod in that process (§5.1) |
+  | **engine load**: from `register_hosts` on, meaning content, `dlopen` and handshake, column registration, and registration of mod-host engine views | `ModLoadError`, and the engine is `load_failed` (`design_python_api.md` §2). No identity was computed, no header written, no mod host spawned, and no log file named for a session. Recovery is a new `Engine`. A Tier 3 failure is also final for that mod in that process (§5.1) |
   | **freeze**: an identity mismatch against a loaded replay header, or a core mod failing `on_session_start` | `ReplayIdentityError` or `ModLoadError` from **`start_session()`**, not from `load_mods`. The same clean terminal state |
   | **spawn**: a mod host fails to start in `mods.start()` | **quarantine** (§4.2), not a load failure. The source id and the header entry already exist and stay correct, and the session runs without that mod's commands. How the mod leaves the gate is open ([Q9](open_question.md#q9-how-does-a-stopped-participant-leave-the-gate)) |
 
@@ -964,12 +964,12 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
 
   Making spawn a **separate call** adds a fourth reason: the caller can freeze without
   spawning, which is what a replay wants.
-- **Every mod-host View is registered before the freeze.** Effective policy is already
-  resolved, so the loader registers the requested `PRIVATE` View for a thread host that
-  asked for one. A process host's View, projected from its column capabilities, will
+- **Every mod-host engine view is registered before the freeze.** Effective policy is already
+  resolved, so the loader registers the requested `PRIVATE` engine view for a thread host that
+  asked for one. A process host's engine view, projected from its column capabilities, will
   register here too once the `SHARED` mode returns (`design_engine_core.md` Appendix A).
-  This is the only legal order, because freeze step 3a closes the View set. Spawn only opens
-  the endpoint allocated earlier and retrieves the View registered earlier (a process host
+  This is the only legal order, because freeze step 3a closes the engine view set. Spawn only opens
+  the endpoint allocated earlier and retrieves the engine view registered earlier (a process host
   would map it). Spawn never adds either resource.
 - **No fan-out can run during loading.** The bus fans out only in `bus.publish()`, which the
   host application calls in its loop. That happens after `load_mods` has returned and every
@@ -1041,10 +1041,10 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   When a deadline expires, the two kinds of mod host differ. This difference is a main
   reason process hosts exist:
   - **A process host can be killed.** Kill it and confirm death (`pidfd`/`waitpid`). Once
-    process-host Views exist, also unlink its View segment. Nothing survives.
+    process-host engine views exist, also unlink its engine view segment. Nothing survives.
   - **A thread host can only cooperate.** A thread stuck in native code cannot be killed
     safely in-process. So a hung thread host is logged and **abandoned**. An abandoned mod
-    host may still hold a View block and still call `ctx.submit()`. So abandonment **moves
+    host may still hold an engine view block and still call `ctx.submit()`. So abandonment **moves
     the engine to `failed`** (`design_python_api.md` §2). The engine disarms instead of
     releasing, and ending the process is the only hard recovery. This is the same defect as
     a sim thread that will not join, one level down. It gets the same answer, not a logged
@@ -1083,7 +1083,7 @@ New **logic mod** (for mod authors):
 4. **`on_unload` may not submit.** Your endpoint is revoked before it runs (§6).
 5. **`ctx.snapshot()` is already a copy.** Hold it as long as you like, pass it between
    threads, carry it to the next tick. It has no size limit and costs other mods nothing.
-   Declare a `PRIVATE` View only if you read a large slice every tick. Then read it inside
+   Declare a `PRIVATE` engine view only if you read a large slice every tick. Then read it inside
    `with ctx.view().take() as snap:` **in its own function**, so the array views die with
    the frame. `take()` is refused (`ViewBusyError`, retryable) while array views on the
    previous snapshot are alive (§4.1).

@@ -97,8 +97,8 @@ def test_command_policy_rejects_non_positive(kwargs):
 
 
 def test_projection_warn_bandwidth():
-    """4 GB/s per View, reasoned from the budgeted normal case (``doc/design_limits.md``
-    §5), and overridable per session."""
+    """4 GB/s per engine view, reasoned from the budgeted normal case
+    (``doc/design_limits.md`` §5), and overridable per session."""
     assert EngineConfig().projection_warn_bytes_per_second == 4_000_000_000
     retuned = EngineConfig(projection_warn_bytes_per_second=8_000_000_000)
     assert retuned.projection_warn_bytes_per_second == 8_000_000_000

@@ -20,7 +20,7 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
       `doc/design_logging.md` §1)
 + [x] **M0: decided limits in code.** Every value in `doc/design_limits.md` is in
       `sim_estab:limits` or `src/sim_estab/config.py`, with tests in `test/test_config.py`
-+ [ ] **M1: session, Views, command ring, gate.** No simulation content yet
++ [ ] **M1: session, engine views, command ring, gate.** No simulation content yet
       (`doc/design_engine_core.md` §7 step 1)
   + [ ] session lifecycle: `configuring → freeze → running`, with the freeze's ordered
         steps; every step that can fail runs before any step with a visible effect
@@ -33,7 +33,7 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         only participant, the gate never blocks (`doc/design_engine_core.md` §3.3). How
         the host is paced is open
         ([Q1](doc/open_question.md#q1-how-is-the-host-paced))
-  + [ ] the View, `PRIVATE` only: 3 blocks and one `u32` exchange word, publish and take
+  + [ ] the engine view, `PRIVATE` only: 3 blocks and one `u32` exchange word, publish and take
         both `acq_rel`. The permutation invariant makes block reuse safe without
         reclamation. A due publish always has a writable block and is never skipped.
         Registered at the freeze with a projection spec, a row predicate kind (only `ALL`
@@ -42,7 +42,7 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
   + [ ] the return header: a fixed `ret[3]` next to the blocks, written by the reader and
         read by the publisher, carrying predicate parameters, `last_consumed_tick` and a
         cadence hint. It needs no new atomic: the take exchange already publishes it. The
-        publisher adopts only a newer `seq`. It may shape the View and never reaches the
+        publisher adopts only a newer `seq`. It may shape the engine view and never reaches the
         world (`doc/design_engine_core.md` §3.5)
   + [ ] the command ring: one SPSC ring per endpoint, drained in ascending source id at the
         start of each tick; the sequence is the drain position, so there is no sort and no
@@ -69,7 +69,7 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         (`doc/design_python_api.md` §1)
   + [ ] logging management, the remaining parts: the refcounted Python wrapper and the
         per-session file sink (`doc/design_logging.md` §2, §3)
-  + [ ] sanitizer tests for both protocols: the View's permutation invariant, including the
+  + [ ] sanitizer tests for both protocols: the engine view's permutation invariant, including the
         reverse edge from reader to publisher, and a return header written before a take
         arriving intact at the publisher that receives the block, never while the reader is
         still writing it; endpoint revoke racing submit; `close()` racing each any-thread
@@ -108,10 +108,10 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         per tick). Creation is deferred: an entity created this tick has no row until the
         terminal commit
   + [ ] prove that 1 thread and N threads give the same checksums
-+ [ ] **M5: View projection, row predicate, GPU upload**
++ [ ] **M5: engine view projection, row predicate, GPU upload**
   + [ ] the row predicate kinds beyond `ALL` (`AABB`, `SPHERE`, `FRUSTUM`, `TAG`),
         evaluated to a mask and reusing the publish scan and gather. Coarse in the core,
-        exact in the reader; a filtered View carries the id column. Added when publish
+        exact in the reader; a filtered engine view carries the id column. Added when publish
         bandwidth calls for it (`doc/design_engine_core.md` §3.4)
   + [ ] advertise SPIR-V only at device creation. The scope is Vulkan only; today DXIL is
         advertised while `create_pipeline` hard-codes SPIR-V, so selecting D3D12 fails later,
@@ -120,7 +120,7 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         transfer buffer (mapped and unmapped every frame), one cycled destination buffer
         per column rewritten whole, fence handles, and a `last_uploaded_snapshot_tick` per
         destination advanced when its fence signals (`doc/design_data_container.md` §5).
-        GPU buffers are sized per View from its maximum rows; how a View declares that
+        GPU buffers are sized per engine view from its maximum rows; how an engine view declares that
         maximum is open ([Q39](doc/open_question.md#q39-the-gpu-allocator-for-growing-worlds))
   + [ ] port the std430 spike into `libsim_estab_viz_test` as a regression test; a silent
         stride change would corrupt every frame with no error

@@ -10,9 +10,9 @@ decided M0 values. `bind.cpp` still exposes the placeholder top-level `init`, `d
 `util` and `limits`. This design feeds the TODO items "design the basic engine structure"
 and "session management".
 
-Scope of v1: every View is `PRIVATE`. The multi-reader `SHARED` mode is deferred to
-`design_engine_core.md` Appendix A, together with process-host Views. So `engine.snapshot()`
-copies from the default View (§7.2), and a process host has no View.
+Scope of v1: every engine view is `PRIVATE`. The multi-reader `SHARED` mode is deferred to
+`design_engine_core.md` Appendix A, together with process-host engine views. So `engine.snapshot()`
+copies from the default engine view (§7.2), and a process host has no engine view.
 
 Terms are defined in [glossary.md](glossary.md). Companion docs:
 
@@ -104,7 +104,7 @@ Rules:
   refuses new leases and waits, under the shutdown deadline, for running calls to finish.
   Only then does it release native memory.
 - Everything that can outlive a tick and still touch engine memory is **registered with the
-  engine**: mod hosts, and View blocks held by live array views. `close()` unwinds these
+  engine**: mod hosts, and engine view blocks held by live array views. `close()` unwinds these
   registrations before it releases anything native. It alone decides the shutdown order.
 
 ### Pattern
@@ -113,7 +113,7 @@ Rules:
 # pseudo-code
 with sim_estab.Engine(config) as engine:             # ctor = acquire; state = configuring
     mods = sim_estab.mod.load_mods(engine, policy)   # discovery, verification, native load,
-                                                     #   column + View registration. NO freeze
+                                                     #   column + engine view registration. NO freeze
     engine.start_session()                           # the freeze — always explicit, always
                                                      #   the caller's, mods or no mods
     mods.start()                                     # spawn hosts; they may now read the
@@ -177,14 +177,14 @@ Rules:
   depend on which loader ran. It would also have to spawn mod hosts, because spawning must
   follow the freeze (`design_modding.md` §6).
 - **Registered dependants.** The engine holds the set of registered mod hosts
-  (`design_modding.md` §6) and the set of Views (§7.2). Registration gives a dependant the
+  (`design_modding.md` §6) and the set of engine views (§7.2). Registration gives a dependant the
   right to be stopped, drained or detached at shutdown, instead of being torn out from
   under. The sets fill at different times, in this order:
   - the mod bus is registered during `configuring`, before any mod host exists;
-  - Views are registered before the freeze, which closes their set (`design_engine_core.md`
+  - Engine views are registered before the freeze, which closes their set (`design_engine_core.md`
     §2.4 step 3a);
   - mod hosts spawn on `mods.start()`, after the freeze;
-  - held blocks can build up only while `running`, because reading a View raises before
+  - held blocks can build up only while `running`, because reading an engine view raises before
     that.
 - **Shutdown is a chain of three steps**, in this order. The order is forced, not a matter
   of style:
@@ -199,7 +199,7 @@ Rules:
   2. **`stop_sim_async()`**: the staged native join (§4.3) and the error rendezvous. It may
      raise. It runs with the GIL released.
   3. **`close()`**: close the operation lease and wait for running calls, detach retained
-     `PRIVATE` View blocks, then release native resources. It never raises.
+     `PRIVATE` engine view blocks, then release native resources. It never raises.
 
   Steps 1 and 2 cannot swap. The step that stops mod hosts needs the GIL to make progress,
   and the join step must release it. Joining first would starve every thread host for the
@@ -221,7 +221,7 @@ Rules:
   native contexts. The resources are then kept, not freed under a running call. The wait
   releases the GIL; Python mod host teardown has already finished in step 1.
 
-  The `Engine`, every View or snapshot handle that can re-enter it, and every `ModContext`
+  The `Engine`, every engine view or snapshot handle that can re-enter it, and every `ModContext`
   share ownership of this control block. Native pointers live behind it and are cleared only
   after the wait. So a stale handle can still observe `CLOSING`, `CLOSED` or `FAILED`
   without dereferencing a destroyed wrapper. In the `failed` path, which disarms, the
@@ -293,11 +293,11 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
     open ([Q46](open_question.md#q46-process-host-drain-timeout));
   - a thread host was abandoned at shutdown step 1. Thread hosts are cooperative only: a
     host stuck in native code cannot be killed in-process, so it is logged and abandoned
-    (`design_modding.md` §6). An abandoned host may still hold a View block and still call
+    (`design_modding.md` §6). An abandoned host may still hold an engine view block and still call
     `ctx.submit()`. So abandonment moves the engine to `failed`; it is not a warning that
     shutdown then ignores. Process hosts never take this path. They can be killed, so their
-    deadline ends in a kill, not abandonment. The kill also unlinks the host's View
-    shared-memory object once process hosts have Views (`design_engine_core.md` Appendix A);
+    deadline ends in a kill, not abandonment. The kill also unlinks the host's engine view
+    shared-memory object once process hosts have engine views (`design_engine_core.md` Appendix A);
   - the operation-lease wait timed out in shutdown step 3. That shows a running call may
     still be touching native resources.
 
@@ -324,7 +324,7 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
 
   | What | Behaviour in `failed` |
   |---|---|
-  | core state, command rings, View blocks | kept alive (leaked), not freed under a running thread |
+  | core state, command rings, engine view blocks | kept alive (leaked), not freed under a running thread |
   | logging | `critical`, naming exactly what was leaked |
   | `engine.state` | reports `failed` |
   | any further API call | raises `sim_estab.EngineFailedError` |
@@ -401,9 +401,9 @@ class EngineConfig:
     on_failed_stop: str = "raise"        # "raise" | "terminate" (§4.3)
     projection_warn_bytes_per_second: int = 4_000_000_000
                                          # publish bandwidth above which the engine warns,
-                                         #   naming the rate AND THE VIEW; checked per View,
+                                         #   naming the rate AND THE ENGINE VIEW; checked per engine view,
                                          #   not against the session total, because
-                                         #   every remedy belongs to one View. Uncapped
+                                         #   every remedy belongs to one engine view. Uncapped
                                          #   by design and measured instead
                                          #   (design_engine_core.md §3.1,
                                          #   doc/design_limits.md §5)
@@ -461,7 +461,7 @@ Rules:
     such as `on_mod_error="disable"` would say the same as `retry_limit=0`, and the pair
     would allow the contradiction `("disable", retry_limit=3)`.
   - There is no snapshot-refresh setting here. A mod's snapshot cadence is a property of its
-    View, declared where the View is registered (§7.2).
+    engine view, declared where the engine view is registered (§7.2).
 
   `ModPolicy` (`design_modding.md` §3.1) decides which mods exist and what they may do:
   paths, signatures, allowlist, denied capabilities, host override. It is an argument to
@@ -531,15 +531,15 @@ Rules:
 
   1. kill every process host;
   2. confirm each death through `waitpid` or `pidfd`;
-  3. unlink each mod host's View shared-memory object (`design_modding.md` §4.3). This
-     applies only once process hosts have Views (`design_engine_core.md` Appendix A). In v1
-     a process host has no View, so there is nothing to unlink;
+  3. unlink each mod host's engine view shared-memory object (`design_modding.md` §4.3). This
+     applies only once process hosts have engine views (`design_engine_core.md` Appendix A). In v1
+     a process host has no engine view, so there is nothing to unlink;
   4. log `critical`;
   5. abort.
 
   Thread hosts and in-process memory need nothing, because they die with the process. Only
   child processes and named shared-memory objects outlive it. Orphaned mod hosts holding
-  mapped View segments would pile up across runs, which is the failure CI notices last. The
+  mapped engine view segments would pile up across runs, which is the failure CI notices last. The
   cleanup is safe under the very condition that triggers `terminate`. What would not stop is
   an in-process thread, and killing child processes touches nothing it owns.
 - Conversion to the bound C++ options struct happens exactly once, inside the `Engine`
@@ -625,10 +625,10 @@ Rules:
   fixed step from the frame's `dt`, and 30 Hz ticks under a 60 fps render is the normal
   case. In inline mode their execution stays coupled: no tick runs while `render()` blocks
   on vsync. Sim-thread mode separates execution too (§4.3).
-- `render()` takes from its View once per frame. That is one atomic exchange, which also
+- `render()` takes from its engine view once per frame. That is one atomic exchange, which also
   carries its return header back (`design_engine_core.md` §3.5). It then copies the chunks
   it needs, on the CPU, into the renderer-owned upload ring, which fences guard. GPU uploads
-  and dispatches read that ring or cycled memory, never View memory (`design_engine_core.md`
+  and dispatches read that ring or cycled memory, never engine view memory (`design_engine_core.md`
   §3.1). If the snapshot tick has not changed since the previous frame, world state is
   identical. The frame still presents, because camera and UI are per-frame float state, but
   work derived from the tick may be cached or skipped.
@@ -713,14 +713,14 @@ changing the API.
 - **Sim-thread mode is the important one.** A long sim tick cannot drop frames, and
   fast-forward and pause become independent of render. It costs nothing in the API, because
   the boundary mechanisms stay bounded and never block the sim (`design_engine_core.md`
-  §3.2, §5.1). A View publishes with one exchange and cannot fail. A submit into a full ring
+  §3.2, §5.1). An engine view publishes with one exchange and cannot fail. A submit into a full ring
   waits for space, for at most one tick, and the sim never waits for it
   (`design_engine_core.md` §5.1). Whether that wait can happen at all is open
   ([Q8](open_question.md#q8-can-the-admission-wait-ever-happen)).
 - In sim-thread mode the sim thread is an implementation detail behind unchanged artifacts:
   - **Ownership.** The sim thread alone owns the steady clock, the accumulator, the tick
     loop and all core state. Every other thread touches only the three artifacts: commands,
-    Views and events. This is the same one-way boundary as the Python/C++ split, one level
+    engine views and events. This is the same one-way boundary as the Python/C++ split, one level
     down. It holds because of *when*, not because of which threads exist: the sim thread
     owns core state while it runs. The two operations that read core state from the owner
     thread are the freeze's tick-0 publish and `checksum()`. Both happen at moments when the
@@ -796,13 +796,13 @@ changing the API.
     `EngineFailedError`, or hard-aborts, depending on `on_failed_stop`. A `request_stop()`
     during a step returns the tick actually reached: stopping is not a failure.
   - **A stepped tick forces every due publication.** Cadence (§7.2) is a fast-forward
-    optimization and never suppresses it. A View always has a writable block, so every due
+    optimization and never suppresses it. An engine view always has a writable block, so every due
     publication succeeds, and a stepped tick cannot silently drop one. `step()`'s return
     guarantee covers the completed core tick and its publication. A reader that must
-    *observe* every stepped tick still registers a paced View. Publication guarantees the
+    *observe* every stepped tick still registers a paced engine view. Publication guarantees the
     snapshot exists; pacing guarantees someone took it. Whether a stepped tick publishes
-    Views that are not due by their cadence is open
-    ([Q12](open_question.md#q12-does-step-publish-every-view-regardless-of-cadence)).
+    engine views that are not due by their cadence is open
+    ([Q12](open_question.md#q12-does-step-publish-every-engine-view-regardless-of-cadence)).
   - **The wait releases the GIL** (§5 rule 2), for a stronger reason than in `update()`. The
     owner thread blocks for up to the deadline, and every Python thread host would stall
     behind it. On a GIL build, holding the GIL here also makes `KeyboardInterrupt`
@@ -839,9 +839,9 @@ changing the API.
     fill within one tick is open
     ([Q10](open_question.md#q10-can-the-event-ring-fill-within-one-tick)). The value of
     `high_water` is open too ([Q63](open_question.md#q63-what-is-high_water)).
-  - Fast-forward is also what makes per-View cadence (§7.2) worth having. At unbounded speed
+  - Fast-forward is also what makes per-engine-view cadence (§7.2) worth having. At unbounded speed
     most publishes are never looked at, and publishing every tick is O(projection) of pure
-    waste. Lowering a View's cadence during fast-forward costs nothing observable, since
+    waste. Lowering an engine view's cadence during fast-forward costs nothing observable, since
     every reader reads the latest publish either way.
   - **Command submission in sim-thread mode.** Every submission names its tick, in either
     mode. The engine either runs it at that tick or refuses it. Nothing is moved to a later
@@ -871,7 +871,7 @@ changing the API.
     | Operation | Why it never waits |
     |---|---|
     | publish | one `acq_rel` exchange, with no wait for the reader. It may commit pages of its reserved block before filling it; that is budgeted tick work, not part of the atomic step, and the block's address never changes (`design_engine_core.md` §3.1, §3.2) |
-    | View take | one `acq_rel` exchange, which also hands the reader's return header to the publisher (`design_engine_core.md` §3.5) |
+    | Engine view take | one `acq_rel` exchange, which also hands the reader's return header to the publisher (`design_engine_core.md` §3.5) |
     | the command drain | reads whatever index each producer has made visible and stops there. A command submitted a moment later is drained at the next tick (`design_engine_core.md` §5.1) |
     | `submit` into a ring with room | an operation lease, an endpoint lease, three bounded validity checks, then one release store. It never raises, and `queue_full` is a returned result (§6, §7.1). A *full* ring is the admission wait, which is declared above rather than absent here |
     | `drain_events` | never blocks. *Not* calling it is what pauses the sim (§7.3) |
@@ -927,13 +927,13 @@ boundary, or how long a crossing holds the GIL. Rule 5 sets which thread may mak
    Frame-rate readers read snapshots and events, and the world changes only through
    commands. Whether every mod must still declare ready every tick is open
    ([Q2](open_question.md#q2-must-every-mod-be-paced-every-tick)).
-4. **Per-frame snapshot access is zero-copy** (§7.2), through a registered `PRIVATE` View.
+4. **Per-frame snapshot access is zero-copy** (§7.2), through a registered `PRIVATE` engine view.
    Copying a full projection every frame would dwarf every other cost in this document. That
-   is why render owns a View instead of calling `engine.snapshot()`. Occasional readers
+   is why render owns an engine view instead of calling `engine.snapshot()`. Occasional readers
    copy, and that is the right default for them.
 5. **Thread contract** (§6). The `Engine`'s pump and lifecycle calls are externally
-   synchronized. `submit*` is single-producer per endpoint. `View.take()` belongs to the
-   View's single reader. Array views are freely shared. Whether `snapshot()` may be called
+   synchronized. `submit*` is single-producer per endpoint. `view.take()` belongs to the
+   engine view's single reader. Array views are freely shared. Whether `snapshot()` may be called
    from any thread is open
    ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)).
 
@@ -1005,16 +1005,16 @@ Rules:
     interact. Each call holds the operation lease above, and the endpoint lease of
     `design_engine_core.md` §5.1, until it has finished touching the ring.
   - **`engine.snapshot()`**: specified as thread-safe from any thread, on any build. It
-    copies out of the default View under the owner thread's take, and touches no per-caller
+    copies out of the default engine view under the owner thread's take, and touches no per-caller
     state. Its operation lease encloses the copy. This family matters because mods call
     `ctx.snapshot()` from their own mod host threads (`design_modding.md` §4.1). Filing it
     under "lifecycle and pump, externally synchronized" would make every mod snapshot a
-    contract violation. The default View is `PRIVATE`, with one reader, so whether other
+    contract violation. The default engine view is `PRIVATE`, with one reader, so whether other
     threads can really call it is open
     ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)).
-  - **`View.take()`**: only the `PRIVATE` View's single reader thread, whichever thread that
-    is. A `PRIVATE` View has one reader by definition (`design_engine_core.md` §3.2). Two
-    threads taking from one View is the same usage error as two producers on one endpoint.
+  - **`view.take()`**: only the `PRIVATE` engine view's single reader thread, whichever thread that
+    is. A `PRIVATE` engine view has one reader by definition (`design_engine_core.md` §3.2). Two
+    threads taking from one engine view is the same usage error as two producers on one endpoint.
   - **Array views and drained events**: immutable, and freely shared across threads without
     locks. Sharing an array view keeps its block alive, and so delays the next `take()`
     (§7.2). That is a lifetime consequence, not a thread-safety one.
@@ -1043,7 +1043,7 @@ Rules:
   - **`raise_if_failed()`**: owner thread only. It is one of the async-error rendezvous
     points (§8), and those are defined on the driving thread.
 - **Release timing follows scope, not reference counts.** Do not rely on rebinding or `del`
-  to release a View block promptly. On free-threaded builds, deferred and biased reference
+  to release an engine view block promptly. On free-threaded builds, deferred and biased reference
   counting make "the old handle dies when it is rebound" a timing assumption, not a
   guarantee. Hold snapshots in `with` blocks, and bound the derived array views in a
   function frame (§7.2). That is exact on both builds. A design that needs prompt release
@@ -1276,19 +1276,19 @@ Rules:
 
 ### 7.2 Snapshots (outbound state)
 
-State leaves the core through a View (`design_engine_core.md` §3.1). Python sees two
-surfaces over it, and which one you use decides which cost you pay. Every View is `PRIVATE`
+State leaves the core through an engine view (`design_engine_core.md` §3.1). Python sees two
+surfaces over it, and which one you use decides which cost you pay. Every engine view is `PRIVATE`
 in v1.
 
 ```python
 # pseudo-code
 
-# 1. The default: a copy out of the engine's default View. Any number, any thread,
+# 1. The default: a copy out of the engine's default engine view. Any number, any thread,
 #    outlives everything. No registration, no lifetime rules, no refusals.
 snap = engine.snapshot()                     # process-owned copy
 print(snap.tick, snap.column("pop.position")[0])
 
-# 2. Opt-in zero-copy: a View, registered before the freeze.
+# 2. Opt-in zero-copy: an engine view, registered before the freeze.
 engine.register_view("ui", columns=["pop.id", "pop.position"], cadence=1)
 ...
 view = engine.view("ui")                     # the handle; one owner, for the session
@@ -1315,30 +1315,30 @@ print(rv.lag)                                # ticks behind; 0 means keeping up
 
 Rules:
 
-- **`engine.snapshot()` returns a copy.** It reads the default View: the full `[[=viz]]`
-  projection at cadence 1, with predicate `ALL`. That View is `PRIVATE`, and its reader is
+- **`engine.snapshot()` returns a copy.** It reads the default engine view: the full `[[=viz]]`
+  projection at cadence 1, with predicate `ALL`. That engine view is `PRIVATE`, and its reader is
   the owner thread. `snapshot()` copies out of the block that thread holds, then returns
   process-owned memory. Its operation lease encloses the copy (§6), so shutdown cannot free
-  the View under it.
+  the engine view under it.
 
   Because it copies instead of retaining, the owner thread's block is free again when the
-  call returns. So the default View never needs a retention rule, and no caller can cause a
+  call returns. So the default engine view never needs a retention rule, and no caller can cause a
   refusal in another. It does not interact with any other reader and never returns a torn
   snapshot. Most code should use this call. Making it the default keeps the ordinary
   retained value free of engine lifetime rules. Its cost at large world sizes is open
-  ([Q4](open_question.md#q4-can-the-default-view-afford-to-publish-everything-every-tick)),
+  ([Q4](open_question.md#q4-can-the-default-engine-view-afford-to-publish-everything-every-tick)),
   and so is calling it from threads other than the owner thread
   ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)).
-- **Zero-copy needs a registered `PRIVATE` View.** Zero-copy means holding engine memory,
-  and only a single-reader View can promise that the publisher will not write it
+- **Zero-copy needs a registered `PRIVATE` engine view.** Zero-copy means holding engine memory,
+  and only a single-reader engine view can promise that the publisher will not write it
   (`design_engine_core.md` §3.2). Registration happens before the freeze
   (`design_engine_core.md` §2.4 step 3a). It declares the column subset and the cadence, so
-  the cost the View adds to every publish is visible where it is chosen.
+  the cost the engine view adds to every publish is visible where it is chosen.
 
-  There is no duplicate `EngineConfig.views`. Host-application Views are registered by calls
-  during `configuring`. Mod Views are declared in manifests, and the loader registers them
+  There is no duplicate `EngineConfig.views`. Host-application engine views are registered by calls
+  during `configuring`. Mod engine views are declared in manifests, and the loader registers them
   before the freeze (`design_modding.md` §6). Both paths end in the same closed registry.
-- **A View holds exactly one snapshot at a time, for as long as the reader likes.** `take()`
+- **An engine view holds exactly one snapshot at a time, for as long as the reader likes.** `take()`
   returns the newest published block and hands the previous one back. There is no budget, no
   quota and no starvation. The publisher always has a block, and a reader that never takes
   again simply keeps looking at an old tick.
@@ -1390,15 +1390,15 @@ Rules:
   `snap.find` returns the row whose id equals `watched`, or `None`. The equality check
   matters: an id whose entity was erased has the same slot as any later occupant, but a
   different generation, so a search for it finds a neighbour and the check rejects it.
-- **Cadence is per View**, declared at registration. There is no global snapshot-cadence
-  control call. An analytics View at `cadence=30` costs a thirtieth of a render View. A tick
-  under a `step()` grant attempts every View regardless of cadence, and every attempt
-  succeeds (§4.3). Whether `step()` really publishes Views that are not due is open
-  ([Q12](open_question.md#q12-does-step-publish-every-view-regardless-of-cadence)).
+- **Cadence is per engine view**, declared at registration. There is no global snapshot-cadence
+  control call. An analytics engine view at `cadence=30` costs a thirtieth of a render engine view. A tick
+  under a `step()` grant attempts every engine view regardless of cadence, and every attempt
+  succeeds (§4.3). Whether `step()` really publishes engine views that are not due is open
+  ([Q12](open_question.md#q12-does-step-publish-every-engine-view-regardless-of-cadence)).
 - **The predicate kind is declared at registration; its parameters are set at run time.**
   `predicate=` takes one of `"all"` (the default), `"aabb"`, `"sphere"`, `"frustum"` or
   `"tag"` (`design_engine_core.md` §3.4). `view.set_predicate(**params)` writes the
-  parameters into the View's return header. They reach the publisher at the **next
+  parameters into the engine view's return header. They reach the publisher at the **next
   `take()`**, because that exchange is what publishes them (`design_engine_core.md` §3.5).
   Two consequences follow:
   - **Parameters are one publish cycle stale, by design.** The core's predicate is
@@ -1407,29 +1407,29 @@ Rules:
     frame.
   - **`set_predicate` without a later `take()` does nothing.** It is not a control call and
     never enters the command ring. It can never affect the simulation, only which rows this
-    View contains.
-- **A filtered View projects `pop.id` implicitly.** Row 3 of a filtered snapshot is not
+    engine view contains.
+- **A filtered engine view projects `pop.id` implicitly.** Row 3 of a filtered snapshot is not
   entity 3. So any predicate other than `"all"` adds the `id` column, at 8 bytes per matched
   row, whether or not it was requested. A renderer that only draws may declare
   `identity=False` to decline it. GPU state must not key on a snapshot row across frames
   anyway (`design_data_container.md` §5). Per-entity GPU state would key on slot and
-  generation instead, and how a View projects them is open
+  generation instead, and how an engine view projects them is open
   ([Q57](open_question.md#q57-gpu-per-entity-state-across-frames)). How `identity=False` fits with the `id` column being in
   every projection is open ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
 - **`view.lag` and `view.matched_rows`** are the two counters the return header provides.
   `lag` is how many ticks behind the reader is, computed from the `last_consumed_tick` that
-  the return header carries back. A single-reader View never skips a publish, so without
+  the return header carries back. A single-reader engine view never skips a publish, so without
   `lag` a lagging reader is invisible. `view.hint_cadence(k)` is the advisory back-pressure
   that goes with it. The publisher may ignore it, and a reader that cannot miss a tick uses
   `paced=True` instead.
-- **A View may be paced.** Registering it with `paced=True` and a deadline makes its reader
+- **An engine view may be paced.** Registering it with `paced=True` and a deadline makes its reader
   a participant (`design_engine_core.md` §3.3). The core will not advance past a tick the
-  View has not taken. That is how a recorder or training-data collector makes sure it misses
+  engine view has not taken. That is how a recorder or training-data collector makes sure it misses
   no tick. It costs what it says: up to the declared deadline of tick latency, and only
-  while that View is behind. How a take counts as readiness is not yet specified
-  ([Q14](open_question.md#q14-how-does-a-paced-view-count-as-ready)).
+  while that engine view is behind. How a take counts as readiness is not yet specified
+  ([Q14](open_question.md#q14-how-does-a-paced-engine-view-count-as-ready)).
 
-  The default is `False`, and a View that is not paced cannot delay a tick, however slow it
+  The default is `False`, and an engine view that is not paced cannot delay a tick, however slow it
   is. Pacing is the only way to guarantee no missed tick. A reader that only wants the core
   to ease off sends a cadence hint in its return header instead (`design_engine_core.md`
   §3.5). The hint is advisory and never enters the gate.
@@ -1446,8 +1446,8 @@ Rules:
   | At close | Outcome |
   |---|---|
   | an in-progress `snapshot()` or other native API call | admitted before `CLOSING`; allowed to finish under the shutdown deadline |
-  | a block held by a live array view | detached from its View, and freed when the last array view on it is dropped |
-  | Views, rings, contexts, devices | released normally |
+  | a block held by a live array view | detached from its engine view, and freed when the last array view on it is dropped |
+  | Engine views, rings, contexts, devices | released normally |
   | the handle | raises `EngineClosedError` on anything that re-enters the engine |
   | the array memory | stays valid and frozen. Nothing observable changes, since it was immutable anyway |
 
@@ -1456,14 +1456,14 @@ Rules:
   graph. Detaching is allowed only after the count reaches zero.
 
   - **Detach happens only at close, never on the publish path.** Publishing writes a block
-    the View already owns. A detach there would force the publisher to allocate a
+    the engine view already owns. A detach there would force the publisher to allocate a
     replacement outside the tick budget, which `design_engine_core.md` §3.2 forbids. At
     close, publishing has already stopped, so that allocation never happens. A block's
-    address never changes: it reserves address space for the View's maximum rows and commits
+    address never changes: it reserves address space for the engine view's maximum rows and commits
     pages as matched rows reach them (`design_engine_core.md` §3.1).
   - Remaining cost, stated so it is not discovered later: a caller that parks an array view
     in a global keeps that memory until interpreter exit. The cost is bounded: one block per
-    `PRIVATE` View, once per process, since one engine is closed once and a View holds one
+    `PRIVATE` engine view, once per process, since one engine is closed once and an engine view holds one
     block. It can neither recur nor grow.
 - Fixed-point to float conversion happened at publish, by a core rule. Python sees floats
   and may do anything with them. Nothing flows back except commands.
@@ -1606,7 +1606,7 @@ Rules:
   |---|---|---|
   | Any new call once closing has linearized, or any call on a closed engine or handle (§2, §6, §7.2) | `EngineClosedError` | no; terminal for that engine |
   | Any call once the engine is `failed`; `stop_sim_async()` on the final join timeout; `step()` when its deadline expires a second time (§2, §4.3) | `EngineFailedError` | no; terminal, and the process is poisoned |
-  | `View.take()` while an array view on the previous snapshot is alive (§7.2) | `ViewBusyError` | yes: drop the array views, or copy |
+  | `view.take()` while an array view on the previous snapshot is alive (§7.2) | `ViewBusyError` | yes: drop the array views, or copy |
   | Any lifecycle or pump call off the owner thread (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
   | `update()` while sim-thread mode runs; `step()` while sim-thread mode runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `checksum()` while the sim thread is not quiescent (§6); any pump call in a mode that forbids it (§4.3); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, stop the sim thread, use the right pump, or start the session first |

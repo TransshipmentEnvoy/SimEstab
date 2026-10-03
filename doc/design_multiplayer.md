@@ -203,7 +203,7 @@ local gate. They do not need to share one atomic variable.
 | Per-endpoint capacity | A declaration, identical on every peer, of how many commands one endpoint may hold for one tick. It limits what a peer may submit, never what a tick runs: the drain takes everything stamped for the tick (`design_engine_core.md` §5.1). So there is no per-tick cap that two peers could apply to different amounts of buffered input |
 | `(source id, sequence)` total order | The drain assigns it from data every peer has: endpoint order and position in the ring. Nothing is sent over the wire that could be forged, and nothing is sorted |
 | Replay | A lockstep session's turn log is a replay artifact. Commands are recorded as they are consumed, so the two are the same data in the same format |
-| Views, projection, cadence | Entirely local. No View data crosses the network, and a peer's View settings cannot change what it computes |
+| Engine views, projection, cadence | Entirely local. No engine view data crosses the network, and a peer's engine view settings cannot change what it computes |
 
 ## 4. Authority
 

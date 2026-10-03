@@ -186,13 +186,14 @@ class EngineConfig:
     on_failed_stop: str = "raise"
 
     #: Publish bandwidth above which the engine emits a warning naming the measured
-    #: rate **and the View**. Evaluated **per View**, never against the session total:
-    #: every remedy is a change to one declaration — a narrower spec, a tighter row
-    #: predicate, a lower cadence — so a crossing has to name one. The projection is
-    #: deliberately uncapped (``doc/design_limits.md`` §5); its cost is measured instead.
+    #: rate **and the engine view**. Evaluated **per engine view**, never against the
+    #: session total: every remedy is a change to one declaration — a narrower spec, a
+    #: tighter row predicate, a lower cadence — so a crossing has to name one. The
+    #: projection is deliberately uncapped (``doc/design_limits.md`` §5); its cost is
+    #: measured instead.
     #:
-    #: 4 GB/s is reasoned, not measured. One unfiltered View over 10⁶ live rows at a
-    #: 32-byte spec is 0.96 GB/s at 30 Hz, the scale this design budgets for, so a
+    #: 4 GB/s is reasoned, not measured. One unfiltered engine view over 10⁶ live rows
+    #: at a 32-byte spec is 0.96 GB/s at 30 Hz, the scale this design budgets for, so a
     #: threshold near 1 GB/s would warn during ordinary operation.
     projection_warn_bytes_per_second: int = 4_000_000_000
 

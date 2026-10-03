@@ -176,7 +176,7 @@ object type; the others annotate members. Every annotation is optional:
 
 **Every object type has ids.** An id is a slot and its generation (§2.2), not a stored
 column, so no annotation declares it. A save holds every slot's generation, so ids survive a
-save and load (§2.2). Publish synthesizes the id column for a View that projects it (§5.1).
+save and load (§2.2). Publish synthesizes the id column for an engine view that projects it (§5.1).
 The id passes through the projection unconverted: the `fixed<> → float` mapping does not
 apply to it. It is not eligible for `[[=gpu]]`, because 64-bit integers in GLSL need an
 extension. Its two `u32` halves could be projected instead (§5). Python sees `uint64`.
@@ -633,24 +633,24 @@ std430 and persistent-mapping idiom. Where SDL's contract differs from that idio
   snapshot columns at all. They live in the peripheral's own instances (§5.1).
 - **Fixed-point converts to float once, at the projection boundary**
   (`design_engine_core.md` §5). The snapshot publisher converts `fixed<>` columns to float
-  arrays while projecting into a View's block (`design_engine_core.md` §3.1). GPU-side
+  arrays while projecting into an engine view's block (`design_engine_core.md` §3.1). GPU-side
   compute (viz, analytics, neural-net inference) reads the storage-buffer snapshot, and can
   affect the core only through commands.
 
 **Upload path (v1).** This is the CPU/GPU lifetime boundary of `design_engine_core.md` §3.1,
 written against SDL's actual contract:
 
-1. **Lifetime boundary.** The GPU never reads View memory. The reader (a renderer or a
+1. **Lifetime boundary.** The GPU never reads engine view memory. The reader (a renderer or a
    GPU-compute peripheral) copies the columns it needs, on the CPU, into a staging transfer
-   buffer. That CPU copy is the boundary. The View block it copied from stays the reader's
+   buffer. That CPU copy is the boundary. The engine view block it copied from stays the reader's
    until its next `take()`.
 2. **Staging is mapped per frame, never persistently.** SDL requires that "you must unmap
    the transfer buffer before encoding upload commands" (`SDL_gpu.h:3837`). So a
    persistently mapped upload ring cannot be built on this backend. The sequence is
    `SDL_MapGPUTransferBuffer(staging, cycle = true)`, then a `memcpy` of every `[[=gpu]]`
    column, then `SDL_UnmapGPUTransferBuffer`, then encode. There is one staging buffer per
-   frame, sized to the sum of the `[[=gpu]]` column sizes. That sum is the render View's
-   declared projection spec (`design_engine_core.md` §3.1) times the View's maximum rows
+   frame, sized to the sum of the `[[=gpu]]` column sizes. That sum is the render engine view's
+   declared projection spec (`design_engine_core.md` §3.1) times the engine view's maximum rows
    (§5.1), so the size is known at the freeze rather than discovered. `cycle = true` on the map makes reuse across frames safe
    without hand-written fence tracking of the staging buffer.
 3. **Destinations are cycled and rewritten whole.** There is one `SDL_UploadToGPUBuffer` per
@@ -692,7 +692,7 @@ once per frame, so at 60 fps the worst case is 60 uploads per second. The exampl
 below assume that worst case; at one upload per tick they halve. At 10⁵ entities × 8 float
 columns, one upload is about 3 MB, or about 190 MB/s at 60 per second, which is
 unremarkable. At 10⁶ × 16 it is about 64 MB per upload, or about 3.8 GB/s, which is not
-viable. So upload bytes per frame is published alongside the View metrics of
+viable. So upload bytes per frame is published alongside the engine view metrics of
 `design_engine_core.md` §3.1: publish duration, publish bytes per second, matched rows, last
 published tick and consumer lag. Reaching GB/s rates is the trigger for revisiting the
 approach.
@@ -701,14 +701,14 @@ These figures illustrate the cost model; they are not a budget. There is no cap 
 row width, by decision (`design_engine_core.md` §3.1, `design_limits.md` §5), because width
 × matched rows is what matters, and matched rows are bounded only by the cap.
 
-**GPU buffers are sized from the View, not the table.** An SDL GPU buffer cannot be resized
+**GPU buffers are sized from the engine view, not the table.** An SDL GPU buffer cannot be resized
 after creation (`SDL_gpu.h:987-991`: usage and size are fixed at create). Every object type
 has a cap (§2.2), so a destination could be sized once, at the cap. But a cap is a ceiling on
 live entities, not a working size, and sizing every `[[=gpu]]` column at 2²⁴ rows would
-reserve device memory nobody uses. So each destination is sized from its View's maximum rows
-(§5.1): the most rows one publish of that View can hold.
+reserve device memory nobody uses. So each destination is sized from its engine view's maximum rows
+(§5.1): the most rows one publish of that engine view can hold.
 
-How a View declares its maximum, what the default is, and whether destinations suballocate
+How an engine view declares its maximum, what the default is, and whether destinations suballocate
 from a few large buffers are open (`design_limits.md` §7;
 [Q39](open_question.md#q39-the-gpu-allocator-for-growing-worlds)). Suballocation would let
 one destination hold several columns without breaking the cycling invariant, because cycling
@@ -719,12 +719,12 @@ it**, whatever the allocation underneath.
 The GB/s figure above is only this document's trigger for revisiting whole-column upload. It
 is not the publish threshold. The two answer different questions: device bandwidth here, and
 the sim thread's projection cost in `design_limits.md` §5. Publish uses its own
-`projection_warn_bytes_per_second`, per View.
+`projection_warn_bytes_per_second`, per engine view.
 
 The 10⁶ case above also shows what a large world needs. Reaching 10⁷ live rows is not a
 matter of narrower columns: a 32-byte projection is still 320 MB per publish. It needs the
 projection to stop being *every live row*, since no reader wants every live row at that
-scale. **A View declares both projection axes.** Over columns it declares its spec. Over
+scale. **An engine view declares both projection axes.** Over columns it declares its spec. Over
 rows it declares a predicate kind whose parameters arrive with each publish
 (`design_engine_core.md` §3.1, §3.4). §5.1's generator emits both. The row half costs it
 little: evaluating the predicate gives a mask, which is ANDed with the live bitmap, and
@@ -773,8 +773,8 @@ this rule.
 Core slots, unlike snapshot rows, are stable for an entity's whole life (§2.2), and both
 halves of an id are `u32`, which GLSL handles natively. So a GPU feature that wants
 per-entity state across frames (trails, selection highlight, LOD caches, temporal
-accumulation) can key it on slot and generation, if its View projects them. Whether and how
-Views project them is open
+accumulation) can key it on slot and generation, if its engine view projects them. Whether and how
+engine views project them is open
 ([Q57](open_question.md#q57-gpu-per-entity-state-across-frames)). Keying such state on a
 snapshot row instead is how a renderer starts smearing state across unrelated entities.
 
@@ -794,7 +794,7 @@ enters `failed` (`design_python_api.md` §2). There is no recover-and-re-upload 
 none is planned. The GPU is peripheral-domain, so core state is untouched, nothing related
 to determinism is lost, and the session can still be replayed.
 
-**Publish cost.** A snapshot *publish* gathers the rows matched by the View's row predicate
+**Publish cost.** A snapshot *publish* gathers the rows matched by the engine view's row predicate
 (`design_engine_core.md` §3.1, §3.4). Its cost, a scan over the live chunks plus a gather
 over matched rows, is sim-thread work under the projection budget of that section.
 
@@ -816,22 +816,22 @@ mapping `fixed<> → float` applied. There is one container *mechanism*, never o
   (`design_python_api.md` §7.2), the storage-buffer staging copy (§5) and the mod-facing
   column catalog (§7.2) all describe this one instance. No separate "snapshot format" exists
   anywhere.
-- **Publish is a generated kernel.** It covers the rows matched by the View's row predicate
-  and the columns the View declares (`design_engine_core.md` §3.1, §3.4), in three steps:
+- **Publish is a generated kernel.** It covers the rows matched by the engine view's row predicate
+  and the columns the engine view declares (`design_engine_core.md` §3.1, §3.4), in three steps:
 
   1. **Mask.** The live bitmap ANDed with the row predicate. A chunk whose live count is 0
      is skipped.
   2. **Scan.** An exclusive scan over the mask gives every matched row its snapshot row.
-  3. **Gather.** Each declared column is copied into the View's writable block, converted
+  3. **Gather.** Each declared column is copied into the engine view's writable block, converted
      from fixed-point to float.
 
   Every destination is a pure function of the mask, computed before anything is written, so
   the gather may run in parallel and in any order. The block's `snapshot_tick` is the only
-  version a reader sees. There is one kernel per distinct projection spec, not one per View.
-- **Blocks are reserved, not grown.** A View's matched rows can change on every publish, up
-  to the View's **maximum rows**: its object type's cap, unless the View declares fewer. Each
+  version a reader sees. There is one kernel per distinct projection spec, not one per engine view.
+- **Blocks are reserved, not grown.** An engine view's matched rows can change on every publish, up
+  to the engine view's **maximum rows**: its object type's cap, unless the engine view declares fewer. Each
   block reserves address space for that maximum and commits pages as matched rows reach
-  them, so a block's address never changes (`design_engine_core.md` §3.1). How a View declares its
+  them, so a block's address never changes (`design_engine_core.md` §3.1). How an engine view declares its
   maximum is open ([Q39](open_question.md#q39-the-gpu-allocator-for-growing-worlds)).
 - **Dense, and carrying the id column.** Core storage has holes (§2.2), but publish gathers
   only live rows, so a snapshot has none: no validity bitmap, no wasted bandwidth, and every
@@ -840,7 +840,7 @@ mapping `fixed<> → float` applied. There is one container *mechanism*, never o
   snapshots. Identity travels as the id column, which publish synthesizes from slot and
   generation. Snapshot rows are in slot order, so the id column is sorted ascending for
   every object type. A reader reads row `r`, takes `id[r]`, and names *that* id in any
-  command. Whether every View carries the id column is open
+  command. Whether every engine view carries the id column is open
   ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
 
   **Ids stay aligned across the boundary**: the id read from a tick-N snapshot is the id a
@@ -870,7 +870,7 @@ mapping `fixed<> → float` applied. There is one container *mechanism*, never o
 | Instance | Domain | Column types | Mutable by |
 |---|---|---|---|
 | Core world container | deterministic | fixed/int | tick systems only (phased commit, including Tier 3 mods) |
-| Snapshot instances (View blocks) | boundary | float | the publisher only; readers get `const` access |
+| Snapshot instances (engine view blocks) | boundary | float | the publisher only; readers get `const` access |
 | Peripheral containers | float | float | the peripheral that holds them, freely |
 
 ## 6. flecs boundary
@@ -927,10 +927,10 @@ Logic mods live outside the determinism boundary and use exactly two artifacts
   is not a security boundary: Python in-process can reflect into anything, the same
   precedent as core-mod capabilities (`design_modding.md` §5.4). The API check keeps the
   observable surface the same on both mod hosts. On the process host the enforcement is also
-  physical. That mod's View is projected from the columns its capabilities allow, straight
+  physical. That mod's engine view is projected from the columns its capabilities allow, straight
   into its own shared-memory segment, so its mapping contains nothing else
-  (`design_modding.md` §4.3). This applies once process-host Views exist; they are deferred
-  together with the `SHARED` View (`design_engine_core.md` Appendix A). A mod that asks for
+  (`design_modding.md` §4.3). This applies once process-host engine views exist; they are deferred
+  together with the `SHARED` engine view (`design_engine_core.md` Appendix A). A mod that asks for
   sensitive columns is a policy signal to run it on the process host.
 
   Command capabilities are enforced at the ring on every mod host, because writes always
@@ -1147,8 +1147,8 @@ These rules from §2 to §7 apply at every tier.
 - **Id lookup is O(1) for every object type** (§2.2). The slot is the row, and the
   generation says whether the entity is still there. A snapshot's id column is sorted for
   every object type (§5.1).
-- **GPU destination buffers are sized per View** (§5), from the View's maximum rows. How a
-  View declares that maximum is open (`design_limits.md` §7;
+- **GPU destination buffers are sized per engine view** (§5), from the engine view's maximum rows. How an
+  engine view declares that maximum is open (`design_limits.md` §7;
   [Q39](open_question.md#q39-the-gpu-allocator-for-growing-worlds)).
 
 ## 8. Risks and open questions

@@ -100,11 +100,11 @@ export inline constexpr std::uint32_t max_players = 128;
 /// the player count so a full lobby still leaves room for mods beside its players.
 export inline constexpr std::uint32_t max_sources = 256;
 
-/// Views a session may register. Publish cost is a sum over due Views, so the number of
-/// terms must be knowable at construction; the size of each is measured, not capped. The
-/// cap closes the sum rather than restraining a design, which is why it is set well above
-/// any plausible session - and why raising it raises the worst-case snapshot memory with
-/// it, since that is a sum over the same terms.
+/// Engine views a session may register. Publish cost is a sum over due engine views, so the
+/// number of terms must be knowable at construction; the size of each is measured, not
+/// capped. The cap closes the sum rather than restraining a design, which is why it is set
+/// well above any plausible session - and why raising it raises the worst-case snapshot
+/// memory with it, since that is a sum over the same terms.
 export inline constexpr std::uint32_t max_views = 64;
 
 /// Anything the gate waits for, with a declared deadline and an expiry policy. Shares
@@ -163,16 +163,17 @@ export inline constexpr std::uint32_t max_entity_capacity = 0xFFFF'FFFFu;
 // nothing about the simulation changes.
 // ---------------------------------------------------------------------------
 
-/// Publish bandwidth above which the engine warns, naming the measured rate AND THE VIEW.
-/// Evaluated PER VIEW, never against the session total: every remedy is a change to one
-/// declaration - a narrower spec, a tighter row predicate, a lower cadence - so a crossing
-/// has to name one. The total is still reported; it is not what this is read against.
+/// Publish bandwidth above which the engine warns, naming the measured rate AND THE ENGINE
+/// VIEW. Evaluated PER ENGINE VIEW, never against the session total: every remedy is a
+/// change to one declaration - a narrower spec, a tighter row predicate, a lower cadence -
+/// so a crossing has to name one. The total is still reported; it is not what this is read
+/// against.
 ///
-/// 4 GB/s is reasoned, not measured (design_limits.md 5). One unfiltered View over 10^6
-/// live rows at a 32-byte spec is 0.96 GB/s at 30 Hz - the scale this design budgets for -
-/// so a threshold near 1 GB/s would warn during ordinary operation. 4 GB/s leaves that case
-/// quiet, still catches the same View at 10^7 rows (9.6 GB/s), and stays far under a
-/// memcpy-bound machine.
+/// 4 GB/s is reasoned, not measured (design_limits.md 5). One unfiltered engine view over
+/// 10^6 live rows at a 32-byte spec is 0.96 GB/s at 30 Hz - the scale this design budgets
+/// for - so a threshold near 1 GB/s would warn during ordinary operation. 4 GB/s leaves that
+/// case quiet, still catches the same engine view at 10^7 rows (9.6 GB/s), and stays far
+/// under a memcpy-bound machine.
 export inline constexpr std::uint64_t default_projection_warn_bytes_per_second = 4'000'000'000;
 
 // ---------------------------------------------------------------------------
@@ -200,7 +201,7 @@ static_assert(max_paced_participants <= max_sources,
               "participants share the source ceiling: submitting makes a peripheral a "
               "participant, so the two sets nearly coincide");
 
-static_assert(max_views > 0, "the engine registers a default View, so zero is unrepresentable");
+static_assert(max_views > 0, "the engine registers a default engine view, so zero is unrepresentable");
 static_assert(max_paced_participants > 0, "the host is always a participant, so zero is unrepresentable");
 
 static_assert(default_entity_capacity > 0, "a cap of zero admits no entity, so no type could exist");

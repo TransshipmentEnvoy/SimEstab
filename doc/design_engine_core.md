@@ -14,11 +14,11 @@ faster, but must not order operations differently.
 
 Scope of v1. In v1, simplicity comes before progress guarantees:
 
-- Views are `PRIVATE` only: one reader each. The multi-reader `SHARED` mode is designed but
+- Engine views are `PRIVATE` only: one reader each. The multi-reader `SHARED` mode is designed but
   deferred to Appendix A until process mod hosts need snapshots; they are its only real
   user. It costs a full copy per reader, which dominates at the row counts
   `design_limits.md` §5 budgets for.
-- A View filters rows (§3.4) as well as columns. Filtering rows is what makes 10⁷ live rows
+- An engine view filters rows (§3.4) as well as columns. Filtering rows is what makes 10⁷ live rows
   affordable; choosing columns alone cannot.
 - The reader sends a small return header back to the publisher on every take (§3.5).
 - Publishing may allocate memory. It never waits (§3.1).
@@ -113,7 +113,7 @@ Progress classes, used in exactly this sense throughout:
 - **Wait-free**: finishes in a bounded number of steps whatever other threads do. The bound
   is stated where the claim is made. Every steady-state mechanism below is wait-free.
 - **Lock-free**: a retry always means another thread made progress. No v1 mechanism is
-  lock-free without being wait-free. (Reading a `SHARED` View would be, in Appendix A.)
+  lock-free without being wait-free. (Reading a `SHARED` engine view would be, in Appendix A.)
 - **Bounded wait**: the core may block on another party. An unbounded or undeclared wait is
   forbidden. Every wait follows three rules. It is the gate (§3.3) or one of the shutdown
   and revocation drains below. It is bounded by a declared deadline. Its expiry has a
@@ -130,9 +130,9 @@ same object makes the payload visible. Never publish by setting a "ready" flag n
 a consumer may already be reading: that is two operations, and two operations are not a
 linearization point.
 
-**No publish path reclaims memory.** No View uses hazard pointers, payload reference counts
+**No publish path reclaims memory.** No engine view uses hazard pointers, payload reference counts
 or deferred reclamation. GCC 16 provides neither `<hazard_pointer>` nor `<rcu>`, so any such
-scheme would have to be written here. Instead, View ownership moves by a single exchange,
+scheme would have to be written here. Instead, engine view ownership moves by a single exchange,
 and the permutation invariant of §3.2 makes block reuse safe without reclamation. (The
 deferred `SHARED` mode uses a short-lived reader pin count instead, and pays a full copy per
 reader; Appendix A.)
@@ -146,7 +146,7 @@ specified:
 
 | Mechanism | Direction | Linearization point | Progress | Specified in |
 |---|---|---|---|---|
-| **View** | sim → one reader; the reader's return header travels back on the same edge | publish: the release exchange of the View's control word (§3.2 (P2)); take: the release exchange at (T2), which also publishes the return header | publisher wait-free (1 exchange); reader wait-free (1 exchange) | §3.2, §3.5 |
+| **Engine view** | sim → one reader; the reader's return header travels back on the same edge | publish: the release exchange of the engine view's control word (§3.2 (P2)); take: the release exchange at (T2), which also publishes the return header | publisher wait-free (1 exchange); reader wait-free (1 exchange) | §3.2, §3.5 |
 | **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it | drain wait-free (1 load); submit wait-free unless the ring is full, where it is a **bounded wait** of at most one tick | §5.1 |
 | **Command outcome** | sim → producer | the outcome's release publication at the end of the tick that consumed the command | reader **blocks, bounded** by the named tick running; refused outright if the reader still holds that tick | §5.1 |
 | **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of `admission`; revocation: the `OPEN → REVOKING` exchange | submit side wait-free; revoker blocks under the shutdown deadline | §5.1 |
@@ -327,7 +327,7 @@ computed and the world stops being configurable. The Python state machine is in
 - **`configuring`**: resources are acquired, but no world is running. Allowed: load content,
   load and register core mods (including `register_column`, `design_data_container.md`
   §7.3), register mod hosts, load a replay artifact, and control calls (§1). Not allowed:
-  ticks, command submission, View reads and checksums. Each of those is defined in terms of
+  ticks, command submission, engine view reads and checksums. Each of those is defined in terms of
   a session, and there is none yet.
 - **The freeze**: one call on the owner thread, running the ordered steps below. **No
   loading function performs the freeze.** Loading content, loading a replay, loading native
@@ -364,17 +364,17 @@ terminal state instead of a half-started session.
    (`design_python_api.md` §4.2) and still needs the map to attribute the recorded stream,
    and a host that fails to start renumbers nobody.
 
-   3a. **Close the View and participant registries** (§3.1, §3.3). Each View's declarations
+   3a. **Close the engine view and participant registries** (§3.1, §3.3). Each engine view's declarations
    are now final: its projection spec, its row predicate kind (§3.4), its cadence, and
-   whether it is paced. Whether a View may leave out the id column is open
+   whether it is paced. Whether an engine view may leave out the id column is open
    ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)). The participant set,
    and each participant's deadline and expiry policy, are final too. Both registries close
-   here for the same reason: they set the per-tick cost. Publish cost is a sum over Views,
+   here for the same reason: they set the per-tick cost. Publish cost is a sum over engine views,
    and latency is the largest deadline over participants. A cost that can change during a
    session cannot be planned for. The predicate *kind* closes here for the same reason, but
    its *parameters* do not. Parameters change how many rows match without changing the shape
    of the cost, so they arrive with each publish through the return header (§3.5). There is
-   no View mode or placement to close: every v1 View is `PRIVATE` and heap-allocated, and
+   no engine view mode or placement to close: every v1 engine view is `PRIVATE` and heap-allocated, and
    both return with the `SHARED` mode (Appendix A). The host is registered as a participant
    in this step; in the simplest session it is the only one. This step comes after step 3
    because a participant is identified by its source id.
@@ -395,11 +395,11 @@ terminal state instead of a half-started session.
    nobody has seen yet, not one already publishing snapshots under a named log file.
 8. **Open the per-session log sink**, named from the identity that now exists
    (`design_logging.md` §2).
-9. **Publish tick 0 into every registered View** and emit `session.started`. This marks the
+9. **Publish tick 0 into every registered engine view** and emit `session.started`. This marks the
    start, before tick 1. The owner thread publishes it, because no sim thread exists yet
    (`run_sim_async` is not allowed in `configuring`). It is the only publish not made by the
-   tick loop, and §3.2 needs no special case for it. Reading a View is not allowed in
-   `configuring`, so no reader can see a View that has never been published. That state is
+   tick loop, and §3.2 needs no special case for it. Reading an engine view is not allowed in
+   `configuring`, so no reader can see an engine view that has never been published. That state is
    unreachable rather than defined, and the protocol needs no sentinel value.
 
 Steps 1 to 7 compute and allocate over state that is already loaded, plus one call into code
@@ -432,16 +432,16 @@ standard *Fix Your Timestep* structure (Gaffer On Games), without interpolation.
   snapshot format itself does not change, so interpolation could be added later inside the
   viz layer alone if a high frame-to-tick ratio made stepping visible.
 
-### 3.1 Snapshot publication: the View
+### 3.1 Snapshot publication: the engine view
 
-**A snapshot reaches a peripheral through a View.** It is the only way state leaves the
+**A snapshot reaches a peripheral through an engine view.** It is the only way state leaves the
 core: one mechanism and one data structure.
 
-A View is **three payload blocks plus one published word**. The core writes only a block it
+An engine view is **three payload blocks plus one published word**. The core writes only a block it
 owns exclusively, then publishes it with one atomic exchange. Nothing on the publish path is
 reference-counted or reclaimed.
 
-**A View is `PRIVATE`**: it has exactly one reader, and that reader is trusted.
+**An engine view is `PRIVATE`**: it has exactly one reader, and that reader is trusted.
 
 | Property | Value |
 |---|---|
@@ -460,60 +460,60 @@ the reader, one is being written, and one is the newest published block not yet 
 a full copy per reader, which is the largest cost in the whole design at the row counts
 `design_limits.md` §5 budgets for. Appendix A explains why the copy is unavoidable. The only
 user that really needs the mode is a process mod host, which cannot be given a `PRIVATE`
-View (see the rules below, and `design_modding.md` §4.3). `SHARED` returns when process
+engine view (see the rules below, and `design_modding.md` §4.3). `SHARED` returns when process
 hosts do.
 
-**A View is registered before the freeze, not requested on the fly.** The freeze closes the
-registry (§2.4 step 3a). Each View declares:
+**An engine view is registered before the freeze, not requested on the fly.** The freeze closes the
+registry (§2.4 step 3a). Each engine view declares:
 
 | Declared | Why it is declared rather than inferred |
 |---|---|
 | **projection spec**: which columns | The projection is what the payload is. Declaring the columns per reader makes publish cost knowable at construction |
 | **row predicate kind**: which rows | This decides whether 10⁷ live rows are affordable at all (§3.4). The kind is fixed here so the cost model is closed; its parameters change per publish through the return header (§3.5) |
-| **cadence**: publish every `k` ticks | An analytics View at `k = 30` costs a thirtieth of a render View. Cadence is per View; there is no global cadence setting |
-| **paced**, with a deadline | A reader that must see every tick registers a paced View and becomes a participant (§3.3) |
+| **cadence**: publish every `k` ticks | An analytics engine view at `k = 30` costs a thirtieth of a render engine view. Cadence is per engine view; there is no global cadence setting |
+| **paced**, with a deadline | A reader that must see every tick registers a paced engine view and becomes a participant (§3.3) |
 
-Whether a View may leave out the id column is open
-([Q5](open_question.md#q5-is-the-id-column-in-every-projection)). How a paced View's take
+Whether an engine view may leave out the id column is open
+([Q5](open_question.md#q5-is-the-id-column-in-every-projection)). How a paced engine view's take
 counts as ready is not yet specified
-([Q14](open_question.md#q14-how-does-a-paced-view-count-as-ready)).
+([Q14](open_question.md#q14-how-does-a-paced-engine-view-count-as-ready)).
 
-**Placement**, heap or shared memory, is not a v1 declaration. Every View is heap-allocated
+**Placement**, heap or shared memory, is not a v1 declaration. Every engine view is heap-allocated
 engine memory. Shared-memory placement comes back with `SHARED` and its split-permission
 interprocess ABI (Appendix A, `design_modding.md` §4.3).
 
 Three rules follow from this:
 
-- **A process-host mod gets no View in v1.** A `PRIVATE` publisher uses the index the reader
+- **A process-host mod gets no engine view in v1.** A `PRIVATE` publisher uses the index the reader
   wrote (§3.2), so a hostile reader could steer a payload address. That cannot be handed to
   a sandbox. `SHARED` can face an untrusted reader, because the reader writes only
   block-state words that the publisher reads as availability and never dereferences
   (Appendix A, `design_modding.md` §4.3). A thread-host mod is trusted and registers
   normally.
-- **The engine holds one default View.** It is `PRIVATE` and owned by the host thread. It
+- **The engine holds one default engine view.** It is `PRIVATE` and owned by the host thread. It
   projects every `[[=viz]]` column at cadence 1 with the `ALL` predicate.
   `engine.snapshot()` copies from it (`design_python_api.md` §7.2), and a reader with no
   declared needs gets it. Nobody has to register anything to see the world. `snapshot()`
   copies instead of retaining, so the owner's block is free again before the call returns,
-  and the default View needs no retention rule. Its cost at large world sizes is open
-  ([Q4](open_question.md#q4-can-the-default-view-afford-to-publish-everything-every-tick)),
+  and the default engine view needs no retention rule. Its cost at large world sizes is open
+  ([Q4](open_question.md#q4-can-the-default-engine-view-afford-to-publish-everything-every-tick)),
   and so is calling `snapshot()` from other threads
   ([Q3](open_question.md#q3-can-enginesnapshot-be-called-from-any-thread)).
-- **The number of Views is capped** (`design_limits.md` §2.3), because publish cost is a sum
+- **The number of engine views is capped** (`design_limits.md` §2.3), because publish cost is a sum
   over them. The cap bounds the number of terms in that sum. Projection width and matched
   rows are measured, not capped.
 
 **Publish (sim side)**, once per tick, after the terminal commit:
 
-- For each View due this tick by its cadence, the sim does four things. It reads the
+- For each engine view due this tick by its cadence, the sim does four things. It reads the
   reader's return header (§3.5) and evaluates the row predicate to a mask. It gathers the
   declared columns of the matched rows into the writable block. Then it publishes the block
   with one exchange. §3.4 covers the predicate and §3.2 the mechanism. Whether `step()`
-  publishes Views that are not due is open
-  ([Q12](open_question.md#q12-does-step-publish-every-view-regardless-of-cadence)).
+  publishes engine views that are not due is open
+  ([Q12](open_question.md#q12-does-step-publish-every-engine-view-regardless-of-cadence)).
 - **Publishing never waits.** It may commit memory: a block commits pages as this tick's
   matched rows reach them (see block memory below).
-- **A `PRIVATE` View always has a writable block**, so a due publish always happens and is
+- **A `PRIVATE` engine view always has a writable block**, so a due publish always happens and is
   never skipped. v1 loses no samples; only `SHARED` can skip (Appendix A).
 
 **Take (reader side):**
@@ -532,16 +532,16 @@ Three rules follow from this:
   (`design_python_api.md` §7.2). Nothing is released without its holder knowing. The caller
   drops its array views and takes again, or copies. Only the caller's own array views can
   cause the refusal; no other reader can.
-- If the sim is faster than the reader, unread publishes are overwritten: a View is sampled,
+- If the sim is faster than the reader, unread publishes are overwritten: an engine view is sampled,
   not consumed. If the sim is slower, the reader keeps what it has. Neither shows up as a
   failure. That is why the return header carries `last_consumed_tick` (§3.5): it is the only
   way to measure a lagging reader.
 - There is deliberately no "one frame per tick" coupling through a condition variable or
-  semaphore. A reader that must receive every tick registers a paced View, becomes a
+  semaphore. A reader that must receive every tick registers a paced engine view, becomes a
   participant (§3.3), and pays for that guarantee at the gate. A reader that only wants to
   shed load sends a cadence hint (§3.5) and stays out of the gate.
 
-**CPU/GPU lifetime boundary: the GPU never reads View memory.** `render()` copies the
+**CPU/GPU lifetime boundary: the GPU never reads engine view memory.** `render()` copies the
 `[[=gpu]]` columns on the CPU into a **staging transfer buffer**, then unmaps it. Under the
 SDL3 backend the staging buffer is mapped and unmapped every frame, because SDL does not
 allow upload commands to be recorded while a transfer buffer is mapped. Destination buffers
@@ -550,8 +550,8 @@ advanced when its fence signals and used only to skip an upload when the tick ha
 advanced. Only uploads whose fence has completed are presented. The full contract is in
 `design_data_container.md` §5.
 
-**Block memory is reserved up front.** A View's matched rows can change on every
-publish, up to the View's maximum rows: its object type's cap, unless the View declares
+**Block memory is reserved up front.** An engine view's matched rows can change on every
+publish, up to the engine view's maximum rows: its object type's cap, unless the engine view declares
 fewer (`design_data_container.md` §5.1). Each block reserves address space for that maximum
 at the freeze and commits pages as matched rows reach them. A commit happens after the
 exchange and before the fill, when the publisher's block is its own. So a block never moves,
@@ -563,19 +563,19 @@ to the OS. A freshly committed page costs one page fault on first fill, so reusi
 block is what keeps publish time steady. Returning pages and committing them again would
 make that jitter worse.
 
-**The number of blocks is fixed.** A `PRIVATE` View always has a writable block, so it never
+**The number of blocks is fixed.** A `PRIVATE` engine view always has a writable block, so it never
 needs a fourth. Under `SHARED`, the alternative to skipping a publish is adding blocks
 (Appendix A); that choice belongs to the `SHARED` mode
-([Q60](open_question.md#q60-reviving-the-shared-view)).
+([Q60](open_question.md#q60-reviving-the-shared-engine-view)).
 
-**Cost, and where it is charged.** Per-View projection costs more than one shared projection
+**Cost, and where it is charged.** Per-engine-view projection costs more than one shared projection
 would, in one way:
 
-- Publish cost per due View is `scan(predicate inputs × live chunks) + gather(matched rows ×
-  spec)`, not one full copy. Two Views over the same columns cost twice. That is the price
+- Publish cost per due engine view is `scan(predicate inputs × live chunks) + gather(matched rows ×
+  spec)`, not one full copy. Two engine views over the same columns cost twice. That is the price
   of keeping blocks without copying, for both.
-- **The row predicate shrinks the gather term.** A render View over 10⁷ live rows whose
-  `FRUSTUM` matches 10⁴ gathers 10⁴ rows. Without a predicate, the same View is 320 MB per
+- **The row predicate shrinks the gather term.** A render engine view over 10⁷ live rows whose
+  `FRUSTUM` matches 10⁴ gathers 10⁴ rows. Without a predicate, the same engine view is 320 MB per
   publish at a 32-byte spec (`design_limits.md` §5), and no choice of columns makes that
   affordable. That is why the row filter is a declaration and not an optimization.
 - **The scan term remains, and it only reads.** A spatial predicate reads its input columns
@@ -585,20 +585,20 @@ would, in one way:
   real floor of the design. The two ways below it are a spatial index behind the predicate
   kind (§3.4), and running scan and gather on the worker pool. A narrower spec does not
   help.
-- The projection spec itself is the other lever. A render View takes the `[[=viz]]` columns,
-  a GUI View takes two, an analytics View takes five at `k = 30`. With declared column
+- The projection spec itself is the other lever. A render engine view takes the `[[=viz]]` columns,
+  a GUI engine view takes two, an analytics engine view takes five at `k = 30`. With declared column
   lists, total bytes are normally below one undeclared full projection. That is why the
   column list is a declaration and not a default.
 - **There is no maximum width per row** (`design_limits.md` §5). A per-row cap would bound
   the wrong thing: cost is width times matched rows. Width is not capped, and matched rows
-  are bounded only by the View's maximum rows (`design_data_container.md` §5.1).
+  are bounded only by the engine view's maximum rows (`design_data_container.md` §5.1).
 - **Cost is measured, not capped, and crossing the threshold is diagnosed.** Publish
-  duration, publish bytes per second and matched rows are first-class metrics, per View and
-  in total. **The threshold is 4 GB/s, checked per View, not against the total**
+  duration, publish bytes per second and matched rows are first-class metrics, per engine view and
+  in total. **The threshold is 4 GB/s, checked per engine view, not against the total**
   (`design_limits.md` §5). It is a bandwidth, so it does not depend on tick rate or cadence.
-  It is per View because every remedy here (narrow the spec, tighten the predicate, lower
-  the cadence) changes one View's declaration, so a warning must name one View. Crossing it
-  logs a warning naming the measured rate and the View. It never rejects anything, and the
+  It is per engine view because every remedy here (narrow the spec, tighten the predicate, lower
+  the cadence) changes one engine view's declaration, so a warning must name one engine view. Crossing it
+  logs a warning naming the measured rate and the engine view. It never rejects anything, and the
   simulation does not change. The total is still reported, but the threshold is not checked
   against it.
 - If measurements exceed the budget, the safe offload options, in order of preference:
@@ -612,7 +612,7 @@ would, in one way:
   changed data (partial or dirty publish) is ruled out (`design_data_container.md` §5); the
   row predicate is a different axis and does not change that.
 
-**Metrics.** Per View: publish duration, publish bytes per second, matched rows, last
+**Metrics.** Per engine view: publish duration, publish bytes per second, matched rows, last
 published tick, and **consumer lag**: last published tick minus `last_consumed_tick`, read
 from the return header (§3.5). Without lag, a `PRIVATE` reader that falls behind would be
 invisible, because the publisher simply overwrites and nothing fails. Sustained lag
@@ -622,17 +622,17 @@ identifies a slow reader.
 everything stamped for it (§5.1), so nothing below `C` limits the drain cost. It is whatever
 the session's producers submit. A session approaching that ceiling should show as a rising
 number long before it shows as a frame-time problem. The per-source figure names the
-endpoint to narrow, just as the per-View figure does for publish.
+endpoint to narrow, just as the per-engine-view figure does for publish.
 
 **The tick budget is the wall-clock length of one tick**: 33.3 ms at 30 Hz
 (`design_limits.md` §1). These costs are charged against it:
 
 | Charge | Shape | Bounded by |
 |---|---|---|
-| Publish | `Σ over due Views (scan over live chunks + gather over matched rows × spec)` | **nothing, by design**. Measured, and each term is checked against 4 GB/s **for that View** (above; `design_limits.md` §5). The View cap bounds the number of terms; each term's gather is bounded by its row predicate (§3.4); its scan stays proportional to the live chunks |
+| Publish | `Σ over due engine views (scan over live chunks + gather over matched rows × spec)` | **nothing, by design**. Measured, and each term is checked against 4 GB/s **for that engine view** (above; `design_limits.md` §5). The engine view cap bounds the number of terms; each term's gather is bounded by its row predicate (§3.4); its scan stays proportional to the live chunks |
 | Terminal commit | O(erases + creates + links into erased entities), sequential | the tick's staged creates and erases. No step is O(rows): rows never move (`design_data_container.md` §2.2) |
 | Checksum | tick digest: O(types + commands), every tick. Rolling checksum: 1/N of a full pass per tick, when enabled. Full checksum: a full pass per tick | the level in use (§2.3). The full checksum runs only in CI, certification and desync bisecting, never in a shipped session |
-| Upload bytes per frame | the render View's spec over its matched rows, whole columns | same treatment as publish |
+| Upload bytes per frame | the render engine view's spec over its matched rows, whole columns | same treatment as publish |
 | Command drain and execution | O(commands stamped for this tick) | `C = Σ capacity(endpoint)` over the registered endpoints (§5.1, `design_limits.md` §2). Only a session that registers that many endpoints, each at full capacity, reaches it |
 | System execution | the actual simulation work | not yet measured |
 
@@ -640,7 +640,7 @@ endpoint to narrow, just as the per-View figure does for publish.
 the core is deliberately not running. Counting it would make a healthy lockstep session look
 like an overrun.
 
-### 3.2 View protocol (normative)
+### 3.2 Engine view protocol (normative)
 
 §3.1 fixes the design. This section fixes the mechanism, with the five items of §1.1. It is
 normative: an implementation may be faster, but must not order operations differently.
@@ -650,7 +650,7 @@ x86-64 baseline: the `PRIVATE` word is 4 bytes. No 16-byte atomic and no tagged 
 allowed.
 
 ```
-struct PrivateView {
+struct EngineView {
     Block*            block[3];
     std::atomic<u32>  word;
     Return            ret[3];        // §3.5; consumer-written, parallel to block[]
@@ -705,9 +705,9 @@ cannot fail for any reason outside the caller.
 
 **`hardware_destructive_interference_size` depends on build flags.** It can be overridden
 with `--param` and follows `-mtune`, and GCC 16 does not warn when it is used in an
-ABI-visible position. **A heap-allocated View is deliberately not ABI-stable**: it is engine
+ABI-visible position. **A heap-allocated engine view is deliberately not ABI-stable**: it is engine
 memory, never serialized, and its layout never crosses a module boundary. The deferred
-shared-memory View is the opposite case, and fixes every field width and offset as literals
+shared-memory engine view is the opposite case, and fixes every field width and offset as literals
 (`design_modding.md` §4.3).
 
 **Verification.** A functional test cannot tell a correct implementation from a broken one
@@ -732,7 +732,7 @@ from a free choice at registration:
 | | **Participant** | **Observer** |
 |---|---|---|
 | The core… | waits for it, up to its declared deadline | never waits for it |
-| Reads | its View | its View |
+| Reads | its engine view | its engine view |
 | Writes | commands | **nothing**; reading the world is not participation |
 | Costs | up to its deadline of tick latency | a projection copy |
 | Examples | the host, network peers, every mod that submits commands, the replay harness, a recorder that must not miss a tick | viz and GUI, analytics, an agent mind that only watches |
@@ -743,7 +743,7 @@ submitting. So every producer is paced, and **no producer anywhere in the engine
 unpaced.** Reading gives no such standing: an observer may fall any distance behind, and the
 core never notices. One case is declared rather than implied: a peripheral that submits
 nothing but must not miss a tick, such as a recorder or a training-data collector. It
-registers as a participant explicitly, with a paced View (§3.1). Whether mods that never
+registers as a participant explicitly, with a paced engine view (§3.1). Whether mods that never
 submit must still be paced every tick is open
 ([Q2](open_question.md#q2-must-every-mod-be-paced-every-tick)).
 
@@ -751,7 +751,7 @@ Tier 3 core mods are neither kind. They are systems inside the tick, ordered by 
 cut (§4.1), and this section does not apply to them.
 
 **Pacing gives acknowledgement, not access.** A participant reads exactly what an observer
-reads: its own View. Being paced guarantees that the core will not run ahead of what the
+reads: its own engine view. Being paced guarantees that the core will not run ahead of what the
 participant has acknowledged. It gives no view of live core state. **No peripheral of any
 kind ever reads live core state.** That keeps §1's one-way boundary intact while allowing
 the wait.
@@ -805,7 +805,7 @@ for (;;) {
     gate_waiting.store(0, relaxed);
     drain_commands(t);                                    # §5.1
     execute(t);                                           # §4.1 phases + commits
-    publish(t);                                           # §3.2, per due View
+    publish(t);                                           # §3.2, per due engine view
     first_unexecuted.store(t + 1, release);
     tick_epoch.fetch_add(1, release); tick_epoch.notify_all();
     ++t;
@@ -991,22 +991,22 @@ The gate built for multiplayer costs only this at its default setting
 
 ### 3.4 Row predicate (normative)
 
-**Each View filters on two axes.** Columns are the projection spec (§3.1). Rows are this
-section. Without row filtering, a View over 10⁷ live rows copies all of them to a reader
+**Each engine view filters on two axes.** Columns are the projection spec (§3.1). Rows are this
+section. Without row filtering, an engine view over 10⁷ live rows copies all of them to a reader
 that wants 10⁴. No column choice fixes that: a 32-byte projection of 10⁷ rows is still 320
 MB per publish (`design_limits.md` §5).
 
-**A row predicate cannot cause a desync**, and the rest of this section relies on that. A
-View is an output; core state cannot be rebuilt from a snapshot (§5). So two peers may
+**A row predicate cannot cause a desync**, and the rest of this section relies on that. An
+engine view is an output; core state cannot be rebuilt from a snapshot (§5). So two peers may
 filter to completely different row sets and stay in lockstep. The predicate needs no
 determinism, takes no part in the checksum, and never enters the command stream.
 
-**The kind is declared; the parameters are not.** A View registers one kind from a closed
+**The kind is declared; the parameters are not.** An engine view registers one kind from a closed
 set:
 
 | Kind | Parameters | Use |
 |---|---|---|
-| `ALL` | none | the default, and what every View has until measurement says otherwise |
+| `ALL` | none | the default, and what every engine view has until measurement says otherwise |
 | `AABB` | min, max | |
 | `SPHERE` | centre, radius | the agent case: "what is near me" |
 | `FRUSTUM` | six planes | the render case |
@@ -1027,7 +1027,7 @@ never declares or depends on it.
 **The algorithm is already specified elsewhere.** Evaluate the predicate to a mask, AND it
 with the live bitmap, exclusive-scan the mask into destination offsets, and gather each
 column. That is exactly the publish scan and gather (`design_data_container.md` §5.1), which
-every View runs anyway; `ALL` is the live bitmap alone. The scan keeps ascending slot order
+every engine view runs anyway; `ALL` is the live bitmap alone. The scan keeps ascending slot order
 without extra care. The gather may run in parallel on the worker pool, because every
 destination comes from the prefix sum and the world does not change between the terminal
 commit and the next tick. Where the scan is charged is open
@@ -1044,11 +1044,11 @@ rows that passed. This split has three benefits:
 - the parameters stay small, so the return header can be a fixed struct rather than a
   variable-length message.
 
-**A filtered View carries the id column; an unfiltered one need not.** Rows 3, 17 and 902
-mean nothing to a reader without the id column. So a View whose predicate is not `ALL`
-includes `id` automatically, at 8 bytes per matched row. The render View is the exception.
+**A filtered engine view carries the id column; an unfiltered one need not.** Rows 3, 17 and 902
+mean nothing to a reader without the id column. So an engine view whose predicate is not `ALL`
+includes `id` automatically, at 8 bytes per matched row. The render engine view is the exception.
 The GPU may not key on a snapshot row across frames anyway (`design_data_container.md` §5),
-so a renderer that only draws needs no id and does not pay for one. Whether a View may leave out the id column at all, and how it declares that, is
+so a renderer that only draws needs no id and does not pay for one. Whether an engine view may leave out the id column at all, and how it declares that, is
 open ([Q5](open_question.md#q5-is-the-id-column-in-every-projection)).
 
 **Filtering is turned on by measurement.** `ALL` is the default, and it is right at 10⁵ live
@@ -1109,22 +1109,22 @@ split of §3.4 absorbs.
 | **May** | predicate parameters (§3.4), `last_consumed_tick` (the lag metric of §3.1), a cadence hint |
 | **May not** | anything the simulation reads |
 
-**The return channel may shape the View; it must never reach the world.** A cadence hint
-changes how often this View is published, and nothing else. A predicate parameter changes
-which rows this View contains, and nothing else. Anything the core acts on goes through the
+**The return channel may shape the engine view; it must never reach the world.** A cadence hint
+changes how often this engine view is published, and nothing else. A predicate parameter changes
+which rows this engine view contains, and nothing else. Anything the core acts on goes through the
 command ring (§5.1), which is the ordered, deterministic, replayed and checksummed input
 path. A second input that is unordered, undeclared and invisible to replay would be a desync
 source. This channel is convenient, which is exactly why the rule is stated here.
 
 **The cadence hint is advisory.** The publisher may ignore it. A reader that must receive
-every tick registers a paced View and becomes a participant (§3.3), paying for that
+every tick registers a paced engine view and becomes a participant (§3.3), paying for that
 guarantee at the gate. The hint lets a reader shed load without blocking the core; pacing
 lets it refuse to miss a tick. They meet different needs, and neither replaces the other.
 
 **Trust.** The return header keeps `PRIVATE`'s trust boundary; it does not widen it. The
 publisher already uses the block index its reader writes (§3.2), so a reader able to corrupt
 the header could already do worse. For the same reason the return header does not extend to
-a sandboxed reader. A `SHARED` View exposes no reader-written bytes that the publisher
+a sandboxed reader. A `SHARED` engine view exposes no reader-written bytes that the publisher
 dereferences (Appendix A), and giving it a return header would be a new decision, not this
 one extended.
 
@@ -1435,7 +1435,7 @@ Peripherals are everything outside the core. Every peripheral here is an observe
 registers as a participant (§3.3). None reads live core state, and none can delay a tick by
 lagging.
 
-- **Renderer and viz**: reads a `PRIVATE` View over the `[[=viz]]` columns at cadence 1 (no
+- **Renderer and viz**: reads a `PRIVATE` engine view over the `[[=viz]]` columns at cadence 1 (no
   interpolation, §3), converts fixed-point to float once, and is free to use floats, compute
   shaders and Vulkan. Nothing flows back.
   - **Threading**: preparation and GPU compute may run on workers, but presentation is a
@@ -1443,7 +1443,7 @@ lagging.
     acquisition and present belong to the owner thread (`design_python_api.md` §4.3). A raw
     Vulkan backend could present from any thread.
   - **Memory**: uploads and dispatches read only the renderer's own staging and destination
-    buffers, never View memory (the CPU/GPU lifetime boundary in §3.1).
+    buffers, never engine view memory (the CPU/GPU lifetime boundary in §3.1).
   - **Backend scope**: Vulkan only (SPIR-V from glslang), covering Linux and Windows. D3D12
     and Metal need DXIL and MSL and are future work, so macOS has no GPU path
     (`design_data_container.md` §5).
@@ -1452,13 +1452,13 @@ lagging.
     the session can still be replayed, because the GPU is in the peripheral domain. Whether
     this deserves its own terminal state is open
     ([Q17](open_question.md#q17-should-resource-failures-have-their-own-terminal-state)).
-- **GUI**: a View like any other, usually a few columns at cadence 1, plus the host's
+- **GUI**: an engine view like any other, usually a few columns at cadence 1, plus the host's
   command endpoint. It is not a special case of anything. Under lockstep, a `pause()` from
   the GUI is agreed across the session rather than applied locally, because it changes the
   run grant that feeds the gate check every peer uses (`design_multiplayer.md` §3.3).
-- **Data viz and analytics**: a View at a low cadence. Five columns every thirty ticks costs
+- **Data viz and analytics**: an engine view at a low cadence. Five columns every thirty ticks costs
   what its declaration says.
-- **AI**: reads a View (stale data is fine and realistic), thinks in floats or on the GPU,
+- **AI**: reads an engine view (stale data is fine and realistic), thinks in floats or on the GPU,
   and emits commands. Commands are recorded in the input stream, so AI non-determinism does
   not affect the simulation. If a replay from the seed alone is ever needed, the AI must
   either be deterministic (integer inference) or its commands must count as external input;
@@ -1477,7 +1477,7 @@ The only artifacts peripherals ever see:
 | Artifact | Direction | Shape |
 |---|---|---|
 | `CommandRing` | in | one SPSC ring per endpoint; protocol in §5.1 |
-| `View` | out, with a small return header back | 3 blocks, an exchange word, and a parallel reader-written `ret[3]`; stamped with its tick, row-filtered and converted to float at publish (§3.1, §3.2, §3.4, §3.5) |
+| `EngineView` | out, with a small return header back | 3 blocks, an exchange word, and a parallel reader-written `ret[3]`; stamped with its tick, row-filtered and converted to float at publish (§3.1, §3.2, §3.4, §3.5) |
 | `EventRing` | out | bounded SPSC from the sim to the owner thread, fanned out per subscriber (§5.2) |
 
 **`CommandRing`** (`design_python_api.md` §7.1):
@@ -1492,10 +1492,10 @@ The only artifacts peripherals ever see:
 | Order | the sequence is the position in the drain, so `(source id, sequence)` is a total order **by construction**: assigned by the engine, impossible to forge, and needing no sort |
 | Record | recorded as consumed: exactly the commands the tick runs, so what is recorded is what was applied. Rejected commands never enter the record |
 
-**`View`** (§3.1): stamped with its tick, converted to float at publish, and read-only for
+**`EngineView`** (§3.1): stamped with its tick, converted to float at publish, and read-only for
 every reader except for its return header (§3.5). Publishing is wait-free, one exchange, and
 cannot fail. That is a synchronization property only. The projection copy it performs is
-budgeted sim-thread work, a sum over registered Views, bounded per View by its row predicate
+budgeted sim-thread work, a sum over registered engine views, bounded per engine view by its row predicate
 (§3.4).
 
 **`EventRing`**: from the sim to the owner thread, bounded, and lossless up to its size. The
@@ -1529,21 +1529,21 @@ snapshot(N) = projection( state(N) )                          # derived, one-way
 - Snapshots are published only at tick boundaries, so a reader never sees a torn, mid-tick
   world.
 - Snapshots are projections in three senses: converted (fixed-point to float once, at
-  publish), partial by declaration (each View's spec, §3.1), and disposable (overwritten,
+  publish), partial by declaration (each engine view's spec, §3.1), and disposable (overwritten,
   latest wins; a missed publish loses nothing).
 - Snapshots are **read-only for every reader**, and the publisher is the only writer. They
   are instances of the same generated world container, converted to float and generated
   without any mutating API (`design_data_container.md` §5.1). The publisher's own write path
   still needs a name ([Q40](open_question.md#q40-naming-the-publishers-write-path)). Tier 3
   core mods never read snapshots: they access live state inside their phases. Only a mod's
-  async peripheral half reads a View, like any peripheral. A peripheral that wants writable
+  async peripheral half reads an engine view, like any peripheral. A peripheral that wants writable
   data in the container's shape creates its own float-domain container: the same mechanism,
   a separate instance.
 - **A snapshot is not a savegame.** The float conversion loses precision and the projection
   is partial, so core state cannot be rebuilt from snapshots. State is rebuilt by replay
   (the full artifact of §2.3, "seed plus command stream" in short). A future save/load
   feature must write the internal fixed-point state bit-exactly, as its own artifact.
-- Desync checksums (§2.3) hash internal state, never snapshots. View cadence and content can
+- Desync checksums (§2.3) hash internal state, never snapshots. Engine view cadence and content can
   neither cause nor hide a desync.
 
 ### 5.1 Command ring protocol (normative)
@@ -1991,9 +1991,9 @@ Rules that keep this sound:
 
 Each step is labelled with the milestone it belongs to (see `glossary.md`).
 
-1. **M1: session lifecycle, tick loop, the gate, command rings and one View**, with no
+1. **M1: session lifecycle, tick loop, the gate, command rings and one engine view**, with no
    simulation content. The `configuring → freeze → running` sequence (§2.4) belongs here
-   rather than later. Identity, column ids, source ids, Views and participants are all fixed
+   rather than later. Identity, column ids, source ids, engine views and participants are all fixed
    at the freeze, so every later step is written against a session that already exists. When
    the host is the only participant, the gate never blocks, so this step builds the gate at
    its simplest setting.
@@ -2005,21 +2005,21 @@ Each step is labelled with the milestone it belongs to (see `glossary.md`).
 4. **M4: the phase-structured scheduler**: explicit system list, per-column access
    declarations, the phase cut and its invariant check, staged buffers, fixed-order commit.
    Prove that 1 thread and N threads give the same checksums.
-5. **M5 and M6: the first real system, and a renderer reading a View with the `ALL`
+5. **M5 and M6: the first real system, and a renderer reading an engine view with the `ALL`
    predicate**; then grow. A row predicate (§3.4) is added when `publish bytes/second` calls
    for one, not before.
 
-## Appendix A. The `SHARED` View (deferred)
+## Appendix A. The `SHARED` engine view (deferred)
 
-**Not built in v1.** This appendix specifies the multi-reader View mode, kept because the
+**Not built in v1.** This appendix specifies the multi-reader engine view mode, kept because the
 analysis is sound and one kind of reader will need it. It describes the design in the
 present tense; nothing here is built until process-host mods are.
 
 **Why it is deferred.** A `SHARED` reader cannot keep a block, so it copies out. N readers
 therefore cost N full copies of the projection, on top of the publisher's one. At the row
 counts `design_limits.md` §5 budgets for, that is the largest cost in the whole engine. One
-`SHARED` View with three readers over 10⁷ rows at a 32-byte spec moves 1.28 GB per tick.
-Three `PRIVATE` Views over their own declared columns and rows move a fraction of that. The
+`SHARED` engine view with three readers over 10⁷ rows at a 32-byte spec moves 1.28 GB per tick.
+Three `PRIVATE` engine views over their own declared columns and rows move a fraction of that. The
 mode named for sharing is the one where everyone copies.
 
 **Why the copy is unavoidable.** §1.1 allows no reclamation on a publish path: no hazard
@@ -2034,10 +2034,10 @@ written. Copying out 320 MB takes roughly three quarters of a 33.3 ms tick. So t
 copy exists to keep short is held for most of a tick anyway, and `publish_skipped_pinned`
 becomes a permanent condition rather than a diagnostic. A revival should compare a
 per-reader epoch slot over the registered reader set with the pin count
-([Q60](open_question.md#q60-reviving-the-shared-view)). Readers are known at the freeze,
+([Q60](open_question.md#q60-reviving-the-shared-engine-view)). Readers are known at the freeze,
 which removes most of what makes general hazard pointers hard.
 
-**What needs it.** A process mod host, which cannot be given a `PRIVATE` View: a `PRIVATE`
+**What needs it.** A process mod host, which cannot be given a `PRIVATE` engine view: a `PRIVATE`
 publisher uses the block index its reader wrote (§3.2), so a hostile reader could steer a
 payload address. `SHARED` reads the block-state words the child process writes only as
 availability, and never derives an address, index, epoch or loop bound from them. The
@@ -2060,7 +2060,7 @@ shared-memory mapping, the permission split and the fixed interprocess atomic AB
 The current block stays available to new readers while the publisher scans the other three,
 and each publish can leave one older epoch pinned without waiting. Four blocks give
 **three epochs of slack**. This is not an assumption that a copy finishes within 66 ms:
-an arbitrarily slow copy stays safe, and if all three candidates are pinned, that View skips
+an arbitrarily slow copy stays safe, and if all three candidates are pinned, that engine view skips
 one due publish.
 
 **State.**
@@ -2128,10 +2128,10 @@ failed revalidation means the publisher advanced. A saturated count also retries
 reader releases, which is progress for the system.
 
 **Failure and deadline behaviour.** A read cannot fail. A publish may return `SKIPPED` for
-that View after its bounded scan, leaving the previous immutable snapshot published. This is
+that engine view after its bounded scan, leaving the previous immutable snapshot published. This is
 sampling, not a session failure, and emits no event per skip. `publish_skipped_pinned`
 counts skips, and a sustained nonzero rate identifies a reader holding its pin too long. A
-`SHARED` View may not be paced: it is sampled and may skip, so `paced=True` is a
+`SHARED` engine view may not be paced: it is sampled and may skip, so `paced=True` is a
 registration error rather than a promise the mechanism cannot keep.
 
 **Committing and replacing.** A successful `0 → WRITING` claim proves that no reader can

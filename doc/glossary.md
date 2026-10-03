@@ -32,14 +32,14 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | rolling checksum | The level-2 checksum, taken in multiplayer and while recording: each tick hashes one slice of the chunks, so the whole world is covered every N ticks. | engine_core §2.3 |
 | full checksum | The level-3 checksum: the whole world every tick, plus one hash per system. Used by CI golden replays, certification and desync bisecting. | engine_core §2.3 |
 | determinism | The same session identity and the same command stream always produce the same checksums. Re-running live producers may produce a different command stream; that is not promised to repeat. | engine_core §2 |
-| M0 … M7 | Build milestones. M0: decided limits in code (done). M1: session, Views, command ring, gate. M2: fixed-point, PRNG, checksum, replay. M3: world container. M4: phase scheduler. M5: View projection, row predicate, GPU upload. M6: first system, renderer, sim thread. M7: mod tiers. | `TODO.md` |
+| M0 … M7 | Build milestones. M0: decided limits in code (done). M1: session, engine views, command ring, gate. M2: fixed-point, PRNG, checksum, replay. M3: world container. M4: phase scheduler. M5: engine view projection, row predicate, GPU upload. M6: first system, renderer, sim thread. M7: mod tiers. | `TODO.md` |
 
 ## Threads and waiting
 
 | Term | Meaning | Where |
 |---|---|---|
 | core | The deterministic simulation: fixed-point, integer-only, the only holder of world state. Also called "the sim". | engine_core §1 |
-| peripheral | Anything outside the core: rendering, viz, AI, GPU compute, logic mods, network peers. Reads Views and changes the world only by submitting commands. | engine_core §1 |
+| peripheral | Anything outside the core: rendering, viz, AI, GPU compute, logic mods, network peers. Reads engine views and changes the world only by submitting commands. | engine_core §1 |
 | determinism boundary | The line between the core (plus content and core mods) and the peripherals. | engine_core §1 |
 | host | The application that owns the engine, usually the Python program. It is source 0 and always a participant. "Mod host" is a different thing (see Mods). | engine_core §3.3 |
 | owner thread | The thread that created the `Engine`. Only it may make lifecycle calls and pump the engine. | python_api §2 |
@@ -50,7 +50,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | participant | A peripheral the core waits for before each tick, up to that participant's deadline. Every command producer is one; others can opt in with `paced=True`. | engine_core §3.3 |
 | recorder | A peripheral that submits nothing but must not miss a tick; it registers as a participant explicitly. | engine_core §3.3 |
 | conjunction | The set of active participants the gate waits for: a tick runs only when all of them are ready. | engine_core §3.3 |
-| observer | A peripheral the core never waits for. It only reads its View. | engine_core §3.3 |
+| observer | A peripheral the core never waits for. It only reads its engine view. | engine_core §3.3 |
 | gate | The one place the core waits: before each tick, until nothing blocks the tick (stop, event backlog, pause, or a participant that is not ready). | engine_core §3.3 |
 | run grant | The host's `run_until` value: the core may run ticks below it. `U64_MAX` means running; pause and `step(n)` lower it. | engine_core §3.3 |
 | `stop_requested` | Sticky flag that stops the core at the gate. Highest priority. | engine_core §3.3 |
@@ -60,26 +60,26 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | arming | The wake-up rule used wherever one thread parks on another's store: both sides store `seq_cst` and re-read, and the signaller wakes only a thread that is actually parked. | engine_core §3.3 |
 | mechanism register | The table of every cross-thread mechanism in the engine, each with its atomics, memory orders, linearization point, progress guarantee and failure behaviour. | engine_core §1.1 |
 
-## Views and snapshots
+## Engine views and snapshots
 
 | Term | Meaning | Where |
 |---|---|---|
-| View | The only way data leaves the core. A channel from the sim to one reader, made of three blocks and one atomic word. Registered before the freeze. | engine_core §3.1, §3.2 |
-| `PRIVATE` mode | The only View mode in v1: one trusted reader, three blocks, no copying. | engine_core §3.1 |
-| `SHARED` mode | A deferred View mode for many readers, where each reader copies. Designed but not built. | engine_core Appendix A |
-| default View | The engine's own `PRIVATE` View, read by the host. `engine.snapshot()` copies from it. | engine_core §3.1 |
-| block | One of a View's three payload buffers. The publisher, the reader and the "latest" slot each hold one at a time. | engine_core §3.2 |
-| publish | After a tick, the sim fills its writable block for each due View and swaps it in. Never waits, never skipped. | engine_core §3.2 |
+| engine view | The only way data leaves the core. A channel from the sim to one reader, made of three blocks and one atomic word. Registered before the freeze. `EngineView` in C++; in Python, the object `engine.view()` returns. | engine_core §3.1, §3.2 |
+| `PRIVATE` mode | The only engine view mode in v1: one trusted reader, three blocks, no copying. | engine_core §3.1 |
+| `SHARED` mode | A deferred engine view mode for many readers, where each reader copies. Designed but not built. | engine_core Appendix A |
+| default engine view | The engine's own `PRIVATE` engine view, read by the host. `engine.snapshot()` copies from it. | engine_core §3.1 |
+| block | One of an engine view's three payload buffers. The publisher, the reader and the "latest" slot each hold one at a time. | engine_core §3.2 |
+| publish | After a tick, the sim fills its writable block for each due engine view and swaps it in. Never waits, never skipped. | engine_core §3.2 |
 | take | The reader swaps its old block for the newest published one. | engine_core §3.2 |
 | snapshot | Read-only, float-converted data for one tick, held in a block or copied out. Not a savegame. | engine_core §5 |
-| projection | What publish copies for one View: which columns (the projection spec), which rows (the row predicate), converted from fixed-point to float. | engine_core §3.1 |
-| projection spec | The column list a View declares. | engine_core §3.1 |
-| row predicate | A View's row filter. Its kind (`ALL`, `AABB`, `SPHERE`, `FRUSTUM`, `TAG`) is fixed at the freeze; its parameters can change on every publish. Coarse in the core, refined by the reader. | engine_core §3.4 |
-| return header | A small struct the reader writes before a take and the publisher reads afterwards: predicate parameters, last tick consumed, cadence hint. It can shape the View, never the world. | engine_core §3.5 |
-| cadence | A View is published every `k` ticks. | engine_core §3.1 |
+| projection | What publish copies for one engine view: which columns (the projection spec), which rows (the row predicate), converted from fixed-point to float. | engine_core §3.1 |
+| projection spec | The column list an engine view declares. | engine_core §3.1 |
+| row predicate | An engine view's row filter. Its kind (`ALL`, `AABB`, `SPHERE`, `FRUSTUM`, `TAG`) is fixed at the freeze; its parameters can change on every publish. Coarse in the core, refined by the reader. | engine_core §3.4 |
+| return header | A small struct the reader writes before a take and the publisher reads afterwards: predicate parameters, last tick consumed, cadence hint. It can shape the engine view, never the world. | engine_core §3.5 |
+| cadence | An engine view is published every `k` ticks. | engine_core §3.1 |
 | cadence hint | A reader's request to be published less often. The publisher may ignore it. | engine_core §3.5 |
 | consumer lag | Last published tick minus the reader's last consumed tick. The signal that a reader is falling behind. | engine_core §3.5 |
-| array view | A NumPy view into a taken block. Not a View. | python_api §7.2 |
+| array view | A NumPy view into a taken block. Not an engine view. | python_api §7.2 |
 
 ## Commands and events
 
@@ -186,13 +186,13 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | shutdown stage | One of the five blocking waits during shutdown, each bounded by `shutdown_deadline`: running submits on a revoked endpoint, a mod host's inbox drain and `on_unload`, mod host and sim thread joins, confirming a killed process is dead, and running engine calls in `close()`. | limits §1.1 |
 | operation lease | Every native call except `close()` registers itself; `close()` refuses new calls and waits for running ones. | python_api §2, §6 |
 | control block | The small object behind the operation lease. It outlives every native resource it guards, so a stale handle can still see that the engine is closed. | python_api §2 |
-| registered dependant | Anything that can outlive a tick and still touch engine memory (mod hosts, View blocks held by array views). `close()` unwinds them before releasing anything native. | python_api §2 |
+| registered dependant | Anything that can outlive a tick and still touch engine memory (mod hosts, engine view blocks held by array views). `close()` unwinds them before releasing anything native. | python_api §2 |
 | staged join | How `stop_sim_async()` stops the sim thread: request stop, wake the gate, wait, then log and retry once before `failed`. | python_api §4.3 |
 | `shutdown_deadline` | How long each blocking shutdown step may wait. 5 seconds. | limits §1.1 |
 | `failed` | Terminal state when something could not be stopped safely. Resources are leaked on purpose and no new `Engine` may be created in the process. | python_api §2 |
 | `load_failed` | Terminal state after a failed load or freeze. Nothing leaks; create a new `Engine`. | python_api §2 |
 | disarm | Cleanup that deliberately releases nothing, because another thread may still use the resource. | patterns §4 |
-| detach | Disarm for one resource: a View block still referenced at `close()` is freed when its last array view drops. | python_api §7.2 |
+| detach | Disarm for one resource: an engine view block still referenced at `close()` is freed when its last array view drops. | python_api §7.2 |
 | async error | An error on the sim thread, stored once and re-raised on the owner thread at its next engine call. | python_api §8 |
 | rendezvous point | An owner-thread engine call where a stored async error is raised: a pump call, `stop_sim_async()` or `raise_if_failed()`. | python_api §8 |
 | quiescent | The sim is parked and no tick is running, so state can be read safely (for example `checksum()` after `step()`). | python_api §4.3 |
@@ -200,7 +200,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | catch-up clamp | The most ticks sim-thread mode runs in one go after falling behind. | python_api §4.3 |
 | build constant | A limit fixed when the library compiles, such as the chunk size. Changing it needs a rebuild. | limits |
 | policy default | The shipped default of an `EngineConfig` field, which a session may override. | limits |
-| warn threshold | A bandwidth above which the engine logs a warning, never a rejection: projection, per View. | limits §5 |
+| warn threshold | A bandwidth above which the engine logs a warning, never a rejection: projection, per engine view. | limits §5 |
 
 ## Words with one meaning only
 
@@ -210,17 +210,17 @@ the replacement for the other senses.
 | Word | Means only | For the other senses, write |
 |---|---|---|
 | host | the host application (source 0) | "mod host" (where a mod runs); "the engine" (for Tier 3 mods); "owner thread" (the thread) |
-| owner | owner thread | "reader" (a View's single reader); "authority" (multiplayer) |
+| owner | owner thread | "reader" (an engine view's single reader); "authority" (multiplayer) |
 | phase | a compute phase within a tick | "inline mode" / "sim-thread mode"; "shutdown step"; "engine state"; "registration" / "session start" (Tier 3 mods) |
 | tier | mod tiers | "server tier" / "client nodes" (multiplayer) |
 | admission | the answer to a submit | "endpoint lease"; "operation lease"; "id lookup" (resolving an id to a row) |
 | gate | the tick gate | "endpoint lease"; "operation lease" |
 | capacity | per-endpoint capacity, when unqualified. The prefixed API name `entity_capacity` (`EngineConfig.entity_capacity`, `default_entity_capacity`) sets an object type's cap | "cap" (object type, in prose); "event ring size"; "inbox size" |
-| generation | a slot's reuse counter, the low half of an id | "epoch" (the `SHARED` View's published word) |
+| generation | a slot's reuse counter, the low half of an id | "epoch" (the `SHARED` engine view's published word) |
 | `commands_per_tick` | only the manifest field | "C" (engine-wide total); "commands executed per tick" (the metric) |
-| shared | the `SHARED` View mode, and the OS term "shared memory" | "default View" (the host's `PRIVATE` View) |
-| View | the engine mechanism | "array view" (NumPy); "column span" |
-| publish | View publish, and the release-store "publication" idiom of engine_core §1.1 | "fan out" (mod bus); "submit" (commands) |
+| shared | the `SHARED` engine view mode, and the OS term "shared memory" | "default engine view" (the host's `PRIVATE` engine view) |
+| engine view | the engine mechanism. Never shortened to "view" in prose | "array view" (NumPy); "column span" |
+| publish | engine view publish, and the release-store "publication" idiom of engine_core §1.1 | "fan out" (mod bus); "submit" (commands) |
 | drain | command drain, `drain_events()`, inbox drain, per-worker log buffer drain | "wait for running calls" (leases at shutdown) |
 | grant | run grant | "capability" (mods) |
 | ledger | do not use | "`first_unexecuted`"; "tick budget" |

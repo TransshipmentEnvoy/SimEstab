@@ -350,7 +350,7 @@ Implementation rules:
     poisoned and should stay so.
   - Disarming can apply to a single resource, where it is usually called **detaching**. One
     block of memory is handed to whoever still references it and freed on their schedule,
-    while the rest of the context releases normally. A View's block detach at close
+    while the rest of the context releases normally. An engine view's block detach at close
     (`design_engine_core.md` §3.1) works this way.
   - The Python face of a disarmed context is the terminal `failed` engine state
     (`design_python_api.md` §2).

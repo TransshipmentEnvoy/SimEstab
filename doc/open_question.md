@@ -36,25 +36,25 @@ observers; a mod declares ready for a range of ticks at once. Also blocks M7.
 
 ### Q3. Can `engine.snapshot()` be called from any thread?
 
-`python_api` §6 and §7.2, and `modding` §4.1, say yes. But it copies from the default View,
+`python_api` §6 and §7.2, and `modding` §4.1, say yes. But it copies from the default engine view,
 which is `PRIVATE`: one reader only (`engine_core` §3.1, §3.2). A second thread either races
 the reader's take or copies a block the publisher is about to overwrite. Allowing it needs a
 lock or pin on the reader side, which is a new cross-thread mechanism missing from the
 mechanism register (`engine_core` §1.1).
 
-### Q4. Can the default View afford to publish everything every tick?
+### Q4. Can the default engine view afford to publish everything every tick?
 
-The default View projects every `[[=viz]]` column of every row, every tick (`engine_core`
+The default engine view projects every `[[=viz]]` column of every row, every tick (`engine_core`
 §3.1). At 10⁷ rows that is about 320 MB per publish, or 9.6 GB/s at 30 Hz (`limits` §5), and
-the cost is paid even when nobody calls `snapshot()`. Options: make the default View
+the cost is paid even when nobody calls `snapshot()`. Options: make the default engine view
 opt-out, lazy, less frequent or filtered. Also blocks M5.
 
 ### Q5. Is the `id` column in every projection?
 
 `python_api` §7.2 and `data_container` §5.1 say yes. `engine_core` §3.4 says an unfiltered
-View need not carry it, and `python_api` §7.2 also offers `identity=False`. If `id` can be
+engine view need not carry it, and `python_api` §7.2 also offers `identity=False`. If `id` can be
 left out, it must become one of the declarations closed at the freeze (`engine_core` §2.4),
-and snapshot lookups by id cannot work on such a View. Also blocks M5.
+and snapshot lookups by id cannot work on such an engine view. Also blocks M5.
 
 ### Q6. How are the wake-up handshakes tested?
 
@@ -106,19 +106,19 @@ inside the gate loop, after arming. §5.2 requires the wake-up but does not give
 order of `read`, and its pseudo-code recomputes the backlog "before the gate". The mechanism
 register (§1.1) has no row for it.
 
-### Q12. Does `step()` publish every View regardless of cadence?
+### Q12. Does `step()` publish every engine view regardless of cadence?
 
-`python_api` §4.3 and §7.2 say a stepped tick publishes every View. `engine_core` §3.1 and
-`limits` §1 publish only Views that are due by their cadence.
+`python_api` §4.3 and §7.2 say a stepped tick publishes every engine view. `engine_core` §3.1 and
+`limits` §1 publish only engine views that are due by their cadence.
 
 ### Q13. Can `close()` be called from another thread?
 
 `python_api` §2 says `close()` never raises. The same section, and §8, say it is an
 owner-thread call that raises `EngineThreadError` elsewhere.
 
-### Q14. How does a paced View count as ready?
+### Q14. How does a paced engine view count as ready?
 
-A View registered with `paced=True` holds the core back until it is taken (`python_api`
+An engine view registered with `paced=True` holds the core back until it is taken (`python_api`
 §7.2). Neither `engine_core` §3.2 nor §3.3 says how a take counts as readiness, or how that
 combines with a cadence above 1.
 
@@ -294,8 +294,8 @@ The execution order inside a phase is unspecified. M4.
 ### Q39. The GPU allocator for growing worlds
 
 Every object type has a cap, but sizing GPU buffers at the cap would reserve device memory
-nobody uses. So each GPU destination, and each View block, is sized from its View's maximum
-rows (`data_container` §5, §5.1, §7.4). Open: how a View declares its maximum, what the
+nobody uses. So each GPU destination, and each engine view block, is sized from its engine view's maximum
+rows (`data_container` §5, §5.1, §7.4). Open: how an engine view declares its maximum, what the
 default is, and whether destinations suballocate from a few large buffers. The one fixed
 constraint: each upload rewrites a whole buffer. Before M3, used in M5.
 
@@ -311,7 +311,7 @@ and its NumPy dtype. M5.
 
 ### Q42. The warning thresholds
 
-The projection warning (4 GB/s per View) is reasoned, not measured; M5 owes a profile
+The projection warning (4 GB/s per engine view) is reasoned, not measured; M5 owes a profile
 (`limits` §5, §9).
 
 ### Q61. What row width does the predicate scan assume?
@@ -370,10 +370,10 @@ endpoints of one source are ordered in the drain is Q62. M7.
 ### Q64. Bounding a process host's copy-on-write pages
 
 On Windows, `FILE_MAP_COPY` is reachable from a `FILE_MAP_READ` handle, so a process-host
-child can privately write its read-only View payload (`modding` §4.3, platform constraints).
+child can privately write its read-only engine view payload (`modding` §4.3, platform constraints).
 Engine memory stays safe, but the dirtied private pages are charged to the paging file, and
 nothing bounds that. A commit limit on the child's Job object is one candidate. Deferred
-with process-host Views (`engine_core` Appendix A); after M7.
+with process-host engine views (`engine_core` Appendix A); after M7.
 
 ## Multiplayer (after M7)
 
@@ -435,7 +435,7 @@ with the input-delay margin, machines drain in different orders (`multiplayer` �
 Trails, selection and level-of-detail caches need per-entity state that survives from one
 frame to the next. Snapshot rows shift, but core slots are stable for an entity's whole
 life, and both halves of an id are `u32` (`data_container` §2.2, §5). So such state could
-key on slot and generation, if a View projects them. Whether and how Views project them is
+key on slot and generation, if an engine view projects them. Whether and how engine views project them is
 open.
 
 ### Q58. Mod link traversal
@@ -447,10 +447,10 @@ Letting mods follow relationship links needs a way to describe another type's ro
 
 Resolve when save/load serialization tags are designed (`data_container` §8).
 
-### Q60. Reviving the `SHARED` View
+### Q60. Reviving the `SHARED` engine view
 
 If process hosts need snapshots, choose between a per-reader epoch slot and the original pin
-count (`engine_core` Appendix A; `limits` §9). A `SHARED` View may also grow its block pool
+count (`engine_core` Appendix A; `limits` §9). A `SHARED` engine view may also grow its block pool
 in number of blocks (`engine_core` §3.1). That growth has no line in the tick budget, and
 nothing yet triggers it.
 
