@@ -20,66 +20,84 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
       `doc/design_logging.md` §1)
 + [x] **M0: decided limits in code.** Every value in `doc/design_limits.md` is in
       `sim_estab:limits` or `src/sim_estab/config.py`, with tests in `test/test_config.py`
-+ [ ] **M1: session, engine views, command ring, gate.** No simulation content yet
-      (`doc/design_engine_core.md` §7 step 1)
-  + [ ] session lifecycle: `configuring → freeze → running`, with the freeze's ordered
-        steps; every step that can fail runs before any step with a visible effect
-        (`doc/design_engine_core.md` §2.4)
-  + [ ] the gate: one `ready_through` per participant (only ever increases), one mutex and
-        condition variable for blocking and deadlines, and `first_unexecuted` as the next
-        tick to run. Every gate input changes under the mutex, followed by a notify (the
-        wake-up rule). The host controls it with two independent atomics, `run_until` and
-        `stop_requested`; the event backlog is a plain value owned by the sim. Pause,
-        resume and step serialize so one cannot overwrite another. The host is not a
-        participant. M1 runs headless: `step(n)` runs ticks on the calling thread, and with
-        no participant the gate only ends a step (`doc/design_engine_core.md` §3.3)
-  + [ ] the engine view, `PRIVATE` only: 3 blocks and one `u32` exchange word, publish and take
-        both `acq_rel`. The permutation invariant makes block reuse safe without
++ [ ] **M1: session, engine views, command ring, gate.** No simulation content yet. M1 runs
+      headless: `step(n)` runs ticks on the calling thread (`doc/design_engine_core.md` §7
+      step 1). No open question blocks it
+  + [ ] session lifecycle: `configuring → freeze → running → stopped`, with the freeze's
+        ordered steps; every step that can fail runs before any step with a visible effect
+        (`doc/design_engine_core.md` §2.4, `doc/design_python_api.md` §2)
+  + [ ] the headless executor: `step(n)` runs the tick loop on the calling thread and
+        returns at its own grant or a stop. The executor role, which a snapshot copy also
+        takes while no tick runs (`doc/design_engine_core.md` §3.1, §3.3)
+  + [ ] the gate: one `ready_through` per participant (only ever increases), the gate mutex
+        with a condition variable for blocking and deadlines, and `first_unexecuted` as the
+        next tick to run, stored under the mutex after each publish. Every gate input
+        changes under the mutex, followed by a notify (the wake-up rule). The host controls
+        it with two independent atomics, `run_until` and `stop_requested`; pause, resume and
+        step serialize under the same mutex. The host is not a participant, so in M1 the
+        gate only ends a step (`doc/design_engine_core.md` §3.3)
+  + [ ] the unpaced host endpoint: `submit(cmd)` names no tick and never waits; a full ring
+        returns `queue_full`; `outcome(h)` returns `pending`, then the outcome and the tick
+        that ran it (`doc/design_engine_core.md` §5.1)
+  + [ ] the engine view, `PRIVATE` only: 3 blocks and one `u32` exchange word, publish and
+        take both `acq_rel`. The permutation invariant makes block reuse safe without
         reclamation. A due publish always has a writable block and is never skipped.
-        Registered at the freeze with a projection spec, a row predicate kind (only `ALL`
-        in M1) and a cadence; may be paced (`doc/design_engine_core.md` §3.1, §3.2). The
-        multi-reader `SHARED` mode is specified but not built (Appendix A)
+        Registered at the freeze with a projection spec, `identity` (the `id` column, on by
+        default), a row predicate kind (only `ALL` in M1) and a cadence; may be paced, and
+        then its take declares the reader ready through the next publish
+        (`doc/design_engine_core.md` §3.1, §3.2). A stepped tick publishes only the views
+        due by cadence. The multi-reader `SHARED` mode is specified but not built (Appendix
+        A)
+  + [ ] the on-demand snapshot: `snapshot()` from any thread posts a request; the executor
+        copies every `[[=viz]]` column with `id` at its next tick boundary, and requests
+        pending at one boundary share the copy (`doc/design_engine_core.md` §3.1)
   + [ ] the return header: a fixed `ret[3]` next to the blocks, written by the reader and
         read by the publisher, carrying predicate parameters, `last_consumed_tick` and a
         cadence hint. It needs no new atomic: the take exchange already publishes it. The
-        publisher adopts only a newer `seq`. It may shape the engine view and never reaches the
-        world (`doc/design_engine_core.md` §3.5)
-  + [ ] the command ring: one SPSC ring per endpoint, drained in ascending source id at the
-        start of each tick; the sequence is the drain position, so there is no sort and no
-        ordering field a source could forge. Every paced command names the tick it applies
-        to, and each paced endpoint declares how far ahead it may name (0 for mods and
-        engine sources, the input delay for a peer). The host endpoint is unpaced: its
-        commands name no tick, a full ring returns `queue_full`, and outcomes are polled.
-        Depth is `capacity`, or `2 × capacity` for an endpoint with a margin, which then
-        waits for space until its oldest tick has run. `too_late` covers a tick already
-        released. There is no drain quota, so `queue_full` only means a producer exceeded
-        its own per-tick capacity. One endpoint per source (`doc/design_engine_core.md`
-        §5.1)
+        publisher adopts only a newer `seq`. It may shape the engine view and never reaches
+        the world (`doc/design_engine_core.md` §3.5)
+  + [ ] the command ring: one SPSC ring per endpoint and one endpoint per source, drained in
+        ascending source id at the start of each tick; the sequence is the drain position,
+        so there is no sort and no ordering field a source could forge. Every paced command
+        names the tick it applies to, and each paced endpoint declares how far ahead it may
+        name. Depth is `capacity`, or `2 × capacity` for an endpoint with a margin, which
+        then waits for space on the endpoint's mutex until its oldest tick has run.
+        `too_late` covers a tick already released. There is no drain quota, so `queue_full`
+        only means a producer exceeded its own per-tick capacity. The slot size is a
+        provisional constant until the payload schema (M2)
+        (`doc/design_engine_core.md` §5.1)
   + [ ] the endpoint lease: revoke closes admission, wakes producers parked on the
-        admission wait, and waits for active submits before reclaim or reopen; a retry
-        keeps the same ring (`doc/design_engine_core.md` §5.1)
+        admission wait or an outcome wait, and waits for active submits before reclaim or
+        reopen; a retry keeps the same ring (`doc/design_engine_core.md` §5.1)
   + [ ] the event ring and the event backlog, sized `(C + E) × (D + 1)` with the mark at
-        `(C + E) × D`, and the two event drains: the owner drain and the native sink
+        `(C + E) × D`; the side list for events raised outside a tick; the two event drains,
+        declared by `EngineConfig.event_drain`: the owner drain and the native sink; and
+        `EventBacklogError` from a step that reaches the mark under an owner drain
         (`doc/design_engine_core.md` §5.2)
+  + [ ] the M1 events: `session.*`, `sim.backlog_*`, `participant.*`,
+        `command.protocol_error` and `view.bandwidth_over`
+        (`doc/design_python_api.md` §7.3)
   + [ ] operation leases around every native call that can overlap `close()`:
         `OPEN → CLOSING` rejects new calls, running calls drain under the shutdown
         deadline, and a timeout enters `failed` and disarms rather than freeing native
-        resources under a caller (`doc/design_python_api.md` §2, §6)
-  + [ ] async error handoff: state `EMPTY → WRITING → READY`; claim before writing the slot,
-        release-publish only at `READY`, acquire-read only from `READY`
-        (`doc/design_python_api.md` §8)
-  + [ ] the Python surface: `engine.py`, `command.py`, `event.py`, `loop.py`
-        (`doc/design_python_api.md` §1)
-  + [ ] logging management, the remaining parts: the refcounted Python wrapper and the
-        per-session file sink (`doc/design_logging.md` §2, §3)
-  + [ ] sanitizer tests for both protocols: the engine view's permutation invariant, including the
-        reverse edge from reader to publisher, and a return header written before a take
-        arriving intact at the publisher that receives the block, never while the reader is
-        still writing it; endpoint revoke racing submit; `close()` racing each any-thread
-        API; async-error writers racing; and every `admitted` command appearing exactly once
-        in drain order. A functional test cannot tell a correct implementation from a broken
-        one on x86-64. Lost wake-ups are hangs, not data races: CTest stress tests drive
-        each park under a watchdog timeout (`doc/design_engine_core.md` §3.3)
+        resources under a caller. `on_failed_stop` covers every `failed` path; a lost GPU
+        device or a failed page commit exits the process (`doc/design_python_api.md` §2, §6)
+  + [ ] the Python surface: `engine.py`, `command.py`, `event.py`, `loop.py`, with the
+        headless loop of `doc/design_python_api.md` §4.2. `WindowConfig`, `LogConfig` and
+        `event_drain` join `config.py` (`doc/design_python_api.md` §1, §3)
+  + [ ] logging management, the remaining parts: the refcounted Python wrapper under a
+        module-level lock, and the per-session file sink in `LogConfig.session_dir`
+        (`doc/design_logging.md` §2, §3)
+  + [ ] sanitizer tests for both protocols: the engine view's permutation invariant,
+        including the reverse edge from reader to publisher, and a return header written
+        before a take arriving intact at the publisher that receives the block, never while
+        the reader is still writing it; endpoint revoke racing submit; `close()` racing each
+        any-thread API; and every `admitted` command appearing exactly once in drain order.
+        A functional test cannot tell a correct implementation from a broken one on x86-64
+  + [ ] stress tests for every park under a watchdog timeout: the gate against
+        declarations and control calls, tick progress against the executor, the admission
+        wait against the drain, and snapshot requests. Lost wake-ups are hangs, not data
+        races (`doc/design_engine_core.md` §3.3)
   + [ ] a test that the defaults in `config.py` and `sim_estab:limits` agree
 + [ ] **M2: fixed-point, PRNG, checksum, replay** (`doc/design_engine_core.md` §2, §7 step 2)
   + [ ] the `fixed<>` type ([Q25](doc/open_question.md#q25-the-fixed-specification))
@@ -129,7 +147,16 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         stride change would corrupt every frame with no error
 + [ ] **M6: first system, renderer, sim-thread mode** (`doc/design_engine_core.md` §7 step 5,
       `doc/design_python_api.md` §4.3)
-  + [ ] the sim thread for windowed sessions: `run_sim_async()`, `stop_sim_async()` with
-        the staged join, and a frame loop that never waits on the engine
-        (`doc/design_python_api.md` §4.1, §4.3)
+  + [ ] the sim thread for windowed sessions: `run_sim_async()`, and `stop_sim_async()`
+        with the staged join into `stopped`. The frame loop never waits on the engine; it
+        polls (`doc/design_python_api.md` §4.1, §4.3)
+  + [ ] `step(n)` on a paused sim thread: no deadline, waiting in slices that check for
+        signals, so Ctrl+C revokes the grant (`doc/design_python_api.md` §4.3)
+  + [ ] async error handoff: state `EMPTY → WRITING → READY`; claim before writing the slot,
+        release-publish only at `READY`, acquire-read only from `READY`
+        (`doc/design_python_api.md` §8), with its sanitizer test of racing writers
+  + [ ] the drain wake: `drain_events()` stores `read` under the gate mutex and wakes a sim
+        parked on the backlog (`doc/design_engine_core.md` §5.2)
+  + [ ] the catch-up clamp, `catch_up_clamp_seconds = 0.25` in `sim_estab:limits`, and
+        `sim.behind` (`doc/design_limits.md` §1.2)
 + [ ] **M7: mod tiers** (`doc/design_modding.md`); process hosts ship without snapshots
