@@ -790,8 +790,9 @@ column's destination buffer and one upload region are each limited to 4 GiB: 2³
 4-byte elements, far above any planned world size. The generator asserts this rather than
 truncating.
 
-**Device loss ends the session.** A lost GPU device is logged at `critical`, and the engine
-enters `failed` (`design_python_api.md` §2). There is no recover-and-re-upload path, and
+**Device loss ends the process.** A lost GPU device is logged at `critical`, the engine
+cleans up its child processes, and the process exits with a nonzero status
+(`design_python_api.md` §2). There is no recover-and-re-upload path, and
 none is planned. The GPU is peripheral-domain, so core state is untouched, nothing related
 to determinism is lost, and the session can still be replayed.
 
@@ -1137,7 +1138,7 @@ These rules from §2 to §7 apply at every tier.
   A read path masks dead rows, and only an append-only type lets it skip the mask.
 - **Every object type has a cap** (§2.1, §2.2): 2²⁴ unless declared, at most 2³²−1. Memory
   is reserved at the cap and committed as the pool fills, and addresses never move. Commit
-  failure ends the session and is never a rejection. A cap fixes its accepted set by merge
+  failure ends the process and is never a rejection. A cap fixes its accepted set by merge
   order, and every cap joins session identity. What a create at the cap *does* depends on
   the kind of cap. A game-rule cap rejects deterministically and reports. A ceiling is an
   error and stops: the simulation for an engine system, or the mod whose system it is

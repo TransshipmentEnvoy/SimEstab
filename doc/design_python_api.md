@@ -509,8 +509,8 @@ Rules:
   - **A mod's gate deadline is declared by the mod and capped by the engine**, like its
     inbox size: the manifest's `deadline_ms`, or `mod_deadline_ms` when it gives none, and
     never more than `max_mod_deadline_ms` (`design_modding.md` §3). What happens on expiry
-    is derived, not declared: a mod that submits is suspended, and a mod paced only by its
-    engine view is continued without (`design_engine_core.md` §3.3). The values are open
+    is derived, not declared: the participant behind a mod's endpoint is suspended, and the
+    one behind its paced engine view is continued without (`design_engine_core.md` §3.3). The values are open
     ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
   - **Quarantine is one number, not a mode plus a number.** `mod_retry_limit` alone decides
     it: 0 keeps a failed mod disabled, and N re-spawns it up to N times. A separate mode
@@ -814,9 +814,11 @@ call sites. Where ticks run follows from the kind of session:
     loop and all core state. Every other thread touches only the three artifacts: commands,
     engine views and events. This is the same one-way boundary as the Python/C++ split, one level
     down. It holds because of *when*, not because of which threads exist: the sim thread
-    owns core state while it runs. The two operations that read core state from the owner
-    thread are the freeze's tick-0 publish and `checksum()`. Both happen at moments when the
-    sim thread is provably not running a tick.
+    owns core state while it runs. Three operations read core state from another thread:
+    the freeze's tick-0 publish, `checksum()`, and a `snapshot()` copy that the requesting
+    thread makes while nobody runs ticks, holding the executor role
+    (`design_engine_core.md` §3.1). All three happen at moments when no tick can be
+    running.
   - **One gate predicate, fed by independent fields.** The host is not a participant
     (`design_engine_core.md` §3.3). Its control state is:
 
@@ -961,8 +963,10 @@ call sites. Where ticks run follows from the kind of session:
     naming the tick reached, and the caller drains and steps again
     (`design_engine_core.md` §5.2).
 
-    That makes three waits on another party in the whole system. Anything else that waits
-    is a defect, and so is any operation in this table that ever waits:
+    That makes five declared waits in the whole system: the gate, admission, outcome, a
+    step's wait for its ticks and a snapshot request's wait for a tick boundary
+    (`design_engine_core.md` §1.1). Anything else that waits is a defect, and so is any
+    operation in this table that ever waits:
 
     | Operation | Why it never waits |
     |---|---|
@@ -1270,9 +1274,11 @@ Rules:
 
 - **One capacity rejection, and only one.** `queue_full` means *more than you allocated for
   this tick*: a producer breaking its own declaration, not a busy engine. An engine that is
-  briefly behind makes a producer wait; it never rejects. So the full result set is the
-  contract violations, one lifecycle state and one transport failure. None of them is a load
-  signal:
+  briefly behind makes a paced producer wait; it never rejects. So for a paced producer the
+  full result set is the contract violations, one lifecycle state and one transport failure,
+  and none of them is a load signal. The host endpoint is the exception: it never waits, so
+  a sim that is paused or behind lets it fill, and its `queue_full` is the one load signal
+  the frame loop reads (§4.3):
 
   | Result | Class | Meaning |
   |---|---|---|
@@ -1696,15 +1702,16 @@ Rules:
   the commands (`design_engine_core.md` §2.3, `design_modding.md` §4.3). So a new event type
   bumps the *event* schema version and leaves the replay format alone. The two version
   numbers move independently, which is why there are two.
-- **The M1 events.** These exist from the first build. Each names its class and the
-  thread that raises it:
+- **The M1 events.** These exist from the first build, except `sim.behind`, which comes
+  with the sim thread and its catch-up clamp in M6. Each names its class and the thread that
+  raises it:
 
   | Event | Class | Raised by | Means |
   |---|---|---|---|
   | `session.started` | reliable | the freeze, on the owner thread | the session exists, and tick 0 is published (`design_engine_core.md` §2.4 step 9) |
   | `session.stopped` | reliable | the executor | the executor met the stop at the gate; no tick runs again (§2) |
   | `sim.backlog_paused`, `sim.backlog_resumed` | coalescible | the executor | the gate paused at `high_water`, or passed again below it |
-  | `sim.behind` | coalescible | the sim thread | a wake hit the catch-up clamp (§4.3) |
+  | `sim.behind` | coalescible | the sim thread, from M6 | a wake hit the catch-up clamp (§4.3) |
   | `participant.expired`, `participant.suspended`, `participant.resumed` | reliable | the executor | a participant's deadline expired; it left the conjunction under `SUSPEND`; it came back (`design_engine_core.md` §3.3) |
   | `participant.left` | reliable | the owner thread or a mod host thread | a mod host stopped, and its participant left the gate (`design_engine_core.md` §3.3) |
   | `command.protocol_error` | reliable | the executor, at the drain | an endpoint held entries for a tick already past (`design_engine_core.md` §5.1 (S3)). One report per endpoint per tick, with the count |
@@ -1785,7 +1792,8 @@ Rules:
   forbids.
 
   `ViewBusyError` is one of the retryable types, which is why it is a distinct type rather
-  than a kind of `RuntimeError`. A mod that catches it can retry on its next idle slice.
+  than a kind of `RuntimeError`. A mod that catches it can retry on its next pass of the
+  mod host loop.
   Catching `EngineClosedError` or `EngineFailedError` only hides a dead engine.
 - Fail loudly and early. A failed construction leaves no partial state (C++ constructor
   rollback). A failed `run_*_async` leaves the engine in the plain `running` state.
@@ -1800,8 +1808,8 @@ Go through this list for every new piece of Python API.
 3. New data flowing to Python? It is a snapshot, an event or a query, never per-entity call
    traffic (§5 rule 1). Make it zero-copy where it recurs every frame.
 4. New data flowing in? It is a command (recorded and validated) or a construction-time
-   option. Nothing else changes the world. A command names its tick and gets two answers,
-   admission and outcome (§7.1). A new inbound surface that returns one answer, or none, is
+   option. Nothing else changes the world. A command gets two answers, admission and
+   outcome, and a paced command names its tick (§7.1). A new inbound surface that returns one answer, or none, is
    a new model, not a new call.
 5. State the thread contract explicitly (§6): owner-thread-only, owner-thread-and-quiescent,
    externally synchronized, thread-safe, or immutable and shared. A new raise site gets a

@@ -35,7 +35,8 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
         changes under the mutex, followed by a notify (the wake-up rule). The host controls
         it with two independent atomics, `run_until` and `stop_requested`; pause, resume and
         step serialize under the same mutex. The host is not a participant, so in M1 the
-        gate only ends a step (`doc/design_engine_core.md` §3.3)
+        gate ends a step, stops it at the backlog mark, and waits only for paced engine
+        views (`doc/design_engine_core.md` §3.3)
   + [ ] the unpaced host endpoint: `submit(cmd)` names no tick and never waits; a full ring
         returns `queue_full`; `outcome(h)` returns `pending`, then the outcome and the tick
         that ran it (`doc/design_engine_core.md` §5.1)

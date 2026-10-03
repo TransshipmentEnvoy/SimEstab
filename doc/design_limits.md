@@ -286,8 +286,9 @@ reaches them (`design_data_container.md` §2.2). A 2²⁴ cap of 8-byte values r
 per column. A thousand such columns use about 125 GiB of the 128 TiB a 64-bit Linux process
 can address. Addresses never move for the whole session.
 
-**Commit failure ends the session; it is never a rejection.** A failed commit enters
-`failed` (`design_python_api.md` §2). Refusing creates because one machine ran out of memory
+**Commit failure ends the process; it is never a rejection.** A failed commit logs
+`critical`, cleans up the engine's child processes and exits with a nonzero status
+(`design_python_api.md` §2). Refusing creates because one machine ran out of memory
 would make the accepted set depend on the machine, and replays would diverge. On Linux,
 overcommit can let a commit succeed and fail later, so the engine commits explicitly and
 counts committed bytes against a budget.

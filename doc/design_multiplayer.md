@@ -162,7 +162,6 @@ may stamp a command.
     ones it has already declared, so the wait cannot deadlock (`design_engine_core.md`
     §5.1).
   - The same window is the ceiling of `HostPolicy.ipc_deadline` (`design_limits.md` §1.1).
-    The worst-case totals in `design_limits.md` §2.2 also depend on it.
   - A margin of 1 is enough while the slowest peer's round-trip time (RTT) is at most one
     tick period, which is 33 ms at 30 Hz. A peer reports for turn `t+1` when tick `t`
     starts, and does not need turn `t+1` until tick `t+1` is scheduled. That covers LAN and
@@ -337,6 +336,8 @@ These are tracked in [open_question.md](open_question.md). None of them blocks M
 - [Q54](open_question.md#q54-enforcing-the-same-mod-set-on-every-peer) Enforcing an
   identical mod set between peers. Session identity records the mod set but does not compare
   it.
+- [Q55](open_question.md#q55-the-local-players-source-id) Who produces on the local player's
+  peer endpoint, and whether the host endpoint is closed in a networked session (§3.2, §4).
 
 ---
 

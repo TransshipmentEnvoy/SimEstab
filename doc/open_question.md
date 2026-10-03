@@ -249,8 +249,8 @@ protocol behind `on_expiry = DROP` is undesigned (`engine_core` §3.3; `multipla
 ### Q50. `input_delay_ticks`
 
 The value of a peer's stamp margin (`multiplayer` §3.2). It needs measurement against real
-round-trip times, and the transport owns it. Ring depth, the `ipc_deadline` ceiling (Q43)
-and the worst-case totals in `limits` §2.2 depend on it. Blocks nothing in M1.
+round-trip times, and the transport owns it. The `ipc_deadline` ceiling (Q43) depends on it;
+no ring depth does. Blocks nothing in M1.
 
 ### Q51. Transport and session formation
 

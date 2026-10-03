@@ -44,7 +44,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | determinism boundary | The line between the core (plus content and core mods) and the peripherals. | engine_core §1 |
 | host | The application that owns the engine, usually the Python program. It is source 0. In single-player it is not a participant: its commands name no tick. "Mod host" is a different thing (see Mods). | engine_core §3.3 |
 | owner thread | The thread that created the `Engine`. Only it may make lifecycle calls and pump the engine. | python_api §2 |
-| owner-thread rule | The frame loop never waits on the engine; it polls. Only `step(n)` and the shutdown calls wait, and only on the sim or a deadline. | engine_core §3.3 |
+| owner-thread rule | The frame loop never waits on the engine; it polls. Only `snapshot()`, `step(n)` and the shutdown calls wait, and only on the sim or a deadline. | engine_core §3.3 |
 | host endpoint | The host's own command endpoint: source 0. Its producer is the owner thread. Unpaced: its commands name no tick, and the first drain after a submit runs them. | python_api §7.1 |
 | unpaced | Of an endpoint: its commands name no tick, so the gate never waits for it. Only the host endpoint, in single-player. | engine_core §5.1 |
 | sim thread | The C++ thread that runs ticks in a windowed session. | python_api §4.3 |
@@ -52,7 +52,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | participant | A peripheral the core waits for before each tick, up to that participant's deadline. Every producer that names ticks is one; others can opt in with `paced=True`. | engine_core §3.3 |
 | recorder | A peripheral that submits nothing but must not miss a tick; it registers as a participant explicitly. | engine_core §3.3 |
 | conjunction | The set of active participants the gate waits for: a tick runs only when all of them are ready. | engine_core §3.3 |
-| observer | A peripheral the core never waits for. It only reads its engine view. A mod whose capabilities grant no command type is one. | engine_core §3.3 |
+| observer | A peripheral the core never waits for. It only reads its engine view. A mod whose capabilities grant no command type, and whose engine view is not paced, is one. | engine_core §3.3 |
 | gate | The one place the core waits: before each tick, until nothing blocks the tick (stop, event backlog, pause, or a participant that is not ready). | engine_core §3.3 |
 | run grant | The host's `run_until` value: the core may run ticks below it. `U64_MAX` means running; pause and `step(n)` lower it. | engine_core §3.3 |
 | `stop_requested` | Sticky flag that stops the core at the gate. Highest priority. | engine_core §3.3 |
@@ -91,7 +91,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 
 | Term | Meaning | Where |
 |---|---|---|
-| command | The only input that changes world state. Names the tick it applies to, is submitted through an endpoint, runs at that tick and is recorded. | engine_core §5.1 |
+| command | The only input that changes world state. Submitted through an endpoint, run at one tick and recorded. A paced command names its tick; a host command takes the tick of the drain that runs it. | engine_core §5.1 |
 | source | Anything that submits commands: the host, a mod, a peer, an engine AI. | limits §2.1 |
 | source id | A source's `u32` number, fixed at the freeze. The host is 0. Commands run in source id order. | engine_core §2.4 |
 | endpoint | A single-producer command ring for one source. A source has one endpoint in v1. | engine_core §5.1 |

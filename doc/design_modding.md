@@ -159,12 +159,14 @@ event's delivery class (§4.2). There is no expiry-policy setting either: it fol
 the mod does (§4.1). One setting has no field yet: an endpoint per producer thread (§4.1,
 [Q66](open_question.md#q66-how-does-a-mod-declare-an-endpoint-per-producer-thread)).
 
-**What the mod does decides whether the gate waits for it.** A mod whose capabilities grant
-no command type is an **observer**: the freeze gives it no endpoint and registers no
-participant for it, and its `[pacing]` table is ignored. A mod that may submit is a
-participant, and so is a mod with a paced engine view (`private_view = "paced"`). The
-default and the cap behind `deadline_ms` are `HostPolicy` fields, and both values are open
-([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
+**What the mod does decides whether the gate waits for it.** A mod that may submit gets an
+endpoint and a participant behind it, which its mod host loop declares for (§4.2). A paced
+engine view (`private_view = "paced"`) is a participant of its own, which declares by
+taking (`design_engine_core.md` §3.1). A mod with both is two participants, each with one
+writer, and `deadline_ms` applies to each. A mod with neither is an **observer**: the
+freeze gives it no endpoint and registers no participant for it, and its `[pacing]` table
+is ignored. The default and the cap behind `deadline_ms` are `HostPolicy` fields, and both
+values are open ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
 
 The example requests `commands_per_tick = 4096`, above the endpoint capacity cap of 256
 (`design_limits.md` §2). Both numbers stay as they are until the field's meaning is settled
@@ -351,18 +353,19 @@ outcomes of the commands the mod submitted for that tick (§4.2).
     ([Q66](open_question.md#q66-how-does-a-mod-declare-an-endpoint-per-producer-thread)),
     and so is how the drain would order two endpoints of one source
     ([Q62](open_question.md#q62-in-what-order-are-two-endpoints-of-one-source-drained)).
-- `paced`: true for a mod the gate waits for, one that may submit or has a paced engine view
-  (§3). False for an observer.
-- `next_tick()`: the tick this mod is about to act in. For a paced mod it is the tick after
-  its last declaration, which the mod host loop names in every submit and then releases. For
-  an observer it is the tick the sim will run next (§4.2).
+- `paced`: true for a mod that may submit (§3). Its mod host loop declares ready for it. A
+  mod paced only by its engine view is not `paced` in this sense: its takes declare for it.
+- `next_tick()`: the tick this mod is about to act in. For a `paced` mod it is the tick after
+  its last declaration, which the mod host loop names in every submit and then releases.
+  Otherwise it is the tick the sim will run next (§4.2).
 - `declare_ready(tick)`: **releases the tick.** Submitting commands makes a mod a
   participant (`design_engine_core.md` §3.3). So the engine does not advance past a tick
   until the mod declares it has finished submitting for it. A mod that may submit is always
   paced, because a mod the engine does not wait for is a mod whose commands can be dropped.
   Its margin decides how far ahead it may declare: up to `margin` ticks past the tick the
   sim runs next. So a mod with a margin runs ahead of the sim, and the gate waits for it only
-  when it falls behind. An observer never calls it.
+  when it falls behind. A mod that may not submit never calls it; a paced engine view
+  declares by taking.
 - `wait()`: sleeps until the mod may act for its next tick, an event arrives in its inbox,
   or `stopping` is set. A paced mod may act again once its next tick is within its margin of
   the sim; an observer, once the sim has run another tick. The mod host loop calls it after
@@ -1015,8 +1018,9 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   would map it). Spawn never adds either resource.
 - **No fan-out can run during loading.** The bus fans out only in `bus.publish()`, which the
   host application calls in its loop. That happens after `load_mods` has returned and every
-  inbox exists. Engine events emitted while loading wait in the event ring, which is bounded
-  and lossless up to its size (`design_python_api.md` §7.3). They reach every subscriber on
+  inbox exists. Engine events raised while loading wait for the owner's first drain: those
+  raised outside a tick in the side list, the rest in the event ring, which is bounded and
+  lossless (`design_python_api.md` §7.3). They reach every subscriber on
   the first `bus.publish()`. Together with subscription by manifest (§4.1), this closes the
   gap between spawn and subscribe from both ends. A mod host is subscribed the moment it
   exists, and nothing is delivered until every mod host exists.

@@ -116,10 +116,14 @@ Progress classes, used in exactly this sense throughout:
   at most one notify. Nobody waits, logs or calls out while holding it, so the wait is
   bounded by those instructions, not by another party. A gate declaration and the drain's
   side of the admission wait are short locks.
-- **Bounded wait**: the core may block on another party. An unbounded or undeclared wait is
-  forbidden. Every wait follows three rules. It is the gate (§3.3) or one of the shutdown
-  and revocation drains below. It is bounded by a declared deadline. Its expiry has a
-  declared outcome.
+- **Bounded wait**: a thread may block on another party, and only in a declared wait. An
+  undeclared wait is forbidden. A wait of the core follows three rules. It is the gate
+  (§3.3) or one of the shutdown and revocation drains below. It is bounded by a declared
+  deadline, or, for a pause or the event backlog, held deliberately with no deadline. Its
+  expiry has a declared outcome. A caller's wait (admission, outcome, a step's ticks, a
+  snapshot request) is bounded by structure instead of a timer: it ends when the sim
+  reaches a named tick or tick boundary, or when revocation ends it. A pause holds it as it
+  holds the sim.
   - The main case is **pacing**. Under lockstep, every instance advances at the rate of the
     slowest one, because every peer must run the same command set (`design_multiplayer.md`
     §3.1). Refusing to wait there would cause a desync, not a smoother tick rate.
@@ -148,7 +152,7 @@ specified:
 
 | Mechanism | Direction | Linearization point | Progress | Specified in |
 |---|---|---|---|---|
-| **Engine view** | sim → one reader; the reader's return header travels back on the same edge | publish: the release exchange of the engine view's control word (§3.2 (P2)); take: the release exchange at (T2), which also publishes the return header | publisher wait-free (1 exchange); reader wait-free (1 exchange) | §3.2, §3.5 |
+| **Engine view** | sim → one reader; the reader's return header travels back on the same edge | publish: the release exchange of the engine view's control word (§3.2 (P2)); take: the release exchange at (T2), which also publishes the return header | publisher wait-free (1 exchange); reader wait-free (1 exchange), and a paced take adds a short lock to declare | §3.2, §3.5 |
 | **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it. A full ring parks the producer on the endpoint's mutex and condition variable, and the drain stores `read` under that mutex | drain wait-free (1 load), plus a short lock on each endpoint it frees space in; submit wait-free unless the ring is full, where a paced producer makes a **bounded wait** until the oldest tick in its ring has run and the host gets `queue_full` | §5.1 |
 | **Command outcome** | sim → producer | the outcome's release publication at the end of the tick that consumed the command, made visible by (G5) | a paced reader **blocks, bounded** by the named tick running, on the tick-progress wait, and is refused outright if it still holds that tick; the host polls and never blocks | §5.1 |
 | **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of `admission`; revocation: the `OPEN → REVOKING` exchange | submit side wait-free; revoker blocks under the shutdown deadline | §5.1 |
@@ -487,6 +491,11 @@ takes again; every publish is seen. Until the first take, the reader is ready th
 0, which the freeze publishes (§2.4 step 9). A take that finds nothing new declares nothing.
 A paced engine view ignores cadence hints (§3.5): its cadence is part of its declaration.
 
+**A paced engine view is a participant of its own**, registered with the view (§3.3). Its
+take is that participant's only declaration. A reader that also submits commands is two
+participants, each with one writer: its producer declares for the commands, and its takes
+declare for the view. Neither can release a tick the other has not finished with.
+
 **Placement**, heap or shared memory, is not a v1 declaration. Every engine view is heap-allocated
 engine memory. Shared-memory placement comes back with `SHARED` and its split-permission
 interprocess ABI (Appendix A, `design_modding.md` §4.3).
@@ -730,7 +739,8 @@ mechanism.
 pair carries the payload forward and the return header back. Nothing else in the protocol is
 atomic.
 
-**Progress.** Publish and take are wait-free, in one exchange each.
+**Progress.** Publish and take are wait-free, in one exchange each. A take on a paced
+engine view also makes its declaration, one short lock on `gate.m` (§3.1, §3.3).
 
 **Failure and deadline behaviour.** The only failure is the local API refusal while array
 views of the previous block are alive (§3.1). A due publish cannot be skipped, and a take
@@ -1041,15 +1051,17 @@ sim has met it at the gate, no tick runs again. A stopped session can still be r
 (`snapshot()`, `checksum()`) and closed (`design_python_api.md` §2).
 
 **Registration** happens before the freeze, which closes the set (§2.4 step 3a). It declares
-the deadline and the expiry policy. There is **no global default**. Registration is where
-the cost is taken on, so it is where the cost is declared, just as a mod manifest declares
-its endpoint capacity. The count is capped (`design_limits.md` §2.1). The cap is generous
+the deadline and the expiry policy. There is **no engine-wide default** for participants in
+general. Registration is where the cost is taken on, so it is where the cost is declared,
+just as a mod manifest declares its endpoint capacity. Mods are the one case with a
+fallback, because a manifest may leave its deadline out (below). The count is capped (`design_limits.md` §2.1). The cap is generous
 because a participant costs an array entry scanned once per tick, not an allocation.
 
 A mod's deadline comes from its manifest's `deadline_ms`, or `HostPolicy`'s default when the
 manifest gives none, and `HostPolicy` caps it (`design_modding.md` §3,
-`design_python_api.md` §3). A mod's expiry policy is derived, not declared: `SUSPEND` for a
-mod that submits, `CONTINUE_WITHOUT` for a mod paced only by its engine view. Those are the
+`design_python_api.md` §3). A mod's expiry policy is derived, not declared: `SUSPEND` for the
+participant behind its endpoint, `CONTINUE_WITHOUT` for the participant behind its paced
+engine view. Those are the
 only two answers that cannot change what the session computes behind its back (below).
 
 **On expiry.** The participant set never shrinks, since the freeze fixes it. What changes is
@@ -1082,8 +1094,8 @@ The obvious implementation of `DROP` is wrong in two ways:
 
 **Leaving the gate.** A participant whose producer has stopped leaves the conjunction at
 once, without waiting out its deadline. When a mod host stops, by quarantine, a failed spawn
-or `mods.stop()` (`design_modding.md` §4.2, §6), the engine clears its `active` under
-`gate.m` and notifies a parked sim. It reports the departure as a reliable `participant.left`
+or `mods.stop()` (`design_modding.md` §4.2, §6), the engine clears the `active` flag of
+each of its participants under `gate.m` and notifies a parked sim. It reports the departure as a reliable `participant.left`
 event. A retry re-enters it at the current tick: under `gate.m`, its `ready_through` becomes
 `first_unexecuted - 1` and `active` becomes 1. Suspension (`SUSPEND`) and resumption use the
 same two stores.
@@ -1872,8 +1884,9 @@ for e in endpoints (ascending source id):
         std::lock_guard lk(e.m)
         e.read.store(r, release)                              # (S4)
         if e.waiters: e.space_cv.notify_all()                 # (S5) only a parked producer
-record; execute                                               # §2.3, §6
-first_unexecuted.store(t + 1, release)                        # (S6)
+record; execute                                               # §2.3, §6; then publish, and
+                                                              #   first_unexecuted advances
+                                                              #   at (G5) (§3.3)
 ```
 
 **Everything stamped for `t` runs at `t`. There is no quota and no per-tick limit on the
@@ -1955,9 +1968,12 @@ released, and the drain frees them without the producer's help (above). (C1d) ma
 producer's own allocation, and crossing it is the contract violation, not the wait.
 
 **There is exactly one capacity rejection.** `queue_full` means "more than you allocated for
-this tick": a producer breaking its own declaration, not a busy engine. A busy tick, a slow
-drain or a paused session causes a wait, not a rejection. So every rejection is either a
-contract violation, a lifecycle state, or a transport failure, and none is a load signal:
+this tick": a producer breaking its own declaration, not a busy engine. For a paced
+producer, a busy tick, a slow drain or a paused session causes a wait, not a rejection. So
+its every rejection is either a contract violation, a lifecycle state, or a transport
+failure, and none is a load signal. The host endpoint is the exception: it never waits
+(§3.3), so a sim that is paused or behind lets it fill, and its `queue_full` is the one load
+signal, which the frame loop reads:
 
 | Result | Class | Means |
 |---|---|---|
@@ -2015,7 +2031,8 @@ event ring's size, `(C + E) × (D + 1)`, follows from it (§5.2).
   same mutex before it sleeps (C3). So a drain that frees space either lands before the
   re-check, which sees it, or after the producer is parked, and then notifies it. Nothing
   depends on `seq_cst`.
-- (C1a)'s load of `first_unexecuted` is `acquire`, pairing with (S6).
+- (C1a)'s load of `first_unexecuted` is `acquire`, pairing with its `release` store at (G5)
+  (§3.3), which the executor makes under `gate.m` after the tick's publish.
 - (C2), (C4) and each side's load of its own index are relaxed or plain.
 - On the host endpoint, (H3) `release` pairs with (S1) like (C5), and (H1)'s `acquire` load
   of `read` pairs with (S4). Nothing parks there, so nothing needs a wake-up, and the drain
@@ -2248,8 +2265,9 @@ Each step is labelled with the milestone it belongs to (see `glossary.md`).
    rather than later. Identity, column ids, source ids, engine views and participants are all fixed
    at the freeze, so every later step is written against a session that already exists. M1
    runs headless: `step(n)` runs ticks on the calling thread, and the host is an unpaced
-   source with no participant beside it. The gate then only ends a step (§3.3), so this step
-   builds the gate at its simplest setting.
+   source. The gate then ends a step at its grant, stops it at the event backlog mark, and
+   waits only for paced engine views (§3.3), so this step builds the gate at its simplest
+   setting.
 2. **M2: the `fixed<>` type, deterministic PRNG, the three checksum levels (§2.3), and
    replay record and playback.** The verification harness must exist before the first
    system does.
