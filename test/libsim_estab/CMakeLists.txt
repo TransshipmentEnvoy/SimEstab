@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 # Test build options
-option(TEST_ENABLE_LOGGING "Enable logging in test output" ON)
+option(LIBSIM_ESTAB__TEST_ENABLE_LOGGING "Enable logging in test output" ON)
 
 # Add test directory to include path
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
