@@ -117,6 +117,10 @@ Progress classes, used in exactly this sense throughout:
   at most one notify. Nobody waits, logs or calls out while holding it, so the wait is
   bounded by those instructions, not by another party. A gate declaration and the drain's
   side of the admission wait are short locks.
+  - **Lock order.** Every engine mutex is a short lock: `gate.m` (§3.3), each endpoint's `m`
+    (§5.1), the event side list's (§5.2) and the control block's (`design_python_api.md`
+    §2). One nesting exists: `gate.m`, then one endpoint's `m`, in `revoke` (§5.1). No other
+    two engine mutexes are held together, and nothing logs under one.
 - **Bounded wait**: a thread may block on another party, and only in a declared wait. An
   undeclared wait is forbidden. A wait of the engine core follows three rules. It is the gate
   (§3.3) or one of the shutdown and revocation drains below. It is bounded by a declared

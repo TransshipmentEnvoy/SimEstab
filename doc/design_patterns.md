@@ -257,6 +257,9 @@ Within a subsystem, a second mutex is allowed only if its order is stated where 
 declared. `gpu` has two, acquired as `GPU_device_mutex` → `SDL_ctx_mutex` and never the
 reverse.
 
+The engine's mutexes are short locks and follow `design_engine_core.md` §1.1 instead:
+nothing logs under them.
+
 ## 3. Ref-counted shared globals: `acquire` / `release` pair
 
 **TL;DR**
