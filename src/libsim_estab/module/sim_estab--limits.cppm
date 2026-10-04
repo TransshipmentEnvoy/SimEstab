@@ -10,7 +10,7 @@
  *
  * - Build constants - fixed when this library compiles. Retuning is a rebuild, never a
  *   config change: the chunk quantum, the ceilings (max_endpoint_capacity, max_players,
- *   max_sources, max_views, max_paced_participants), and the entity capacities
+ *   max_sources, max_engine_views, max_paced_participants), and the entity capacities
  *   (default_entity_capacity, max_entity_capacity).
  * - Policy defaults - the shipped default of a field a session may override at
  *   construction (EngineConfig, src/sim_estab/config.py). The engine reads the CONFIGURED
@@ -106,7 +106,7 @@ export inline constexpr std::uint32_t max_sources = 256;
 /// capped. The cap closes the sum rather than restraining a design, which is why it is set
 /// well above any plausible session - and why raising it raises the worst-case snapshot
 /// memory with it, since that is a sum over the same terms.
-export inline constexpr std::uint32_t max_views = 64;
+export inline constexpr std::uint32_t max_engine_views = 64;
 
 /// Anything the gate waits for, with a declared deadline and an expiry policy. Shares
 /// the source ceiling: a paced producer is both a source and a participant, so the two sets
@@ -202,7 +202,7 @@ static_assert(max_paced_participants <= max_sources,
               "participants share the source ceiling: a paced producer is both a source "
               "and a participant, so the two sets mostly overlap");
 
-static_assert(max_views > 0, "a cap of zero would forbid the renderer's engine view, so no window could draw");
+static_assert(max_engine_views > 0, "a cap of zero would forbid the renderer's engine view, so no window could draw");
 static_assert(max_paced_participants > 0,
               "every paced producer and paced engine view is a participant, so a cap of "
               "zero would forbid every peer and every recorder");

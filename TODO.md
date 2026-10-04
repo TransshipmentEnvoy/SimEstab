@@ -48,12 +48,12 @@ designed but not written.
         Registered at the freeze with a projection spec, `identity` (the `id` column, on by
         default), a row predicate kind (only `ALL` in M1) and a cadence; may be paced, and
         then its take declares the reader ready through the next publish
-        (`doc/design_engine_core.md` §3.1, §3.2). A stepped tick publishes only the views
+        (`doc/design_engine_core.md` §3.1, §3.2). A stepped tick publishes only the engine views
         due by cadence. The multi-reader `SHARED` mode is specified but not built (Appendix
         A)
   + [ ] the on-demand snapshot: `snapshot()` on the owner thread, while no tick can run,
         refills the one snapshot buffer with every `[[=viz]]` column and `id` in one pass;
-        a call while array views of the previous result are alive raises `ViewBusyError`
+        a call while array views of the previous result are alive raises `EngineViewBusyError`
         (`doc/design_engine_core.md` §3.1)
   + [ ] the return header: a fixed `ret[3]` next to the blocks, written by the reader and
         read by the publisher, carrying predicate parameters, `last_consumed_tick` and a
@@ -79,7 +79,7 @@ designed but not written.
         `EventBacklogError` from a step that reaches the mark under an owner drain
         (`doc/design_engine_core.md` §5.2)
   + [ ] the M1 events: `session.*`, `sim.backlog_*`, `participant.*`,
-        `command.protocol_error` and `view.bandwidth_over`
+        `command.protocol_error` and `engine_view.bandwidth_over`
         (`doc/design_python_api.md` §7.3)
   + [ ] operation leases around every native call that can overlap `close()`:
         `OPEN → CLOSING` rejects new calls, running calls drain under the shutdown

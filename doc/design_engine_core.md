@@ -482,26 +482,26 @@ registry (§2.4 step 3a). Each engine view declares:
 | **identity**: whether the `id` column is projected | On unless declined. A reader that never needs to know which entity a row is, such as a renderer, declares `identity=False` and saves 8 bytes per matched row (§3.4) |
 
 **A paced engine view's take is its declaration.** Taking the block of tick `t` declares the
-reader ready through `t + k`, where `k` is the view's cadence: up to and including its next
+reader ready through `t + k`, where `k` is the engine view's cadence: up to and including its next
 publish. `take()` makes that store itself, under the gate mutex, with a notify if the sim is
 parked (§3.3). So the sim may run to the next publish, and no further, before the reader
 takes again; every publish is seen. Until the first take, the reader is ready through tick
 0, which the freeze publishes (§2.4 step 9). A take that finds nothing new declares nothing.
 A paced engine view ignores cadence hints (§3.5): its cadence is part of its declaration.
 
-**A paced engine view is a participant of its own**, registered with the view (§3.3). Its
+**A paced engine view is a participant of its own**, registered with the engine view (§3.3). Its
 take is that participant's only declaration. No reader has another: a logic mod never
 declares ready, because its commands name no tick (`design_modding.md` §3). So a mod is at
 most one participant, and no participant has two writers.
 
 **A paced reader takes between steps, never inside one.** A thread inside `step(n)` cannot
 take, whether it runs the ticks itself or waits for the sim thread to run them (§3.3). So
-when that thread is also the view's reader, a step that runs past the view's next publish
-leaves the gate waiting for a take that cannot come. The gate waits out the view's deadline
-and then applies its expiry policy, and under `FAIL` the session ends in `failed`. After
-taking the block of tick `t`, such a reader steps to `t + k` at most, then takes again. A
-reader on another thread has no such limit. The engine does not detect the case: a view's
-reader is whichever thread takes it (`design_python_api.md` §6).
+when that thread is also the engine view's reader, a step that runs past the engine view's
+next publish leaves the gate waiting for a take that cannot come. The gate waits out the
+engine view's deadline and then applies its expiry policy, and under `FAIL` the session ends
+in `failed`. After taking the block of tick `t`, such a reader steps to `t + k` at most, then
+takes again. A reader on another thread has no such limit. The engine does not detect the
+case: an engine view's reader is whichever thread takes it (`design_python_api.md` §6).
 
 **Placement**, heap or shared memory, is not a v1 declaration. Every engine view is heap-allocated
 engine memory. Shared-memory placement comes back with `SHARED` and its split-permission
@@ -787,7 +787,7 @@ from a free choice at registration:
 | Reads | its engine view | its engine view |
 | Writes | commands | **nothing**; reading the world is not participation |
 | Costs | up to its deadline of tick latency | a projection copy |
-| Examples | network peers, a recorder or a mod with a paced engine view | viz and GUI, analytics, an agent mind, every logic mod without a paced view |
+| Examples | network peers, a recorder or a mod with a paced engine view | viz and GUI, analytics, an agent mind, every logic mod without a paced engine view |
 
 **Naming ticks makes a producer a participant; reading does not.** A paced command names the
 tick it applies to (§5.1), and a tick cannot run until every source that acts in it has
@@ -1072,8 +1072,9 @@ A mod's deadline comes from its manifest's `deadline_ms`, or `HostPolicy`'s defa
 manifest gives none, and `HostPolicy` caps it (`design_modding.md` §3,
 `design_python_api.md` §3). A mod's expiry policy is derived, not declared: its paced
 engine view is continued without (`CONTINUE_WITHOUT`). A mod's commands name no tick, so the
-gate never waited for them, and dropping the view from the conjunction cannot change them. Those are the
-only two answers that cannot change what the session computes behind its back (below).
+gate never waited for them, and dropping the engine view from the conjunction cannot change
+them. Those are the only two answers that cannot change what the session computes behind its
+back (below).
 
 **On expiry.** The participant set never shrinks, since the freeze fixes it. What changes is
 whether a participant can still hold the gate. The `DROP` row is a correctness constraint,
@@ -1115,7 +1116,7 @@ current tick: under `gate.m`, its `ready_through` becomes `first_unexecuted - 1`
 the command stream. That excludes a peer, whose commands name ticks the gate waits for. A
 mod's paced engine view qualifies even when the mod submits, because the mod's commands
 name no tick and never depended on the gate. `SUSPEND` is what the mod bus applies to a mod
-whose inbox overflows (`design_modding.md` §4.2). It takes a paced view out of the
+whose inbox overflows (`design_modding.md` §4.2). It takes a paced engine view out of the
 conjunction too, is reported, and is reversible; it never ends the session.
 
 **In single-player with no paced engine view, the conjunction is empty.** While the session runs,

@@ -252,8 +252,8 @@ A mod with a paced engine view declares `deadline_ms` in its manifest.
 `HostPolicy.mod_deadline_ms` applies when it declares none, and
 `HostPolicy.max_mod_deadline_ms` caps it (`modding` §3; `python_api` §3; `limits` §1.1).
 Neither value is decided. The deadline is how long one slow mod's take may hold a tick
-before the gate continues without its view, so it trades tick latency against how often a
-busy mod's view drops out. It needs a measured mod-loop time. M7.
+before the gate continues without its engine view, so it trades tick latency against how often a
+busy mod's engine view drops out. It needs a measured mod-loop time. M7.
 
 ### Q82. How does a reader learn of a world change it must not miss?
 

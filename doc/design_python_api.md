@@ -173,7 +173,7 @@ Rules:
 
   | In `configuring` | Calls |
   |---|---|
-  | legal | `load_content`, `load_native_mod`, `register_hosts`, `register_view`, `load_replay`, `poll_input`, control calls (§3), `state` |
+  | legal | `load_content`, `load_native_mod`, `register_hosts`, `register_engine_view`, `load_replay`, `poll_input`, control calls (§3), `state` |
   | raises `EngineStateError` | `step`, `render`, `run_sim_async`, `submit*`, `outcome*`, `snapshot()`, `view()`, `checksum()`, `drain_events`, `ModBus.start` |
 
   `start_session()` is owner-thread-only (§6). It runs the ordered freeze of
@@ -516,7 +516,7 @@ Rules:
   - **A mod's gate deadline is declared by the mod and capped by the engine**, like its
     inbox size: the manifest's `deadline_ms`, or `mod_deadline_ms` when it gives none, and
     never more than `max_mod_deadline_ms` (`design_modding.md` §3). What happens on expiry
-    is derived, not declared: the gate continues without the view
+    is derived, not declared: the gate continues without the engine view
     (`design_engine_core.md` §3.3). The deadline applies only to a mod's paced engine view,
     the one way a mod becomes a participant; a mod without one has no deadline at all. The values are open
     ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
@@ -1050,7 +1050,7 @@ boundary, or how long a crossing holds the GIL. Rule 5 sets which thread may mak
    is why render owns an engine view instead of calling `engine.snapshot()`. An occasional
    look at a quiescent session calls `snapshot()`, and that is the right default for it.
 5. **Thread contract** (§6). The `Engine`'s pump and lifecycle calls are externally
-   synchronized. `submit*` is single-producer per endpoint. `view.take()` belongs to the
+   synchronized. `submit*` is single-producer per endpoint. `engine_view.take()` belongs to the
    engine view's single reader. Array views are freely shared. `snapshot()` belongs to the
    owner thread, while no tick can run.
 
@@ -1135,9 +1135,10 @@ Rules:
     snapshot on request from another thread, such as a mod host thread calling
     `ctx.snapshot()`, is open
     ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)).
-  - **`view.take()`**: only the `PRIVATE` engine view's single reader thread, whichever thread that
-    is. A `PRIVATE` engine view has one reader by definition (`design_engine_core.md` §3.2). Two
-    threads taking from one engine view is the same usage error as two producers on one endpoint.
+  - **`engine_view.take()`**: only the `PRIVATE` engine view's single reader thread, whichever
+    thread that is. A `PRIVATE` engine view has one reader by definition
+    (`design_engine_core.md` §3.2). Two threads taking from one engine view is the same usage
+    error as two producers on one endpoint.
   - **Array views and drained events**: immutable, and freely shared across threads without
     locks. Sharing an array view keeps its block alive, and so delays the next `take()`
     (§7.2). That is a lifetime consequence, not a thread-safety one.
@@ -1449,23 +1450,23 @@ kept = snap.copy()                           # process-owned; outlives everythin
 
 # 2. Opt-in zero-copy: an engine view, registered before the freeze. Every engine view
 #    projects the id column unless it declines it with identity=False.
-engine.register_view("ui", columns=["pop.position"], cadence=1)
+engine.register_engine_view("ui", columns=["pop.position"], cadence=1)
 ...
-view = engine.view("ui")                     # the handle; one owner, for the session
+engine_view = engine.view("ui")              # the handle; one owner, for the session
 
-def sample(view):
-    with view.take() as snap:                # one atomic exchange; zero-copy
+def sample(engine_view):
+    with engine_view.take() as snap:         # one atomic exchange; zero-copy
         pos = snap.column("pop.position")    # read-only ndarray view, NO COPY
         ids = snap.column("pop.id")          # uint64 identity, ascending
         return snap.tick, ids[42], float(pos[0][0])
     # `with` drops the handle; `pos`/`ids` die with the function frame.
 
-tick, watched, x = sample(view)              # only scalars escaped
+tick, watched, x = sample(engine_view)       # only scalars escaped
 
 # 3. Row filtering: declare the predicate KIND at registration, steer its
 #    PARAMETERS per frame. The parameters ride the same exchange as the take.
-engine.register_view("render", columns=["pop.position", "pop.kind"],
-                     cadence=1, predicate="sphere", identity=False)   # draws; never looks up
+engine.register_engine_view("render", columns=["pop.position", "pop.kind"],
+                            cadence=1, predicate="sphere", identity=False)   # draws; never looks up
 rv = engine.view("render")
 rv.set_predicate(centre=cam.pos, radius=cam.far * 1.5)   # conservative, on purpose
 with rv.take() as snap:                      # publishes the params, takes the block
@@ -1485,7 +1486,7 @@ Rules:
   No engine view stands behind it, so nothing is published for a reader who never asks, and
   a session nobody inspects pays nothing. There is one snapshot buffer, reserved at the
   freeze and refilled by every call. So **`snapshot()` is refused while array views on the
-  previous result are alive**, with `ViewBusyError`, exactly as `take()` is (below). Bound
+  previous result are alive**, with `EngineViewBusyError`, exactly as `take()` is (below). Bound
   the array views in a function frame, and keep what must outlive the next call with
   `snap.copy()`. It never returns a torn snapshot, because no tick runs during the copy.
 
@@ -1509,13 +1510,13 @@ Rules:
   one sharp edge:
 
   ```python
-  with view.take() as snap:
+  with engine_view.take() as snap:
       pos = snap.column("pop.position")
 
-  pos          # still alive -> the previous block is still yours
-  view.take()  # raises ViewBusyError
+  pos                 # still alive -> the previous block is still yours
+  engine_view.take()  # raises EngineViewBusyError
   del pos
-  view.take()  # fine
+  engine_view.take()  # fine
   ```
 
   The block handed back is the next one the publisher writes. A take while a derived array
@@ -1528,7 +1529,7 @@ Rules:
     enough**. Python has no block scope, so an array view bound inside the block is still
     alive after it. Bound the array views too. A function frame is the idiomatic way, as the
     example does. Advice that says "just use `with`" is incomplete, and produces
-    `ViewBusyError` in the very code that follows it.
+    `EngineViewBusyError` in the very code that follows it.
   - `__exit__` does not revoke array views, and must not. Array views stay valid when shared
     with other threads because scope exit cannot pull memory out from under them.
 - **Retention and archiving use a copy**: `snap.copy()`, on the result of a `take()` or of
@@ -1545,8 +1546,8 @@ Rules:
   therefore correct everywhere, and `snap.find` is the convenience built on it:
 
   ```python
-  def still_alive(view, watched):
-      with view.take() as snap:
+  def still_alive(engine_view, watched):
+      with engine_view.take() as snap:
           return snap.find("pop", watched) is not None   # searchsorted, then an equality check
   ```
 
@@ -1561,7 +1562,7 @@ Rules:
   any other tick: those due by their cadence (§4.3).
 - **The predicate kind is declared at registration; its parameters are set at run time.**
   `predicate=` takes one of `"all"` (the default), `"aabb"`, `"sphere"`, `"frustum"` or
-  `"tag"` (`design_engine_core.md` §3.4). `view.set_predicate(**params)` writes the
+  `"tag"` (`design_engine_core.md` §3.4). `engine_view.set_predicate(**params)` writes the
   parameters into the engine view's return header. They reach the publisher at the **next
   `take()`**, because that exchange is what publishes them (`design_engine_core.md` §3.5).
   Two consequences follow:
@@ -1581,12 +1582,13 @@ Rules:
   slot and generation instead, and how an engine view projects them is open
   ([Q57](open_question.md#q57-gpu-per-entity-state-across-frames)). `snapshot()` always
   carries `id`.
-- **`view.lag` and `view.matched_rows`** are the two counters the return header provides.
-  `lag` is how many ticks behind the reader is, computed from the `last_consumed_tick` that
-  the return header carries back. A single-reader engine view never skips a publish, so without
-  `lag` a lagging reader is invisible. `view.hint_cadence(k)` is the advisory back-pressure
-  that goes with it. The publisher may ignore it, and always does on a paced engine view. A
-  reader that cannot miss a tick uses `paced=True` instead.
+- **`engine_view.lag` and `engine_view.matched_rows`** are the two counters the return
+  header provides. `lag` is how many ticks behind the reader is, computed from the
+  `last_consumed_tick` that the return header carries back. A single-reader engine view never
+  skips a publish, so without `lag` a lagging reader is invisible.
+  `engine_view.hint_cadence(k)` is the advisory back-pressure that goes with it. The publisher
+  may ignore it, and always does on a paced engine view. A reader that cannot miss a tick
+  uses `paced=True` instead.
 - **An engine view may be paced.** Registering it with `paced=True` and a deadline makes its reader
   a participant (`design_engine_core.md` §3.3). The engine core will not advance past a tick the
   engine view has not taken. That is how a recorder or training-data collector makes sure it misses
@@ -1598,9 +1600,9 @@ Rules:
   is part of what it declared.
 
   **A paced reader takes between steps.** A thread inside `step(n)` cannot take. So a
-  reader that also steps the session steps no further than its view's next publish: it
+  reader that also steps the session steps no further than its engine view's next publish: it
   takes, steps at most `cadence` ticks, and takes again. A longer step leaves the gate
-  waiting for a take that cannot come, until the view's deadline expires and its expiry
+  waiting for a take that cannot come, until the engine view's deadline expires and its expiry
   policy applies (`design_engine_core.md` §3.1). A reader on another thread has no such
   limit.
 
@@ -1755,7 +1757,7 @@ Rules:
   | `participant.expired`, `participant.suspended`, `participant.resumed` | reliable | the executor | a participant's deadline expired; it left the conjunction under `SUSPEND`; it came back (`design_engine_core.md` §3.3) |
   | `participant.left` | reliable | the owner thread or a mod host thread | a mod host stopped, and its participant left the gate (`design_engine_core.md` §3.3) |
   | `command.protocol_error` | reliable | the executor, at the drain | an endpoint held entries for a tick already past (`design_engine_core.md` §5.1 (S3)). One report per endpoint per tick, with the count |
-  | `view.bandwidth_over` | coalescible | the executor | an engine view crossed `projection_warn_bytes_per_second` (`design_limits.md` §5) |
+  | `engine_view.bandwidth_over` | coalescible | the executor | an engine view crossed `projection_warn_bytes_per_second` (`design_limits.md` §5) |
 
   Later milestones add the cap refusal (M3), the checksum mismatch (M2) and the mod
   suspension (M7). An event the executor raises adds its per-tick worst case to `E` in the
@@ -1814,13 +1816,13 @@ Rules:
   |---|---|---|
   | Any new call once closing has linearized, or any call on a closed engine or handle (§2, §6, §7.2) | `EngineClosedError` | no; terminal for that engine |
   | Under `on_failed_stop = "raise"`: the call that hit a `failed` entry path, such as `stop_sim_async()` on the final join timeout, and any call after it; `close()` logs instead (§2, §3) | `EngineFailedError` | no; terminal, and the process is poisoned |
-  | `view.take()` or `snapshot()` while an array view on the previous result is alive (§7.2) | `ViewBusyError` | yes: drop the array views, or copy |
+  | `engine_view.take()` or `snapshot()` while an array view on the previous result is alive (§7.2) | `EngineViewBusyError` | yes: drop the array views, or copy |
   | `snap.find(...)` on a snapshot from an engine view that declared `identity=False` (§7.2) | `ValueError` | no; the declaration is closed at the freeze. Use `snapshot()`, which always carries `id` |
   | `start_session()` while `EngineConfig.event_drain` is `None` (§3) | `ValueError` | no for this `Engine`: the config is frozen. Construct one that declares `"owner"` or `"sink"` |
   | `step()` under an owner drain when the event backlog reaches `high_water` (§4.3, §7.3) | `EventBacklogError` | yes: drain with `drain_events()`, then step again. The error names the tick reached |
   | Any lifecycle or pump call off the owner thread, `close()` and `snapshot()` included (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread. Nothing was touched |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
-  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` or `snapshot()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
+  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` or `snapshot()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_engine_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
   | `snap.column(...)` for a column outside the caller's capabilities (`design_modding.md` §4.1) | `ColumnNotGrantedError` | no; capabilities are fixed at load |
   | `load_mods` failing: a mod fails discovery, verification, handshake or column registration. Or `start_session` failing at the freeze's `on_session_start` (`design_modding.md` §6) | `ModLoadError` | only before the engine is touched. A policy-stage failure leaves the engine `configuring`, and `load_mods` may be retried. From `register_hosts` on, the engine is `load_failed`, and recovery is a new `Engine` |
   | A paced producer's `outcome(h)` for a tick it has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang. The host's `outcome(h)` never raises it: it returns `pending` |
@@ -1833,7 +1835,7 @@ Rules:
   raise, and it is not an outcome. It reports that the *call itself* was made in an order the model
   forbids.
 
-  `ViewBusyError` is one of the retryable types, which is why it is a distinct type rather
+  `EngineViewBusyError` is one of the retryable types, which is why it is a distinct type rather
   than a kind of `RuntimeError`. A mod that catches it can retry on its next pass of the
   mod host loop.
   Catching `EngineClosedError` or `EngineFailedError` only hides a dead engine.

@@ -246,7 +246,7 @@ meaning, and a replacement for the other senses. It guides prose and binds ident
 | generation | a slot's reuse counter, the low half of an id | "epoch" (the `SHARED` engine view's published word) |
 | `commands_per_tick` | only the manifest field | "C" (engine-wide total); "commands executed per tick" (the metric) |
 | shared | the `SHARED` engine view mode, and the OS term "shared memory" | "one copy" (a result that several readers receive) |
-| engine view | the engine mechanism. Never shortened to "view" in prose | "array view" (NumPy); "column span" |
+| engine view | the engine mechanism. Never shortened to "view", in prose or in an identifier (`engine_view`, `EngineView`). The one exception is the accessor `engine.view(name)`: its receiver already says "engine" | "array view" (NumPy); "column span" |
 | publish | engine view publish, and the release-store "publication" idiom of engine_core §1.1 | "fan out" (mod bus); "submit" (commands) |
 | drain | command drain, `drain_events()`, inbox drain, per-worker log buffer drain | "wait for running calls" (leases at shutdown) |
 | grant | run grant | "capability" (mods) |

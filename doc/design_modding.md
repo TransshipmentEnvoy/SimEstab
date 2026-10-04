@@ -139,7 +139,7 @@ private_view      = false                   # true = a dedicated PRIVATE engine 
                                             #   is open (Q84).
 deadline_ms       = 50                      # only with private_view = "paced": how long
                                             #   the gate waits for the take before it
-                                            #   continues without this view. Optional:
+                                            #   continues without this engine view. Optional:
                                             #   absent, HostPolicy.mod_deadline_ms
                                             #   applies; capped by
                                             #   HostPolicy.max_mod_deadline_ms
@@ -163,7 +163,7 @@ the same kind of mod. A mod whose capabilities grant no command type gets no end
 only reads.
 
 **The one exception is a paced engine view.** A mod that must not miss a publish, such as a
-recorder or a training-data collector, declares `private_view = "paced"`. That view is then
+recorder or a training-data collector, declares `private_view = "paced"`. That engine view is then
 a participant: the gate waits until the mod has taken each publish, up to `deadline_ms`
 (`design_engine_core.md` §3.1). It is the only way a mod becomes a participant, so a mod is
 never more than one. The default and the cap behind `deadline_ms` are `HostPolicy` fields,
@@ -488,7 +488,7 @@ Rules:
     pauses". A participant mod leaves pacing in two cases: suspension, and its mod host
     stopping (below). Both clear its participant's `active` under the gate mutex and notify
     a parked sim; resuming re-enters it at the current tick (`design_engine_core.md` §3.3).
-    A mod without a paced view has no pacing to leave.
+    A mod without a paced engine view has no pacing to leave.
 
     **Unloading a suspended mod is out of scope**
     ([Q47](open_question.md#q47-unloading-a-suspended-mod)). It is a separate question.
@@ -938,8 +938,8 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
         if policy.host_for(m) == "process":
             pass                              # no snapshot access in v1
         elif m.limits.private_view:
-            engine.register_view(f"mod:{m.id}", columns=grants[m.id].columns,
-                                 cadence=1)
+            engine.register_engine_view(f"mod:{m.id}", columns=grants[m.id].columns,
+                                        cadence=1)
 
     return bus                      # engine is STILL `configuring`. load_mods does not
                                     #   freeze, and cannot: the freeze is the caller's
@@ -1116,7 +1116,7 @@ New **logic mod** (for mod authors):
    ([Q84](open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads)).
    Declare a `PRIVATE` engine view only if you read a large slice every tick. Then read it inside
    `with ctx.view().take() as snap:` **in its own function**, so the array views die with
-   the frame. `take()` is refused (`ViewBusyError`, retryable) while array views on the
+   the frame. `take()` is refused (`EngineViewBusyError`, retryable) while array views on the
    previous snapshot are alive (§4.1).
 6. **You never hold the sim back.** You submit whenever you like, and your commands run at
    the next drain (§3, §4.1). Your reaction latency is however long you take. If you must
