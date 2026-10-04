@@ -155,9 +155,9 @@ specified:
 | **Engine view** | sim → one reader; the reader's return header travels back on the same edge | publish: the release exchange of the engine view's control word (§3.2 (P2)); take: the release exchange at (T2), which also publishes the return header | publisher wait-free (1 exchange); reader wait-free (1 exchange), and a paced take adds a short lock to declare | §3.2, §3.5 |
 | **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it. A full ring parks the producer on the endpoint's mutex and condition variable, and the drain stores `read` under that mutex | drain wait-free (1 load), plus a short lock on each endpoint it frees space in; submit wait-free unless the ring is full, where a paced producer makes a **bounded wait** until the oldest tick in its ring has run and the host gets `queue_full` | §5.1 |
 | **Command outcome** | sim → producer | the outcome's release publication at the end of the tick that consumed the command, made visible by (G5) | a paced reader **blocks, bounded** by the named tick running, on the tick-progress wait, and is refused outright if it still holds that tick; the host polls and never blocks | §5.1 |
-| **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of `admission`; revocation: the `OPEN → REVOKING` exchange | submit side wait-free; revoker blocks under the shutdown deadline | §5.1 |
+| **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of `access_state`; revocation: the `OPEN → REVOKING` exchange | submit side wait-free; revoker blocks under the shutdown deadline | §5.1 |
 | **Event ring** | executor → the session's event drain | enqueue: the release store of the ring's write index | wait-free | §5.2 |
-| **Event drain wake** | owner thread → sim | the drain's store of `read` under `gate.m`, with a notify only if the sim is parked on `HOST_BACKLOG` | the drain takes one short lock per call; the sim's wait is the gate's | §5.2 |
+| **Event drain wake** | owner thread → sim | the drain's store of `read` under `gate.m`, with a notify only if the sim is parked on `EVENT_BACKLOG` | the drain takes one short lock per call; the sim's wait is the gate's | §5.2 |
 | **The gate** | participants and host controls → sim | a participant's `ready_through` store, or a host-control store, each under `gate.m` (G3). The sim re-checks under the same mutex before it waits, and a writer notifies only a parked sim | **the sim blocks, bounded** by each blocker's declared policy; a writer takes a short lock | §3.3 |
 | **Tick progress** | sim → threads waiting for a tick to run | the sim's store of `first_unexecuted` under `gate.m` after each tick's publish (G5) | the sim takes a short lock per tick; a waiter blocks until the tick runs, the owner thread in interruptible slices | §3.3 |
 | **Operation lease** | any-thread API caller ↔ owner's `close()` | successful lease: the second acquire load of the access state; close: the `OPEN → CLOSING` CAS | call side wait-free; close drains under the shutdown deadline | `design_python_api.md` §2, §6 |
@@ -834,7 +834,7 @@ struct Gate {
 Participant       participants[N_PARTICIPANTS];   // fixed at the freeze
 HostControl       host;
 Gate              gate;
-std::atomic<u64>  first_unexecuted;               // sim-written; the tick ledger
+std::atomic<u64>  first_unexecuted;               // sim-written; the next tick not yet run
 u64               backlog;                        // §5.2; PLAIN, sim-thread-only
 ```
 
@@ -884,7 +884,7 @@ for (;;) {
 
 blocker_for(t), in priority order:
     if host.stop_requested.load(acquire): STOP
-    if backlog >= high_water: HOST_BACKLOG                   # recomputed from the ring (§5.2)
+    if backlog >= high_water: EVENT_BACKLOG                  # recomputed from the ring (§5.2)
     if host.run_until.load(acquire) <= t: HOST_PAUSE
     first active p with p.ready_through.load(acquire) < t: p
     otherwise: NONE
@@ -981,7 +981,7 @@ tick, which is what it is. Only revocation wakes a waiter early, with `revoked` 
 `close()` revokes every endpoint it has not already revoked (`design_python_api.md` §2).
 
 `HOST_PAUSE` is intentionally indefinite. Each wait uses a bounded diagnostic slice whose
-expiry means `remain parked`, never `FAIL`. `HOST_BACKLOG` works the same way,
+expiry means `remain parked`, never `FAIL`. `EVENT_BACKLOG` works the same way,
 for the same reason (§5.2): an application that stops draining events pauses the simulation
 and is reported, rather than timed out into a dead session.
 
@@ -1747,11 +1747,11 @@ struct Endpoint {                            // one per producer, fixed at the f
                                              //   (design_limits.md §2)
     alignas(hardware_destructive_interference_size) std::atomic<u64> write;   // producer
     alignas(hardware_destructive_interference_size) std::atomic<u64> read;    // sim
-    std::atomic<u32>  admission;             // OPEN | REVOKING | REVOKED
+    std::atomic<u32>  access_state;          // OPEN | REVOKING | REVOKED
     std::atomic<u32>  active_submit;         // successful/validating calls in flight
     std::mutex        m;                     // the admission wait's park (§3.3's rule)
     std::condition_variable space_cv;        // a producer waiting for ring space parks here
-    u32               waiters;               // producers parked on space_cv; guarded by m
+    u32               space_waiters;         // producers parked on space_cv; guarded by m
     u32               capacity;              // commands this endpoint may hold for ONE tick
     u32               margin;                // 0 for engine sources; the input delay for a peer
     bool              unpaced;               // the host's, or a logic mod's, in single-player
@@ -1771,9 +1771,9 @@ there and drain before new ones, so the source's FIFO order holds across a retry
 
 ```
 try_enter:
-    if admission.load(acquire) != OPEN: return revoked
+    if access_state.load(acquire) != OPEN: return revoked
     active_submit.fetch_add(1, acq_rel)
-    if admission.load(acquire) != OPEN:
+    if access_state.load(acquire) != OPEN:
         active_submit.fetch_sub(1, release); notify revoker; return revoked
     return LEASED                                      # LINEARIZATION POINT
 
@@ -1781,16 +1781,16 @@ leave:
     if active_submit.fetch_sub(1, release) == 1: notify revoker
 
 revoke:
-    { std::lock_guard g(gate.m); std::lock_guard lk(m);    # both parks read admission
-      admission.exchange(REVOKING, acq_rel);           # closes new leases
+    { std::lock_guard g(gate.m); std::lock_guard lk(m);    # both parks read access_state
+      access_state.exchange(REVOKING, acq_rel);        # closes new leases
       space_cv.notify_all();                           # an admission wait is not a lease leak,
       gate.progress_cv.notify_all(); }                 #   nor is an outcome wait (§3.3)
     wait under the shutdown deadline for active_submit == 0
-    admission.store(REVOKED, release)                   # revocation complete
+    access_state.store(REVOKED, release)                # revocation complete
 
 open_or_reopen:
     require old producer stopped && active_submit.load(acquire) == 0
-    admission.store(OPEN, release)                      # do not reset ring indices/slots
+    access_state.store(OPEN, release)                   # do not reset ring indices/slots
 ```
 
 A lease that linearized before `REVOKING` completes normally, including publishing its entry
@@ -1799,7 +1799,7 @@ touching an index or slot. Revocation also **wakes every parked producer**: one 
 the admission wait, and one waiting for an outcome. A producer asleep on the admission wait
 holds a lease, and would otherwise be waited on for the whole shutdown deadline; it wakes
 with `revoked` and leaves. An outcome waiter wakes with `revoked` too. Revocation is the
-only thing that wakes either wait early. The change of `admission` happens under both
+only thing that wakes either wait early. The change of `access_state` happens under both
 mutexes, as §3.3's wake-up rule requires of anything a parked thread waits on. The lock
 order is always `gate.m` before an endpoint's `m`.
 
@@ -1826,11 +1826,11 @@ submit(cmd, t):
     if stamped_for_tick == capacity: leave(); return queue_full        # (C1d)
     w = write.load(relaxed)                                            # (C2) our own word
     if w - read.load(acquire) == DEPTH:                                # (C3) THE ADMISSION WAIT
-        std::unique_lock lk(m); ++waiters                              #      re-check under m
+        std::unique_lock lk(m); ++space_waiters                        #      re-check under m
         space_cv.wait(lk, [&] { return w - read.load(relaxed) < DEPTH
-                                     || admission.load(relaxed) != OPEN; })
-        --waiters
-        if admission.load(relaxed) != OPEN: leave(); return revoked
+                                     || access_state.load(relaxed) != OPEN; })
+        --space_waiters
+        if access_state.load(relaxed) != OPEN: leave(); return revoked
     slot[w % DEPTH] = cmd; slot[w % DEPTH].tick = t                    # (C4) plain; the slot is ours
     ++stamped_for_tick
     write.store(w + 1, release)                                        # (C5) LINEARIZATION POINT
@@ -1898,7 +1898,7 @@ for e in endpoints (ascending source id):
     if r != e.read.load(relaxed):                             # freed space: §3.3's rule
         std::lock_guard lk(e.m)
         e.read.store(r, release)                              # (S4)
-        if e.waiters: e.space_cv.notify_all()                 # (S5) only a parked producer
+        if e.space_waiters: e.space_cv.notify_all()           # (S5) only a parked producer
 record; execute                                               # §2.3, §6; then publish, and
                                                               #   first_unexecuted advances
                                                               #   at (G5) (§3.3)
@@ -2128,7 +2128,7 @@ empties stalls the session while it does nothing else wrong.
 | **owner drain** | the owner thread, in `drain_events()`, between ticks and never inside one (`design_python_api.md` §6) | a session whose application or mods read events: every windowed session |
 | **sink drain** | the executor itself, after every tick, inside a `step(n)` too. The sink is a built-in native consumer: it counts the events and hashes their canonical encoding, and keeps nothing | a run nobody reads events from: CI, golden replays, benchmarks |
 
-Under a sink the backlog never grows, so `HOST_BACKLOG` never blocks, and `drain_events()`
+Under a sink the backlog never grows, so `EVENT_BACKLOG` never blocks, and `drain_events()`
 is refused: the ring already has its one consumer. The sink's count and hash are what a
 golden replay can compare.
 
@@ -2171,9 +2171,9 @@ entries. It is a plain `u64`, not an atomic and not a flag, because the other th
 touches it:
 
 ```
-enqueue:           ++backlog                              # executor, plain
-blocker_for(t):    backlog = write - read.load(acquire)   # recomputed at every gate check,
-                   if backlog >= high_water: HOST_BACKLOG  #   the locked re-check (G2) too
+enqueue:           ++backlog                                # executor, plain
+blocker_for(t):    backlog = write - read.load(acquire)     # recomputed at every gate check,
+                   if backlog >= high_water: EVENT_BACKLOG  #   the locked re-check (G2) too
 ```
 
 The drain publishes nothing new for this. `read` is the index it already stores as the
@@ -2182,7 +2182,7 @@ place the executor already evaluates the gate.
 
 **How a drain wakes a parked sim.** This matters only with a sim thread (M6). An owner
 drain's `drain_events()` consumes its batch, then takes `gate.m` once: it stores `read`, and
-notifies the sim only if `gate.parked == HOST_BACKLOG`. The sim recomputes the backlog in its
+notifies the sim only if `gate.parked == EVENT_BACKLOG`. The sim recomputes the backlog in its
 locked re-check (G2), from the `read` the drain stored under the same mutex. So the wake
 follows the wake-up rule of §3.3: a drain lands either before the re-check, which sees the
 freed space, or after the sim has parked, and then wakes it. The cost is one short lock per
@@ -2193,7 +2193,7 @@ drain call, once per frame. The mechanism has its own row in §1.1.
 | Executor | Drain | At `high_water` |
 |---|---|---|
 | any | sink | never reached |
-| the sim thread | owner | the sim parks on `HOST_BACKLOG`, with no deadline, like a pause. The frame loop's next drain wakes it |
+| the sim thread | owner | the sim parks on `EVENT_BACKLOG`, with no deadline, like a pause. The frame loop's next drain wakes it |
 | a `step(n)`, on its calling thread or on a paused sim thread | owner | the owner thread is the one that must drain, and it is inside `step(n)`. So the step raises `EventBacklogError` at the tick boundary, naming the tick reached, instead of waiting. The caller drains and steps again (`design_python_api.md` §4.3) |
 
 **Why a derived value and not a cached flag.** A flag looks cheaper, but cannot be made
@@ -2212,7 +2212,7 @@ response:
 | Queue | At fault | Response |
 |---|---|---|
 | a mod's own inbox | that mod is not draining | **suspend that mod** and report; the simulation continues (`design_modding.md` §4.2) |
-| the event ring | the application is not draining | **pause the simulation** and report: `HOST_BACKLOG` above |
+| the event ring | the application is not draining | **pause the simulation** and report: `EVENT_BACKLOG` above |
 | a peer falling behind | never decided locally; the server tier decides (§3.3, `DROP`) | until the server tier decides: **pause and report** |
 
 None of these ends a session. Each pause is undone by whatever caused it: the application

@@ -1787,12 +1787,12 @@ Rules:
   EMPTY = 0, WRITING = 1, READY = 2
 
   producer:
-      if !state.compare_exchange_strong(EMPTY, WRITING, acq_rel): return
+      if !error_state.compare_exchange_strong(EMPTY, WRITING, acq_rel): return
       fill captured-error slot with ordinary writes
-      state.store(READY, release)              # publication LP
+      error_state.store(READY, release)        # publication LP
 
   rendezvous:
-      if state.load(acquire) == READY: read captured-error slot
+      if error_state.load(acquire) == READY: read captured-error slot
   ```
 
   The `EMPTY -> WRITING` claim makes the first error win, without publishing uninitialized
