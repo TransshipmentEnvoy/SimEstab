@@ -91,6 +91,12 @@ name**: the last component of the module name.
     standing for `:`: `module/sim_estab--log.cppm`.
   - A non-exported partition is named the same way and also lives in
     `module/`.
+  - CMake lists every interface unit in the one public
+    `FILE_SET CXX_MODULES`, a non-exported partition included. A unit
+    outside a file set is rejected, and a private file set fails once an
+    exported partition imports the unit. So a non-exported partition is
+    installed with the rest. The language hides it, not the package: an
+    importer of `sim_estab` cannot import it or name its types.
 - **Implementation units.**
   - A partition `<p>` of `sim_estab` is implemented in `src/<p>.cpp`
     (`src/log.cpp`, `src/gpu.cpp`).
@@ -663,7 +669,7 @@ Rules:
 
   The two kinds of submodule cannot collide, because a separate module's short
   name differs from every partition name (§1).
-- Bind enums value-by-value.
+- Bind enums value-by-value. Each value keeps its C++ spelling (§10).
 - A bound exception keeps its C++ name: `x_error` is bound as `x_error`, and
   the root as `sim_estab_error`.
 - Bind the root first, in `_if.error`, with `PyExc_RuntimeError` as its base.
@@ -705,3 +711,103 @@ Rules:
 8. Decide what Python needs, and bind only that, per §8. Add tests:
    Boost.Test under `test/libsim_estab/`, and pytest under `test/` for what is
    bound.
+9. Name everything per §10.
+
+---
+
+## 10. Naming
+
+**TL;DR**
+
+- The glossary fixes which word a name uses. This section fixes how the
+  name is spelled.
+- Functions, variables, fields and constants are snake_case. Types are
+  PascalCase.
+- A protocol value is ALL_CAPS. An API value is PascalCase.
+- A query has no `get_` prefix.
+- A bound name keeps its C++ spelling in Python.
+
+New code follows these rules. Where existing code differs, the rule names
+the exception, and the existing name stays.
+
+**Words**
+
+- An identifier for a glossary concept uses the glossary's term, changed
+  only by case.
+- The glossary's table of words with a preferred meaning binds identifiers:
+  an identifier uses a listed word in its preferred meaning only.
+- A wrapper around a C library keeps the library's prefix:
+  `SDL_ctx_acquire`, `GPU_device_acquire`.
+
+**Types**
+
+- A type is PascalCase: `ComputeContext`, `VizContext`, `EngineView`.
+- An exception is snake_case, `<name>_error`, like the standard library's
+  (§6).
+- The log subsystem's types are snake_case and stay: `severity_level`,
+  `record`, `record_ostream`, `logger`, `logger_mt`.
+- A template parameter is PascalCase: `T`, `CharT`.
+
+**Enumerators**
+
+- A **protocol value** is ALL_CAPS. It is an internal state of a
+  cross-thread mechanism, and the design docs write it the same way:
+  `OPEN`, `REVOKING`, `EVENT_BACKLOG`. So code and pseudo-code match letter
+  for letter. A protocol value is not bound to Python.
+- An **API value** is PascalCase. It is a value a caller sees:
+  `GPUBackend::Vulkan`, `BufferUsage::TransferSrc`.
+- A bound enumerator keeps its C++ spelling in Python (§8).
+- A design doc may write an API value in lowercase (`queue_full`) while its
+  enum does not exist. The change that adds the enum respells the value in
+  the docs.
+- The log subsystem's enumerators are snake_case and stay:
+  `severity_level::trace`.
+
+**Functions, variables and fields**
+
+- All are snake_case. An action is a verb: `submit`, `take`,
+  `create_buffer`. A Boolean query starts with `is_` or `has_`. A setter
+  starts with `set_`.
+- **A query has no `get_` prefix.** It is named for what it returns:
+  `device_info()`, `width()`, `title()`. Two names keep `get`: the `X_get()`
+  of the refcount pattern (§3), and `record_ostream::get_record`, which
+  mirrors Boost.Log.
+- A query is `[[nodiscard]]`, and `noexcept` where it cannot fail.
+- The init query is `X_is_init` (§2).
+- A `struct` has public fields with plain names. A `class` has private
+  fields that end in `_`: `impl_`, `storage_`.
+
+**Constants, build names and integers**
+
+- A constant is snake_case: `default_tick_rate`, `impl_size`.
+- A CMake option and an include guard start with `LIBSIM_ESTAB__`. A public
+  macro starts with `SIM_ESTAB_`.
+- An integer uses a `<cstdint>` name: `uint32_t`, `std::uint64_t`. Code
+  defines no `u32` or `u64` alias. The design docs' pseudo-code writes them
+  as shorthand.
+- A tick, a source id, a column id and an entity id are **strong types in
+  function signatures**: parameters and return values. A swapped argument
+  is then a compile error. A struct of a normative section keeps the raw
+  integer the doc writes (`std::atomic<uint64_t> ready_through`), so
+  protocol code matches its pseudo-code.
+
+**Doc citations in code**
+
+- A comment cites a design doc as `design_engine_core.md §5.1`: the file
+  name without `doc/`, and `§` on each section.
+- A step label follows where there is one:
+  `design_engine_core.md §3.2 (P2)`.
+- The docs cite each other in the same form, so a search for a file name
+  finds every citation.
+
+**Tests**
+
+- A C++ test file is `test_<partition>.cpp`. Its Boost.Test suites end in
+  `_tests`.
+- A race test is `test_<mechanism>_tsan.cpp`, with the suite
+  `<mechanism>_tsan_tests` and the CTest label `tsan`. It proves something
+  only in a ThreadSanitizer build (`design_engine_core.md` §3.2, §5.1).
+- A park stress test is `test_<park>_stress.cpp`, with the suite
+  `<park>_stress_tests`, the CTest label `stress` and a CTest timeout. A
+  lost wake-up is a hang, so the timeout is the failure
+  (`design_engine_core.md` §3.3).
