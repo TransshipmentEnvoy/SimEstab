@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Test script to verify the logging APIs exposed from log.h are working correctly."""
+"""Test script to verify the logging APIs bound in sim_estab._if.log are working correctly."""
 
 import pytest
 import sim_estab._if as if_module
