@@ -564,8 +564,9 @@ Rules:
 
 - A subsystem whose callers must tell its errors apart derives one class per
   case from its own error. A caller then selects by type and never reads a
-  message. The engine's errors follow this: one C++ class for each Python
-  error type of `design_python_api.md` §8.
+  message. The engine's errors follow this: one C++ class for each error type
+  of `design_python_api.md` §8 that native code raises. A type that Python
+  raises before it reaches native code has no C++ class.
 
 - Direction of throw/noexcept:
   - Anything that **creates/acquires** may throw.

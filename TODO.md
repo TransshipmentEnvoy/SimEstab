@@ -4,10 +4,11 @@ The roadmap, by milestone. Milestones are defined in [doc/glossary.md](doc/gloss
 the design each item implements is in `doc/`. Unresolved design questions are in
 [doc/open_question.md](doc/open_question.md); items that depend on one link to it.
 
-**Where things stand.** Built: the `log`, `gpu`, `viz`, `util` and `limits` modules. That
-covers SDL3 compute and viz contexts, logging, the SDL main-thread init guard, and the
-decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26 with
-`-freflection`, and `-march=x86-64-v3`. Everything from M1 on is designed but not written.
+**Where things stand.** Built: the `error`, `log`, `gpu`, `viz`, `util` and `limits` modules.
+That covers the root of the exception family, SDL3 compute and viz contexts, logging, the SDL
+main-thread init guard, and the decided limits (M0). The toolchain the designs assume is in
+place: GCC 16, C++26 with `-freflection`, and `-march=x86-64-v3`. Everything from M1 on is
+designed but not written.
 
 + [x] basic setup
 + [x] graphics basics
