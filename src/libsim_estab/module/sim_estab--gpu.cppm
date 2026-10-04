@@ -21,14 +21,16 @@ module;
 // Module declaration
 export module sim_estab:gpu;
 
+import :error;
+
 namespace sim_estab::core::gpu {
 
 /**
  * Exception class for GPU compute-related errors
  */
-export class gpu_error : public std::runtime_error {
+export class gpu_error : public error::sim_estab_error {
 public:
-    explicit gpu_error(const std::string& what) : std::runtime_error(what) {}
+    explicit gpu_error(const std::string& what) : error::sim_estab_error(what) {}
 };
 
 /**

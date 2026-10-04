@@ -16,6 +16,7 @@
 export module sim_estab;
 
 // Re-export all submodules
+export import :error;
 export import :limits;
 export import :log;
 export import :gpu;
@@ -34,6 +35,7 @@ export import :util;
  * - Cross-platform support
  *
  * The library is organized into the following namespaces:
+ * - sim_estab::core::error - Root of the exception family
  * - sim_estab::core::log - Hierarchical logging system
  * - sim_estab::core::gpu - Headless GPU compute context
  * - sim_estab::core::util - General-purpose utilities (thread_util, ...)

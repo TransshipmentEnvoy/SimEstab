@@ -94,7 +94,7 @@ name**: the last component of the module name.
   - A partition `<p>` of `sim_estab` is implemented in `src/<p>.cpp`
     (`src/log.cpp`, `src/gpu.cpp`).
   - A partition with only inline and `constexpr` content has no
-    implementation unit (`:limits`).
+    implementation unit (`:limits`, `:error`).
   - A partition made of independent helpers, each in its own sub-namespace,
     gets a folder with one file per helper: `src/<p>/<sub>.cpp`
     (`src/util/thread_util.cpp`). A partition that needs several files uses
@@ -540,22 +540,32 @@ private:
 
 **TL;DR**
 
-- One exception class per subsystem.
+- One exception family: the root `sim_estab_error`, and one error per
+  subsystem under it.
 - Create/acquire may throw. Release/destroy/query never throw.
 - Log the failure before throwing.
 - Programming errors abort. They do not throw.
 
 Rules:
 
-- One exception class per subsystem. Export it from the module. Derive from
-  `std::runtime_error`. Use the single canonical constructor:
+- One exception family for the whole library. Its root is `sim_estab_error`,
+  in the `:error` partition (`sim_estab::core::error`). It derives from
+  `std::runtime_error`. One `catch` clause for the root covers every error the
+  library throws. Nothing throws the root itself.
+- One error per subsystem. Export it from the module. Derive it from the root.
+  Use the single canonical constructor:
 
   ```cpp
-  export class x_error : public std::runtime_error {
+  export class x_error : public error::sim_estab_error {
   public:
-      explicit x_error(const std::string& what) : std::runtime_error(what) {}
+      explicit x_error(const std::string& what) : error::sim_estab_error(what) {}
   };
   ```
+
+- A subsystem whose callers must tell its errors apart derives one class per
+  case from its own error. A caller then selects by type and never reads a
+  message. The engine's errors follow this: one C++ class for each Python
+  error type of `design_python_api.md` §8.
 
 - Direction of throw/noexcept:
   - Anything that **creates/acquires** may throw.
@@ -642,7 +652,7 @@ Rules:
    heavy deps. Re-export from `sim_estab.cppm`. Put internals in a
    non-exported partition, which is not re-exported. Implementation unit in
    `src/<name>.cpp`. File names and folders follow §1 "File layout".
-2. Export `<name>_error : std::runtime_error`.
+2. Export `<name>_error`, derived from `sim_estab_error` (§6).
 3. Process-global state? → init/deinit/is_init triad (§2). Single `detail::`
    mutex. Idempotent both ways.
 4. Shared unique resource? → acquire/release refcount pair (§3). Throwing

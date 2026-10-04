@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <string>
 #include <thread>
+#include <type_traits>
 
 // compat headers
 #include <compat.h>
@@ -23,6 +24,9 @@ import sim_estab.viz;
 
 namespace utf = boost::unit_test;
 using namespace sim_estab::viz;
+
+// viz_error belongs to the library's exception family (design_patterns.md §6)
+static_assert(std::is_base_of_v<sim_estab::core::error::sim_estab_error, viz_error>);
 
 //==============================================================================
 // Display Detection

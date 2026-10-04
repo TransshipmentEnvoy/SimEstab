@@ -15,6 +15,7 @@ message(STATUS "Test: Using Boost.Test from Boost installation")
 #==============================================================================
 add_executable(libsim_estab_test
     test_main.cpp
+    test_error.cpp
     test_log.cpp
     test_compute.cpp
     test_thread_util.cpp

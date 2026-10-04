@@ -33,6 +33,8 @@ module;
 // Module declaration
 export module sim_estab:log;
 
+import :error;
+
 // Note: We don't import std module as GCC's std module support is still experimental
 // Instead, we rely on headers included in the global module fragment above
 
@@ -105,9 +107,9 @@ std::basic_ostream<CharT>& operator<<(std::basic_ostream<CharT>& os, severity_le
  * the logging system before initialization or when internal logging
  * errors occur.
  */
-export class log_error : public std::runtime_error {
+export class log_error : public error::sim_estab_error {
 public:
-    explicit log_error(const std::string& what) : std::runtime_error(what) {}
+    explicit log_error(const std::string& what) : error::sim_estab_error(what) {}
 };
 
 /**

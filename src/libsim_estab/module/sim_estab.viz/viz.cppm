@@ -21,9 +21,9 @@ namespace sim_estab::viz {
 /**
  * Exception class for visualization-related errors
  */
-export class viz_error : public std::runtime_error {
+export class viz_error : public sim_estab::core::error::sim_estab_error {
 public:
-    explicit viz_error(const std::string& what) : std::runtime_error(what) {}
+    explicit viz_error(const std::string& what) : sim_estab::core::error::sim_estab_error(what) {}
 };
 
 /**

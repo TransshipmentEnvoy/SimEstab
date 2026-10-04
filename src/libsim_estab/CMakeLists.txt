@@ -130,6 +130,7 @@ target_sources(sim_estab PRIVATE
 target_sources(sim_estab PUBLIC
     FILE_SET CXX_MODULES FILES
     module/sim_estab.cppm
+    module/sim_estab--error.cppm
     module/sim_estab--limits.cppm
     module/sim_estab--log.cppm
     module/sim_estab--gpu.cppm
