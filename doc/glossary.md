@@ -39,7 +39,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 
 | Term | Meaning | Where |
 |---|---|---|
-| core | The headless program: everything that runs without a window. It holds the engine core, in its own partition, and the peripherals. The namespace `sim_estab::core` is named for it. Viz needs a window and sits outside it, in `sim_estab::viz`. The AI and modding parts may sit outside it too. | patterns §1 |
+| core | The headless program: everything that runs without a window. It holds the engine core, in its own partition, and some of the peripherals, such as GPU compute. Not every peripheral is in the core: one may have its own module. Viz has one (`sim_estab.viz`), and the AI and modding parts may get one. The namespace `sim_estab::core` is named for the core. | patterns §1 |
 | engine core | The deterministic simulation: fixed-point, integer-only, the only holder of world state. Also called "the sim". | engine_core §1 |
 | peripheral | Anything outside the engine core: rendering, viz, AI, GPU compute, logic mods, network peers. Reads engine views and changes the world only by submitting commands. | engine_core §1 |
 | determinism boundary | The line between the engine core (plus content and engine core mods) and the peripherals. | engine_core §1 |

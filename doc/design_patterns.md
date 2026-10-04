@@ -52,7 +52,8 @@ How to read this doc:
   that runs without a window, so a partition's namespace is
   `sim_estab::core::<partition>`: `sim_estab::core::log`, `sim_estab::core::gpu`.
   A separate module has its own namespace outside `core`: `sim_estab::viz`.
-  The AI and modding parts may get one too.
+- Not every peripheral is in the core. A peripheral may have its own module:
+  viz has one, and the AI and modding parts may get one.
 - Small cross-cutting helpers go in the `:util` partition. They live in
   sub-namespaces of `sim_estab::core::util`. Example:
   `util::thread_util::is_main_thread()`.
