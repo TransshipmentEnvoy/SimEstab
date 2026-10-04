@@ -219,12 +219,21 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | policy default | The shipped default of an `EngineConfig` field, which a session may override. | limits |
 | warn threshold | A bandwidth above which the engine logs a warning, never a rejection: projection, per engine view. | limits §5 |
 
-## Words with one meaning only
+## Words with a preferred meaning
 
-Several words were used for more than one thing. Use each only in the sense above, and use
-the replacement for the other senses.
+Some common words have more than one natural sense. This table gives each word a preferred
+meaning, and a replacement for the other senses. It guides prose and binds identifiers.
 
-| Word | Means only | For the other senses, write |
+- **Prose is free.** A word may keep any plain sense where the sentence makes that sense
+  clear. "A session admits up to 128 players" and "a call admitted before `CLOSING`" are
+  both fine, although "admission" is the answer to a submit. The replacement helps where
+  the sense would be unclear. A row that says "never" is the exception: it holds in prose
+  too.
+- **Identifiers keep the preferred meaning.** A type, function, field or enum value uses a
+  word of this table only in its preferred meaning, and takes the replacement for another
+  sense. Code copies an identifier, and a search for it must find one mechanism.
+
+| Word | Preferred meaning | For the other senses, prefer |
 |---|---|---|
 | host | the host application (source 0) | "mod host" (where a mod runs); "mod client" (a machine that runs logic mods in a networked session); "the engine" (for Tier 3 mods); "owner thread" (the thread) |
 | owner | owner thread | "reader" (an engine view's single reader); "authority" (multiplayer) |
@@ -241,7 +250,7 @@ the replacement for the other senses.
 | publish | engine view publish, and the release-store "publication" idiom of engine_core §1.1 | "fan out" (mod bus); "submit" (commands) |
 | drain | command drain, `drain_events()`, inbox drain, per-worker log buffer drain | "wait for running calls" (leases at shutdown) |
 | grant | run grant | "capability" (mods) |
-| ledger | do not use | "`first_unexecuted`"; "tick budget" |
+| ledger | no preferred meaning; best avoided | "`first_unexecuted`"; "tick budget" |
 | backlog | event backlog | "ticks owed" (catch-up) |
 | event | an engine event, reported to the event drain | "a change in the world" (read as state); "outcome" (a command's answer); "input" (SDL input and window events from `poll_input()`) |
 | M | milestones | "catch-up clamp" |
