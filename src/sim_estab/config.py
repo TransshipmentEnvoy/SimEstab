@@ -30,7 +30,7 @@ __all__ = [
 
 
 #: Ceiling a mod manifest may request for its per-endpoint, per-tick capacity.
-MAX_SOURCE_CAPACITY: Final[int] = 256
+MAX_ENDPOINT_CAPACITY: Final[int] = 256
 
 #: The cap of every object type that declares none: the most entities of that type
 #: alive at one time (``design_limits.md`` §4). A ceiling, not a working size.
@@ -73,30 +73,30 @@ class CommandPolicy:
     #: Commands ONE endpoint may hold for ONE tick, when a manifest declares none.
     #: Exceeding it is ``queue_full`` at the submitting call, and it is the only
     #: capacity rejection in the engine.
-    source_capacity: int = 64
+    endpoint_capacity: int = 64
 
     #: The host endpoint (source 0) gets the ceiling. It needs no reserve carved out of
     #: an engine-wide pool, because rings are per endpoint: no mod can consume the host's
     #: capacity, whatever it submits.
-    host_source_capacity: int = 256
+    host_endpoint_capacity: int = 256
 
     #: A peer endpoint carries a whole remote player's turn, so it gets the ceiling for
     #: the same reason the host does.
-    peer_source_capacity: int = 256
+    peer_endpoint_capacity: int = 256
 
     def __post_init__(self) -> None:
         _require_positive(self.drain_interval_ticks, "drain_interval_ticks")
 
         for name, capacity in (
-            ("source_capacity", self.source_capacity),
-            ("host_source_capacity", self.host_source_capacity),
-            ("peer_source_capacity", self.peer_source_capacity),
+            ("endpoint_capacity", self.endpoint_capacity),
+            ("host_endpoint_capacity", self.host_endpoint_capacity),
+            ("peer_endpoint_capacity", self.peer_endpoint_capacity),
         ):
             _require_positive(capacity, name)
-            if capacity > MAX_SOURCE_CAPACITY:
+            if capacity > MAX_ENDPOINT_CAPACITY:
                 raise ValueError(
                     f"{name} must not exceed the engine cap of "
-                    f"{MAX_SOURCE_CAPACITY}, got {capacity}"
+                    f"{MAX_ENDPOINT_CAPACITY}, got {capacity}"
                 )
 
 

@@ -27,9 +27,9 @@ def test_decided_defaults():
 
     policy = config.command_policy
     assert policy.drain_interval_ticks == 8  # D
-    assert policy.source_capacity == 64
-    assert policy.host_source_capacity == 256
-    assert policy.peer_source_capacity == 256
+    assert policy.endpoint_capacity == 64
+    assert policy.host_endpoint_capacity == 256
+    assert policy.peer_endpoint_capacity == 256
 
 
 def test_entity_capacity_decided_values():
@@ -75,7 +75,7 @@ def test_derived_bounds_are_not_configurable():
 
 
 @pytest.mark.parametrize(
-    "field", ["source_capacity", "host_source_capacity", "peer_source_capacity"]
+    "field", ["endpoint_capacity", "host_endpoint_capacity", "peer_endpoint_capacity"]
 )
 def test_capacities_capped_at_engine_maximum(field):
     with pytest.raises(ValueError, match="engine cap"):
@@ -86,9 +86,9 @@ def test_capacities_capped_at_engine_maximum(field):
     "kwargs",
     [
         {"drain_interval_ticks": 0},
-        {"source_capacity": 0},
-        {"host_source_capacity": 0},
-        {"peer_source_capacity": 0},
+        {"endpoint_capacity": 0},
+        {"host_endpoint_capacity": 0},
+        {"peer_endpoint_capacity": 0},
     ],
 )
 def test_command_policy_rejects_non_positive(kwargs):

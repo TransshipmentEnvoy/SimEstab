@@ -486,10 +486,10 @@ This section names the one place each value lives. The C++ side is the partition
 | tick rate | `EngineConfig.tick_rate` | `default_tick_rate` | policy default |
 | catch-up clamp | — | `catch_up_clamp_seconds`, **not yet in code** (M6) | build constant (§1.2) |
 | `D` | `CommandPolicy.drain_interval_ticks` | `default_drain_interval_ticks` | policy default |
-| endpoint capacity, default | `CommandPolicy.source_capacity` | `default_source_capacity` | policy default |
-| host endpoint capacity | `CommandPolicy.host_source_capacity` | `default_host_source_capacity` | policy default |
-| peer endpoint capacity | `CommandPolicy.peer_source_capacity` | `default_peer_source_capacity` | policy default |
-| endpoint capacity, engine cap | `MAX_SOURCE_CAPACITY`, a module constant that `CommandPolicy` checks against | `max_source_capacity` | build constant |
+| endpoint capacity, default | `CommandPolicy.endpoint_capacity` | `default_endpoint_capacity` | policy default |
+| host endpoint capacity | `CommandPolicy.host_endpoint_capacity` | `default_host_endpoint_capacity` | policy default |
+| peer endpoint capacity | `CommandPolicy.peer_endpoint_capacity` | `default_peer_endpoint_capacity` | policy default |
+| endpoint capacity, engine cap | `MAX_ENDPOINT_CAPACITY`, a module constant that `CommandPolicy` checks against | `max_endpoint_capacity` | build constant |
 | player cap | — | `max_players` | enforced by session formation |
 | source cap | — | `max_sources` | enforced at the freeze |
 | participant cap | — | `max_paced_participants` | enforced at the freeze |

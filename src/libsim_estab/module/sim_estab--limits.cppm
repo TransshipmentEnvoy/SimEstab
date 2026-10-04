@@ -9,7 +9,7 @@
  * Two kinds of constant live here and they are not interchangeable:
  *
  * - Build constants - fixed when this library compiles. Retuning is a rebuild, never a
- *   config change: the chunk quantum, the ceilings (max_source_capacity, max_players,
+ *   config change: the chunk quantum, the ceilings (max_endpoint_capacity, max_players,
  *   max_sources, max_views, max_paced_participants), and the entity capacities
  *   (default_entity_capacity, max_entity_capacity).
  * - Policy defaults - the shipped default of a field a session may override at
@@ -66,19 +66,19 @@ export inline constexpr std::uint32_t default_drain_interval_ticks = 8;
 /// only number an endpoint declares: there is no drain quota, because a tick executes
 /// everything stamped for it. Exceeding it is queue_full at the submitting call, and it is
 /// the only capacity rejection in the engine.
-export inline constexpr std::uint32_t default_source_capacity = 64;
+export inline constexpr std::uint32_t default_endpoint_capacity = 64;
 
 /// The ceiling a manifest may request for its per-endpoint capacity.
-export inline constexpr std::uint32_t max_source_capacity = 256;
+export inline constexpr std::uint32_t max_endpoint_capacity = 256;
 
 /// The host endpoint (source 0) gets the ceiling by default. It needs no reserve carved
 /// out of an engine-wide pool, because rings are per endpoint: no mod can consume the host's
 /// capacity, whatever it submits.
-export inline constexpr std::uint32_t default_host_source_capacity = 256;
+export inline constexpr std::uint32_t default_host_endpoint_capacity = 256;
 
 /// A peer endpoint carries a whole remote player's turn, so it gets the ceiling for the
 /// same reason the host does.
-export inline constexpr std::uint32_t default_peer_source_capacity = 256;
+export inline constexpr std::uint32_t default_peer_endpoint_capacity = 256;
 
 // ---------------------------------------------------------------------------
 // Freeze-time bounds (design_engine_core.md §2.4 step 3a)
@@ -187,11 +187,11 @@ export inline constexpr std::uint64_t default_projection_warn_bytes_per_second =
 
 static_assert(default_tick_rate > 0, "a tick rate of zero has no meaning; the counter is the clock");
 
-static_assert(default_source_capacity <= max_source_capacity,
+static_assert(default_endpoint_capacity <= max_endpoint_capacity,
               "the default capacity must be requestable");
-static_assert(default_host_source_capacity <= max_source_capacity,
+static_assert(default_host_endpoint_capacity <= max_endpoint_capacity,
               "the host endpoint requests its capacity through the same ceiling as any other");
-static_assert(default_peer_source_capacity <= max_source_capacity,
+static_assert(default_peer_endpoint_capacity <= max_endpoint_capacity,
               "a peer endpoint requests its capacity through the same ceiling as any other");
 static_assert(default_drain_interval_ticks > 0, "D is a count of ticks the engine buffers, never zero");
 

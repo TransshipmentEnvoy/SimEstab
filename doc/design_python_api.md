@@ -399,10 +399,10 @@ class HostPolicy:                        # engine-enforced, needed long after lo
 class CommandPolicy:                     # doc/design_limits.md §2
     drain_interval_ticks: int = 8        # D: ticks between drain_events() calls that the
                                          #   event ring is sized for
-    source_capacity: int = 64            # commands ONE endpoint may hold for ONE tick,
+    endpoint_capacity: int = 64          # commands ONE endpoint may hold for ONE tick,
                                          #   when none is declared
-    host_source_capacity: int = 256      # source 0's own capacity
-    peer_source_capacity: int = 256      # a peer endpoint's capacity
+    host_endpoint_capacity: int = 256    # source 0's own capacity
+    peer_endpoint_capacity: int = 256    # a peer endpoint's capacity
                                          # Not fields and not properties: ring depth
                                          #   (capacity, or 2 x capacity at a margin
                                          #   of 1 or more), C (sum of capacities), E,
