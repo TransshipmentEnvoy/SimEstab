@@ -70,7 +70,7 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
   Boost.Log types one to one, with small-buffer storage. Copy and move behave exactly like
   the wrapped types (`design_patterns.md` §5b).
 - **Errors**: `log_error`, derived from `sim_estab_error`, exists and is bound to Python as
-  `_if.log.log_error`, but no code throws it yet. Boost exceptions can escape `log_init` and
+  `_if.log.LogError`, but no code throws it yet. Boost exceptions can escape `log_init` and
   `enable_console` directly.
 - **Python surface**: mirrors the triad and the console toggles one to one, plus a concrete
   `log(channel, level, message)` wrapper.

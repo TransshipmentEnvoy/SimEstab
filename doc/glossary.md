@@ -196,7 +196,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 
 | Term | Meaning | Where |
 |---|---|---|
-| `sim_estab_error` | The root of the library's exception family. Every error the library throws derives from it, through its subsystem's own error (`log_error`, `gpu_error`, `viz_error`). | patterns §6 |
+| `sim_estab_error` | The root of the library's exception family. Every error the library throws derives from it, through its subsystem's own error (`log_error`, `gpu_error`, `viz_error`). `SimEstabError` in Python, where every exception has a PascalCase name. | patterns §6, §8 |
 | shutdown sequence | `mods.stop()`, then `stop_sim_async()`, then `close()`. `close()` does any step not done, never raises because shutdown failed, and can be called twice. | python_api §2 |
 | shutdown step | One of the three calls of the shutdown sequence. | python_api §2 |
 | shutdown stage | One of the five blocking waits during shutdown, each bounded by `shutdown_deadline`: running submits on a revoked endpoint, a mod host's inbox drain and `on_unload`, mod host and sim thread joins, confirming a killed process is dead, and running engine calls in `close()`. | limits §1.1 |
