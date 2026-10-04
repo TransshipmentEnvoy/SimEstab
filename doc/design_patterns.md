@@ -804,6 +804,12 @@ the exception, and the existing name stays.
 
 - A C++ test file is `test_<partition>.cpp`. Its Boost.Test suites end in
   `_tests`.
+- A test of a non-exported partition is itself a unit of the module. Its
+  file declares `module sim_estab;` and imports the partition, so it tests
+  the internal types directly. It is compiled into the test executable only,
+  and nothing is exported for it. It reaches internal functions through the
+  shared library, so a function it calls out of line must stay an exported
+  symbol.
 - A race test is `test_<mechanism>_tsan.cpp`, with the suite
   `<mechanism>_tsan_tests` and the CTest label `tsan`. It proves something
   only in a ThreadSanitizer build (`design_engine_core.md` §3.2, §5.1).

@@ -708,9 +708,9 @@ allowed.
 struct EngineView {
     Block*            block[3];
     std::atomic<u32>  word;
-    Return            ret[3];        // §3.5; consumer-written, parallel to block[]
-    u32               w;             // publisher-private
-    u32               r;             // reader-private
+    ReturnHeader      ret[3];        // §3.5; consumer-written, parallel to block[]
+    u32               write_index;   // publisher-private
+    u32               read_index;    // reader-private
 };
 ```
 
@@ -721,17 +721,18 @@ an atomic of its own (§3.5).
 `word` is `(index << 1) | dirty`.
 
 ```
-publish:  fill *block[w]                                    # (P1) plain; the block is private
-          prev = word.exchange((w << 1) | 1, acq_rel)       # (P2) LINEARIZATION POINT
-          w    = prev >> 1
+publish:  fill *block[write_index]                               # (P1) plain; the block is private
+          prev = word.exchange((write_index << 1) | 1, acq_rel)  # (P2) LINEARIZATION POINT
+          write_index = prev >> 1
 
-take:     if ((word.load(relaxed) & 1) == 0: return HELD    # (T1) nothing new
-          prev = word.exchange(r << 1, acq_rel)             # (T2) LINEARIZATION POINT
-          r    = prev >> 1
+take:     if ((word.load(relaxed) & 1) == 0: return HELD         # (T1) nothing new
+          prev = word.exchange(read_index << 1, acq_rel)         # (T2) LINEARIZATION POINT
+          read_index = prev >> 1
 ```
 
-**Theorem.** `{w, r, word >> 1}` is a permutation of `{0, 1, 2}` at every instant. So `w !=
-r` always, and the publisher never writes the block the reader holds.
+**Theorem.** `{write_index, read_index, word >> 1}` is a permutation of `{0, 1, 2}` at every
+instant. So `write_index != read_index` always, and the publisher never writes the block the
+reader holds.
 
 *Proof:* each operation is one exchange that swaps a private index with the shared one,
 which is a transposition. The initial assignment is a permutation, and transpositions keep
@@ -743,10 +744,10 @@ released payload. The release half of (T2) pairs with the acquire half of the ne
 all the reader's loads happen before the publisher reuses the returned block.
 
 **The return header rides that reverse edge (§3.5).** The release half of (T2) already
-publishes every earlier write by the reader, including its writes to `ret[r]`. `ret[r]` is
-an ordinary object and needs no atomic of its own. The return channel is therefore a payload
-on a synchronization this protocol already performs and already tests, not a second
-mechanism.
+publishes every earlier write by the reader, including its writes to `ret[read_index]`.
+`ret[read_index]` is an ordinary object and needs no atomic of its own. The return channel
+is therefore a payload on a synchronization this protocol already performs and already
+tests, not a second mechanism.
 
 **Memory orders.** (P2) and (T2) are `acq_rel`, for both directions of ownership. That one
 pair carries the payload forward and the return header back. Nothing else in the protocol is
@@ -1221,14 +1222,14 @@ mechanism**. It is a payload on a synchronization that already happens.
 **State.** One fixed struct per block, in an array parallel to the blocks:
 
 ```
-struct Return {                      // consumer-written, publisher-read
+struct ReturnHeader {                // consumer-written, publisher-read
     u32              seq;            // monotone; publisher keeps the newest it has seen
     u64              last_consumed_tick;
     u32              cadence_hint;   // 0 = no preference
     PredicateParams  params;         // §3.4; fixed size, kind-dependent interpretation
 };
 
-Return ret[3];                       // parallel to block[3]; never reallocated
+ReturnHeader ret[3];                 // parallel to block[3]; never reallocated
 ```
 
 The headers sit in a parallel array rather than inside the blocks, for two reasons. A block
@@ -1239,7 +1240,7 @@ publisher's fill. `ret` has a fixed size and never grows.
 **Protocol.**
 
 ```
-consumer:  fill ret[r]                     # plain; r is the block it holds
+consumer:  fill ret[read_index]            # plain; read_index is the block it holds
            take()                          # (T2) release-exchange publishes the fill
 
 publisher: on receiving block b at (P2), read ret[b]      # acquire half makes it visible
@@ -2309,6 +2310,15 @@ Each step is labelled with the milestone it belongs to (see `glossary.md`).
    source. The gate then ends a step at its grant, stops it at the event backlog mark, and
    waits only for paced engine views (§3.3), so this step builds the gate at its simplest
    setting.
+
+   **Until the world exists, M1 carries opaque bytes.** Columns arrive in step 3 and
+   projection in step 5. Until then a block holds its tick, a size and plain bytes; its
+   engine view declares how many at registration. The engine publishes no bytes. Tests fill
+   them, to check that a block arrives whole. A command ring entry holds its tick and
+   payload bytes of a provisional size
+   ([Q22](open_question.md#q22-how-large-is-one-command-or-event-slot)). The one command
+   does nothing, and its outcome is `applied`, with the tick that ran it. `snapshot()`
+   returns the tick alone.
 2. **M2: the `fixed<>` type, deterministic PRNG, the three checksum levels (§2.3), and
    replay record and playback.** The verification harness must exist before the first
    system does.

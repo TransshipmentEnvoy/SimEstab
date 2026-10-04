@@ -19,6 +19,8 @@ add_executable(libsim_estab_test
     test_log.cpp
     test_compute.cpp
     test_thread_util.cpp
+    test_engine_view.cpp
+    test_engine_view_tsan.cpp
 )
 
 # Enable C++20 modules if supported by compiler
@@ -58,6 +60,18 @@ set_tests_properties(libsim_estab_test PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
 )
+
+# Race tests: one CTest entry per suite, labelled `tsan`. A suite proves something only in a
+# ThreadSanitizer build (design_patterns.md §10); in any other build it runs as a smoke
+# test. The libsim_estab_test entry above runs these suites too.
+foreach(race_suite engine_view_tsan_tests)
+    add_test(NAME ${race_suite} COMMAND libsim_estab_test --run_test=${race_suite})
+    set_tests_properties(${race_suite} PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        LABELS "tsan"
+        ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
+    )
+endforeach()
 
 message(STATUS "Test: Built libsim_estab_test executable")
 

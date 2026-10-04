@@ -21,9 +21,10 @@ designed but not written.
       `doc/design_logging.md` §1)
 + [x] **M0: decided limits in code.** Every value in `doc/design_limits.md` is in
       `sim_estab:limits` or `src/sim_estab/config.py`, with tests in `test/test_config.py`
-+ [ ] **M1: session, engine views, command ring, gate.** No simulation content yet. M1 runs
-      headless: `step(n)` runs ticks on the calling thread (`doc/design_engine_core.md` §7
-      step 1). No open question blocks it
++ [ ] **M1: session, engine views, command ring, gate.** No simulation content yet: a block
+      and a command ring entry carry a tick and opaque bytes. M1 runs headless: `step(n)`
+      runs ticks on the calling thread (`doc/design_engine_core.md` §7 step 1). No open
+      question blocks it
   + [ ] session lifecycle: `configuring → freeze → running → stopped`, with the freeze's
         ordered steps; every step that can fail runs before any step with a visible effect
         (`doc/design_engine_core.md` §2.4, `doc/design_python_api.md` §2)
