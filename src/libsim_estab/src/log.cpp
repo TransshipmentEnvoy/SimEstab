@@ -354,8 +354,8 @@ static std::mutex log_mutex;
 /// sits on every emission path in the process, so taking the mutex there would
 /// (a) deadlock log_init() against itself the moment it logs its own lifecycle
 /// and (b) serialize every emission in the process on one lock, including
-/// inside the parallel core update. Written release / read acquire so a caller
-/// that observes `true` also observes the fully-built sink state.
+/// inside the parallel engine core update. Written release / read acquire so
+/// a caller that observes `true` also observes the fully-built sink state.
 static std::atomic<bool> init_status{false};
 
 /// Enum for sink type

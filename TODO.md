@@ -134,7 +134,7 @@ decided limits (M0). The toolchain the designs assume is in place: GCC 16, C++26
   + [ ] prove that 1 thread and N threads give the same checksums
 + [ ] **M5: engine view projection, row predicate, GPU upload**
   + [ ] the row predicate kinds beyond `ALL` (`AABB`, `SPHERE`, `FRUSTUM`, `TAG`),
-        evaluated to a mask and reusing the publish scan and gather. Coarse in the core,
+        evaluated to a mask and reusing the publish scan and gather. Coarse in the engine core,
         exact in the reader; a filtered engine view carries the id column. Added when publish
         bandwidth calls for it (`doc/design_engine_core.md` §3.4)
   + [ ] advertise SPIR-V only at device creation. The scope is Vulkan only; today DXIL is

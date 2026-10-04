@@ -1,9 +1,9 @@
 # Engine Core Design
 
-This document designs the SimEstab engine core. The core is a **deterministic simulation
+This document designs the SimEstab engine core. The engine core is a **deterministic simulation
 kernel** that uses only integer and fixed-point arithmetic. Around it sit **peripheral
 systems** that may use floats: rendering, data viz, AI and GPU compute. Peripherals affect
-the core only by submitting commands. Both sides must be able to run in parallel.
+the engine core only by submitting commands. Both sides must be able to run in parallel.
 
 Status: designed, not implemented. The built modules are `log`, `gpu`, `viz`, `util` and
 `limits`. The `limits` module holds the decided values of `design_limits.md`, so the numbers
@@ -33,7 +33,7 @@ Terms are defined in [glossary.md](glossary.md). Related designs: `design_python
 
 ## 1. The two-domain architecture
 
-The engine has two domains: the deterministic core and the peripherals. This split is a
+The engine has two domains: the deterministic engine core and the peripherals. This split is a
 proven pattern. Photon Quantum calls it *Simulation vs View*, and RTS lockstep engines have
 used it since Age of Empires.
 
@@ -43,7 +43,7 @@ used it since Age of Empires.
    │                                                ▼
 ┌──┴───────────────┐   snapshots / events   ┌──────────────────┐
 │  Peripheral      │◀───────────────────────│  Deterministic   │
-│  (float domain)  │    (one-way, copied)   │  core            │
+│  (float domain)  │    (one-way, copied)   │  engine core     │
 │  render, viz,    │                        │  int/fixed-point │
 │  AI, GPU compute │                        │  tick-based      │
 └──────────────────┘                        └──────────────────┘
@@ -51,17 +51,17 @@ used it since Age of Empires.
 
 Two hard rules make the design work:
 
-1. **Inbound: the only way to change core state is to submit a command** through the
+1. **Inbound: the only way to change engine core state is to submit a command** through the
    source's endpoint. Player input, AI decisions, network peers, scripts and debug tools all
    use the same path. Submission can fail, because the ring is bounded (§5.1). A command
    that was not admitted never enters the input stream, and the submitter learns this from
    the call's result, not from an event.
 
-   The converse also holds: a command is only something a tick consumes to change core
-   state. Anything that tunes the engine without touching core state (log level, pause, time
+   The converse also holds: a command is only something a tick consumes to change engine core
+   state. Anything that tunes the engine without touching engine core state (log level, pause, time
    scale) is a **control call**. It is never a command and never recorded
    (`design_python_api.md` §3).
-2. **Outbound: the core publishes immutable snapshots, and events, that peripherals read.**
+2. **Outbound: the engine core publishes immutable snapshots, and events, that peripherals read.**
    Fixed-point values are converted to float once, at the snapshot boundary. Data never
    flows back except as commands.
 
@@ -81,7 +81,7 @@ What follows from these rules:
   §2).
 - **A peripheral that crashes or lags cannot corrupt the simulation.** This holds in every
   session. Whether it can delay ticks depends on what it is. An observer cannot (§3.3). A
-  participant can, because the core waits for it. A peripheral whose commands name their
+  participant can, because the engine core waits for it. A peripheral whose commands name their
   tick, such as a network peer, is a participant. One whose commands name no tick, such as
   a logic mod, or that only reads, is an observer, unless it registers as a participant
   explicitly with a paced engine view (§3.3).
@@ -118,7 +118,7 @@ Progress classes, used in exactly this sense throughout:
   bounded by those instructions, not by another party. A gate declaration and the drain's
   side of the admission wait are short locks.
 - **Bounded wait**: a thread may block on another party, and only in a declared wait. An
-  undeclared wait is forbidden. A wait of the core follows three rules. It is the gate
+  undeclared wait is forbidden. A wait of the engine core follows three rules. It is the gate
   (§3.3) or one of the shutdown and revocation drains below. It is bounded by a declared
   deadline, or, for a pause or the event backlog, held deliberately with no deadline. Its
   expiry has a declared outcome. A caller's wait (admission, outcome, a step's ticks) is
@@ -127,8 +127,8 @@ Progress classes, used in exactly this sense throughout:
   - The main case is **pacing**. Under lockstep, every instance advances at the rate of the
     slowest one, because every peer must run the same command set (`design_multiplayer.md`
     §3.1). Refusing to wait there would cause a desync, not a smoother tick rate.
-  - The core waits for a peripheral only because it is registered as a participant, never
-    because of the artifacts it uses. Nothing makes the core wait implicitly.
+  - The engine core waits for a peripheral only because it is registered as a participant, never
+    because of the artifacts it uses. Nothing makes the engine core wait implicitly.
 
 **One idiom recurs: publication.** Fill the payload with ordinary writes. Then make it
 reachable with a single release store or read-modify-write. The consumer's acquire on that
@@ -166,7 +166,7 @@ specified:
 
 That is eleven mechanisms. Most of their steady-state work is a few atomic operations and,
 on the sim, one short lock per tick. Four contain a declared wait, and all four are the same
-kind of wait. The core waits for a participant; a producer waits for ring space; a producer
+kind of wait. The engine core waits for a participant; a producer waits for ring space; a producer
 waits for a tick it has already released; and the owner thread waits for the ticks a step
 granted. Every park in the engine follows the one wake-up rule of §3.3.
 
@@ -174,7 +174,7 @@ granted. Every park in the engine follows the one wake-up rule of §3.3.
 that introduces it.** This mirrors `design_python_api.md` §9, where every new raise site
 gets a named error type.
 
-## 2. Determinism requirements for the core
+## 2. Determinism requirements for the engine core
 
 The target is **bit-identical state** from the same seed and command stream: across runs,
 thread counts and build types, and later across platforms. The cross-platform part depends
@@ -185,8 +185,8 @@ ones.
 Two different properties are involved:
 
 - **Transition determinism** (promised): the same initial conditions and the same canonical
-  command stream produce identical core checksums. The core guarantees this, and replay
-  checks it.
+  command stream produce identical engine core checksums. The engine core guarantees this, and
+  replay checks it.
 - **Session reproducibility** (not promised): re-running a live session's external producers
   (Python timing, garbage collection, mods, GPU and AI peripherals) gives the same command
   stream. It may not, because live timing changes when commands are submitted, which tick
@@ -199,7 +199,7 @@ that names its tick, and the gate (§3.3; `design_multiplayer.md` §4).
 
 ### 2.1 Numbers: fixed-point on integers
 
-The core uses fixed-point numbers stored in integers. Floats can be made deterministic
+The engine core uses fixed-point numbers stored in integers. Floats can be made deterministic
 (Box2D 3.1 and later is deterministic across platforms using C17 floats). But that requires
 forbidding `-ffast-math`, controlling FMA contraction (`-ffp-contract=off`), avoiding libm
 with our own sin, cos and sqrt, and auditing every compiler upgrade. Integer arithmetic
@@ -229,7 +229,7 @@ The choices:
   sequential points. Wrapping comes from **unsigned representations and explicit
   bit-casts**, because signed overflow is undefined behaviour in C++. No compiler flag (such
   as `-fwrapv`) is part of this contract.
-- Trigonometric and exponential functions use fixed-point CORDIC or lookup tables. The core
+- Trigonometric and exponential functions use fixed-point CORDIC or lookup tables. The engine core
   never calls libm.
 
 ### 2.2 The usual desync sources (checklist)
@@ -241,16 +241,16 @@ These come from Factorio's Friday Facts, Gaffer On Games, and lockstep postmorte
   type is a pool whose rows never move. Rows are visited in slot order, which follows from
   the live bitmap, and the live bitmap is saved state (`design_data_container.md` §2.2;
   §4.1).
-- **RNG**: a seeded PRNG owned by the core, such as PCG or xoshiro. Each system gets its own
+- **RNG**: a seeded PRNG owned by the engine core, such as PCG or xoshiro. Each system gets its own
   stream derived from the master seed, so systems cannot disturb each other's sequences.
-  Peripherals never call core generators. The generator and how streams are derived are open
+  Peripherals never call engine core generators. The generator and how streams are derived are open
   ([Q26](open_question.md#q26-the-prng)).
-- **Time**: the tick counter is the clock. The core uses no wall-clock time and no float
+- **Time**: the tick counter is the clock. The engine core uses no wall-clock time and no float
   `dt`. The counter's width and wrap rule are open
   ([Q28](open_question.md#q28-tick-counter-width-and-wrap)).
 - **Uninitialized memory and padding**: zero-initialize state. Beware of hashing structs
   that contain padding.
-- **Third-party code**: any library that touches core state must itself be deterministic.
+- **Third-party code**: any library that touches engine core state must itself be deterministic.
   (ODE, for example, randomized its constraint order internally.) This is the main audit
   cost of an off-the-shelf ECS in the hot path.
 - **Thread scheduling**: results must not depend on thread count or OS scheduling (§4).
@@ -260,7 +260,7 @@ These come from Factorio's Friday Facts, Gaffer On Games, and lockstep postmorte
 Determinism is checked from the start, before there is any simulation to test. This is the
 natural companion of the "session management" work in M1.
 
-- **Checksums of core state, at three levels.** One algorithm serves all three (§4.2,
+- **Checksums of engine core state, at three levels.** One algorithm serves all three (§4.2,
   `design_limits.md` §6). They differ in how much state they cover and when they run:
 
   | Level | Covers | Runs |
@@ -333,7 +333,7 @@ computed and the world stops being configurable. The Python state machine is in
 `design_modding.md` §6.
 
 - **`configuring`**: resources are acquired, but no world is running. Allowed: load content,
-  load and register core mods (including `register_column`, `design_data_container.md`
+  load and register engine core mods (including `register_column`, `design_data_container.md`
   §7.3), register mod hosts, load a replay artifact, and control calls (§1). Not allowed:
   ticks, command submission, engine view reads and checksums. Each of those is defined in terms of
   a session, and there is none yet.
@@ -394,7 +394,7 @@ terminal state instead of a half-started session.
    would record something nothing reads. The seed cannot fail here, because step 4 took it
    from the header. So this step really checks what the runner supplied: the build, schema,
    content and mod set.
-7. **Compute the phase cut** from the now-closed system list (§4.1). Then **call each core
+7. **Compute the phase cut** from the now-closed system list (§4.1). Then **call each engine core
    mod's session-start entry point**, in load order. This is the first point at which
    `resolve_column` returns a stable id (`design_data_container.md` §7.3). It is the last
    step that may fail. It runs before any side effect because it is the one step that runs
@@ -425,10 +425,10 @@ engine's promise covers its own interfaces, not every byte on the machine.
 
 ## 3. Time: fixed tick, latest snapshot
 
-The core runs in fixed ticks and the renderer shows the latest snapshot. This is the
+The engine core runs in fixed ticks and the renderer shows the latest snapshot. This is the
 standard *Fix Your Timestep* structure (Gaffer On Games), without interpolation.
 
-- **The core advances in fixed ticks**, 30 per second by default (`design_limits.md` §1).
+- **The engine core advances in fixed ticks**, 30 per second by default (`design_limits.md` §1).
   Real time accumulates, and the loop runs whole ticks from it.
 - **The renderer runs at its own rate and draws the latest published snapshot as it is.**
   There is **no interpolation between snapshots**. World motion updates at the tick rate,
@@ -442,11 +442,11 @@ standard *Fix Your Timestep* structure (Gaffer On Games), without interpolation.
 ### 3.1 Snapshot publication: the engine view
 
 **A snapshot reaches a peripheral through an engine view.** It is the only way state leaves the
-core: one mechanism and one data structure.
+engine core: one mechanism and one data structure.
 
-An engine view is **three payload blocks plus one published word**. The core writes only a block it
-owns exclusively, then publishes it with one atomic exchange. Nothing on the publish path is
-reference-counted or reclaimed.
+An engine view is **three payload blocks plus one published word**. The engine core writes only a
+block it owns exclusively, then publishes it with one atomic exchange. Nothing on the publish path
+is reference-counted or reclaimed.
 
 **An engine view is `PRIVATE`**: it has exactly one reader, and that reader is trusted.
 
@@ -572,7 +572,7 @@ cross-thread mechanism.
   `EngineStateError`.
 - **What it copies.** Every `[[=viz]]` column of every live row, with the `id` column,
   converted to float as a publish converts (§3.4, `design_data_container.md` §5.1).
-- **One pass.** A call is one mask, scan and gather over core state: the publish kernel of
+- **One pass.** A call is one mask, scan and gather over engine core state: the publish kernel of
   `design_data_container.md` §5.1, run once. Nothing is copied a second time.
 - **One buffer, reused.** The **snapshot buffer** is reserved at the freeze, as an engine
   view block is (below): address space for every `[[=viz]]` column at each object type's
@@ -656,7 +656,7 @@ would, in one way:
   1. scan and gather on the worker pool. This is safe because the world does not change
      between the terminal commit and the next tick, and order is kept because the gather
      positions come from a prefix sum (§3.4);
-  2. a bit-exact copy of core data on the sim thread, then fixed-to-float conversion on
+  2. a bit-exact copy of engine core data on the sim thread, then fixed-to-float conversion on
      another thread.
 
   Until profiling justifies one of these, the publisher does the projection. Publishing only
@@ -688,7 +688,7 @@ endpoint to narrow, just as the per-engine-view figure does for publish.
 | System execution | the actual simulation work | not yet measured |
 
 **Time waiting at the gate is not charged.** Time at the gate (§3.3) is pacing, not work:
-the core is deliberately not running. Counting it would make a healthy lockstep session look
+the engine core is deliberately not running. Counting it would make a healthy lockstep session look
 like an overrun.
 
 ### 3.2 Engine view protocol (normative)
@@ -776,14 +776,14 @@ test case.
 ### 3.3 Participants and the gate (normative)
 
 An observer cannot delay a tick (§3.1). This section says what can. The gate is the only
-place in the engine where the core waits.
+place in the engine where the engine core waits.
 
 **Every peripheral is one of exactly two kinds.** Which kind follows from what it does, not
 from a free choice at registration:
 
 | | **Participant** | **Observer** |
 |---|---|---|
-| The core… | waits for it, up to its declared deadline | never waits for it |
+| The engine core… | waits for it, up to its declared deadline | never waits for it |
 | Reads | its engine view | its engine view |
 | Writes | commands | **nothing**; reading the world is not participation |
 | Costs | up to its deadline of tick latency | a projection copy |
@@ -794,19 +794,19 @@ tick it applies to (§5.1), and a tick cannot run until every source that acts i
 finished submitting. So every producer that names ticks is paced. **Unpaced producers are
 the exception**: the host in single-player, and every logic mod. Their commands name no
 tick, so they have no tick to be late for (below, and §5.1). Reading gives no standing at all: an
-observer may fall any distance behind, and the core never notices. One case is declared
+observer may fall any distance behind, and the engine core never notices. One case is declared
 rather than implied: a peripheral that submits nothing but must not miss a tick, such as a
 recorder or a training-data collector. It registers as a participant explicitly, with a
 paced engine view (§3.1). A logic mod follows the same rule: it is a participant only
 through a paced engine view (`design_modding.md` §3).
 
-Tier 3 core mods are neither kind. They are systems inside the tick, ordered by the phase
+Tier 3 engine core mods are neither kind. They are systems inside the tick, ordered by the phase
 cut (§4.1), and this section does not apply to them.
 
 **Pacing gives acknowledgement, not access.** A participant reads exactly what an observer
-reads: its own engine view. Being paced guarantees that the core will not run ahead of what the
-participant has acknowledged. It gives no view of live core state. **No peripheral of any
-kind ever reads live core state.** That keeps §1's one-way boundary intact while allowing
+reads: its own engine view. Being paced guarantees that the engine core will not run ahead of what
+the participant has acknowledged. It gives no view of live engine core state. **No peripheral of any
+kind ever reads live engine core state.** That keeps §1's one-way boundary intact while allowing
 the wait.
 
 **State.**
@@ -855,7 +855,7 @@ wait on another party.
 thread alone. The gate reads it like any other local variable. It is not an atomic, and in
 particular not a flag, for the reason §5.2 gives.
 
-**The loop.** This is the engine's whole tick loop. The core's only wait on another party is
+**The loop.** This is the engine's whole tick loop. The engine core's only wait on another party is
 the one marked:
 
 ```
@@ -891,7 +891,7 @@ blocker_for(t), in priority order:
 ```
 
 The thread that runs this loop is the **executor**: the sim thread, or the thread inside
-`step(n)` when there is no sim thread. Only the executor touches core state while a tick
+`step(n)` when there is no sim thread. Only the executor touches engine core state while a tick
 can run.
 
 With no sim thread, `step(n)` runs this loop on the calling thread. Where the sim thread
@@ -1082,7 +1082,7 @@ not a preference:
 | `on_expiry` | Behaviour | Use |
 |---|---|---|
 | `FAIL` | log `critical` naming the participant and tick, retry once, then the engine enters the terminal `failed` state | a participant whose lateness is a defect, not a load condition |
-| `CONTINUE_WITHOUT` | `active.store(0, release)`, so later readiness stores cannot re-enter the conjunction; emit a reliable-class event; keep ticking | a paced recorder or mod whose absence cannot change what the core computes |
+| `CONTINUE_WITHOUT` | `active.store(0, release)`, so later readiness stores cannot re-enter the conjunction; emit a reliable-class event; keep ticking | a paced recorder or mod whose absence cannot change what the engine core computes |
 | `DROP` | **escalate to the server tier and accept its answer**; never remove the participant locally | a network peer |
 | `SUSPEND` | stop feeding it, keep its endpoint, and take it out of the conjunction until it drains; reversible | a mod that is not keeping up (`design_modding.md` §4.2) |
 
@@ -1140,7 +1140,7 @@ that wants 10⁴. No column choice fixes that: a 32-byte projection of 10⁷ row
 MB per publish (`design_limits.md` §5).
 
 **A row predicate cannot cause a desync**, and the rest of this section relies on that. An
-engine view is an output; core state cannot be rebuilt from a snapshot (§5). So two peers may
+engine view is an output; engine core state cannot be rebuilt from a snapshot (§5). So two peers may
 filter to completely different row sets and stay in lockstep. The predicate needs no
 determinism, takes no part in the checksum, and never enters the command stream.
 
@@ -1162,7 +1162,7 @@ The kind is fixed at the freeze so the cost model is closed. Only its parameters
 publish, through the return header (§3.5).
 
 **The engine chooses how to evaluate a kind.** A linear scan over the predicate's input
-columns always works, and it is the baseline charged in §3.1. If the core already keeps a
+columns always works, and it is the baseline charged in §3.1. If the engine core already keeps a
 spatial structure for its own systems, `SPHERE` and `FRUSTUM` may be answered from it, and
 the scan cost disappears. That is an implementation choice behind the declaration. A reader
 never declares or depends on it.
@@ -1176,14 +1176,14 @@ destination comes from the prefix sum and the world does not change between the 
 commit and the next tick. Where the scan is charged is open
 ([Q35](open_question.md#q35-where-is-the-predicate-scan-charged)).
 
-**Coarse in the core, exact in the reader.** The core's predicate is conservative: a region,
-not a final visibility answer. The reader refines it against its own fresh camera, on the
+**Coarse in the engine core, exact in the reader.** The engine core's predicate is conservative: a
+region, not a final visibility answer. The reader refines it against its own fresh camera, on the
 rows that passed. This split has three benefits:
 
-- the core never needs the exact camera, so the one-tick staleness of the parameters (§3.5)
+- the engine core never needs the exact camera, so the one-tick staleness of the parameters (§3.5)
   needs no safety margin: the region is already loose;
 - refinement is always safe: filtering too little draws too much, filtering too much drops
-  something the reader is responsible for, and neither can reach core state;
+  something the reader is responsible for, and neither can reach engine core state;
 - the parameters stay small, so the return header can be a fixed struct rather than a
   variable-length message.
 
@@ -1257,15 +1257,15 @@ split of §3.4 absorbs.
 
 **The return channel may shape the engine view; it must never reach the world.** A cadence hint
 changes how often this engine view is published, and nothing else. A predicate parameter changes
-which rows this engine view contains, and nothing else. Anything the core acts on goes through the
-command ring (§5.1), which is the ordered, deterministic, replayed and checksummed input
+which rows this engine view contains, and nothing else. Anything the engine core acts on goes
+through the command ring (§5.1), which is the ordered, deterministic, replayed and checksummed input
 path. A second input that is unordered, undeclared and invisible to replay would be a desync
 source. This channel is convenient, which is exactly why the rule is stated here.
 
 **The cadence hint is advisory.** The publisher may ignore it, and always ignores it on a
 paced engine view, whose cadence sets its declarations (§3.1). A reader that must receive
 every tick registers a paced engine view and becomes a participant (§3.3), paying for that
-guarantee at the gate. The hint lets a reader shed load without blocking the core; pacing
+guarantee at the gate. The hint lets a reader shed load without blocking the engine core; pacing
 lets it refuse to miss a tick. They meet different needs, and neither replaces the other.
 
 **Trust.** The return header keeps `PRIVATE`'s trust boundary; it does not widen it. The
@@ -1275,9 +1275,9 @@ a sandboxed reader. A `SHARED` engine view exposes no reader-written bytes that 
 dereferences (Appendix A), and giving it a return header would be a new decision, not this
 one extended.
 
-## 4. Parallelism inside the deterministic core
+## 4. Parallelism inside the deterministic engine core
 
-The core can be highly parallel. The only constraint is that **the merged result must not
+The engine core can be highly parallel. The only constraint is that **the merged result must not
 depend on scheduling**.
 
 **Units.** There are exactly two, and neither is spatial. Neither is called a "partition":
@@ -1361,7 +1361,7 @@ reordering:
 4. After the last phase, run the **terminal commit**: all structural changes, once.
 
 The cut is computed once, at the freeze (§2.4), in O(systems × columns). It cannot run
-earlier, because the system list is not closed until every core mod has registered. It must
+earlier, because the system list is not closed until every engine core mod has registered. It must
 not run later, because the first tick needs it. The cut is derived state, not part of
 session identity: the same mod set gives the same list in the same order, and so the same
 cuts. A replay therefore reproduces the schedule without the header carrying it. Because the
@@ -1522,7 +1522,7 @@ step 2 and is open ([Q27](open_question.md#q27-the-checksums-exact-algorithm-and
 
 ### 4.4 SIMD
 
-Integer SIMD is fully deterministic: the same bits on SSE, AVX and NEON. So the core can use
+Integer SIMD is fully deterministic: the same bits on SSE, AVX and NEON. So the engine core can use
 SIMD heavily without risk, provided that:
 
 - **Hot component data is SoA** (see §5): contiguous `int32` and `int64` columns, 64-byte
@@ -1545,7 +1545,7 @@ Other libraries:
 
 - **[google/highway](https://github.com/google/highway)**, the fallback: portable,
   length-agnostic, with runtime dispatch (SSE4 to AVX-512, NEON/SVE, RISC-V). Runtime
-  dispatch is safe here only because the core is integer-only: every instruction-set path
+  dispatch is safe here only because the engine core is integer-only: every instruction-set path
   gives identical bits. Widely used in production.
 - **xsimd**: header-only and simpler, but built around static dispatch.
 - GCC autovectorization of clean SoA loops over `int` columns is also good. Start with
@@ -1561,7 +1561,7 @@ addresses, and we do not control memory layout or alignment for SIMD.
 
 The design is a hybrid:
 
-- **Core world data lives in custom SoA pools** (M3, the world container). They hold
+- **Engine core world data lives in custom SoA pools** (M3, the world container). They hold
   columns of fixed-point and integer components, indexed by slot, and generational ids whose
   slot is the row (`design_data_container.md` §2.2). Fixed chunking serves task ranges and
   SIMD alignment. Columns indexed by slot iterate faster and vectorize better than sparse
@@ -1571,15 +1571,15 @@ The design is a hybrid:
   peripheral displays, editor and debug queries. These are places where determinism does not
   matter. Whether to keep flecs at all is open
   ([Q56](open_question.md#q56-keep-or-drop-flecs)).
-- The core's system scheduler can then be a simple explicit list: a fixed system order, each
+- The engine core's system scheduler can then be a simple explicit list: a fixed system order, each
   system declaring an access kind per column, and phases derived once, statically, by the
   cut in §4.1. Explicit ordering worked better than attribute-driven ordering in the DOTS
   lockstep experience.
 
 ## 5. Peripheral systems (float domain)
 
-Peripherals are everything outside the core. Every peripheral here is an observer unless it
-registers as a participant (§3.3). None reads live core state, and none can delay a tick by
+Peripherals are everything outside the engine core. Every peripheral here is an observer unless it
+registers as a participant (§3.3). None reads live engine core state, and none can delay a tick by
 lagging.
 
 - **Renderer and viz**: reads a `PRIVATE` engine view over the `[[=viz]]` columns at cadence 1 (no
@@ -1596,7 +1596,7 @@ lagging.
     (`design_data_container.md` §5).
   - **Losing the GPU device ends the process.** It is logged as `critical`, the
     out-of-process cleanup runs, and the process exits with a nonzero status
-    (`design_python_api.md` §2). There is no recover-and-re-upload path. Core state is
+    (`design_python_api.md` §2). There is no recover-and-re-upload path. Engine core state is
     untouched and the session can still be replayed from its record, because the GPU is in
     the peripheral domain.
 - **GUI**: an engine view like any other, usually a few columns at cadence 1, plus the host's
@@ -1613,11 +1613,11 @@ lagging.
   ticks must carry entity ids, not snapshot rows, and re-resolve them against a fresh
   snapshot before submitting. A snapshot row means something only inside the snapshot that
   produced it (`design_data_container.md` §5.1).
-- **GPU compute for the core?** Peripheral-only for now. Float GPU work is non-deterministic
+- **GPU compute for the engine core?** Peripheral-only for now. Float GPU work is non-deterministic
   in practice: atomic commit order, per-driver shader compilation and reduction scheduling
   all vary (see NVIDIA's CCCL determinism levels). Integer-only compute shaders are
   bit-exact in theory, but driver variance makes this a research project, not a foundation.
-  GPU results re-enter the core only as quantized commands, like AI.
+  GPU results re-enter the engine core only as quantized commands, like AI.
 
 The only artifacts peripherals ever see:
 
@@ -1681,12 +1681,12 @@ snapshot(N) = projection( state(N) )                          # derived, one-way
   are instances of the same generated world container, converted to float and generated
   without any mutating API (`design_data_container.md` §5.1). The publisher's own write path
   still needs a name ([Q40](open_question.md#q40-naming-the-publishers-write-path)). Tier 3
-  core mods never read snapshots: they access live state inside their phases. Only a mod's
+  engine core mods never read snapshots: they access live state inside their phases. Only a mod's
   async peripheral half reads an engine view, like any peripheral. A peripheral that wants writable
   data in the container's shape creates its own float-domain container: the same mechanism,
   a separate instance.
 - **A snapshot is not a savegame.** The float conversion loses precision and the projection
-  is partial, so core state cannot be rebuilt from snapshots. State is rebuilt by replay
+  is partial, so engine core state cannot be rebuilt from snapshots. State is rebuilt by replay
   (the full artifact of §2.3, "seed plus command stream" in short). A future save/load
   feature must write the internal fixed-point state bit-exactly, as its own artifact.
 - Desync checksums (§2.3) hash internal state, never snapshots. Engine view cadence and content can
@@ -2226,7 +2226,7 @@ deferred question ([Q47](open_question.md#q47-unloading-a-suspended-mod)).
 ## 6. Agent-based systems: hybrid mind/body split
 
 An agent has a **body**: position, resources, health, anything the world tracks. The body is
-core state and updates deterministically. Where the agent's **mind** lives is a choice of
+engine core state and updates deterministically. Where the agent's **mind** lives is a choice of
 determinism boundary, and it decides what a replay needs:
 
 - **Mind outside the boundary** (an async float or GPU brain that emits commands): the
@@ -2234,14 +2234,14 @@ determinism boundary, and it decides what a replay needs:
   from the seed alone. Agent commands must be recorded exactly like player input. Replay
   size grows with agent count times decision rate, and lockstep multiplayer would need an
   authority to compute and broadcast agent commands.
-- **Mind inside the boundary** (fixed-point decision logic, core-seeded RNG, deterministic
+- **Mind inside the boundary** (fixed-point decision logic, engine-core-seeded RNG, deterministic
   decision ticks): replay from the seed works with nothing recorded per agent. But no float
   math is allowed, and GPU inference inside the boundary is impractical (driver variance,
   §5).
 
 **The design is a hybrid:**
 
-- **Inside the core (deterministic)**: cheap, frequent, per-tick agent logic such as utility
+- **Inside the engine core (deterministic)**: cheap, frequent, per-tick agent logic such as utility
   scoring, steering, state machines, pathfinding and reflexes. This is simple math anyway,
   runs in parallel under §4 like any other system, and keeps replays small.
 - **Outside, as peripherals (float or GPU, async)**: expensive, occasional thinking such as
@@ -2252,7 +2252,7 @@ determinism boundary, and it decides what a replay needs:
 
 Rules that keep this sound:
 
-- **The core resolves agent commands deterministically**: validated, ordered by `(source id,
+- **The engine core resolves agent commands deterministically**: validated, ordered by `(source id,
   sequence)`, and conflicts settled by fixed rules, never by arrival time.
 
   | Aspect | Rule |
@@ -2288,7 +2288,7 @@ Rules that keep this sound:
   inference costs the agent responsiveness rather than costing the simulation its tick
   rate. A mind outside the boundary is a logic mod (`design_modding.md` §3): it names no
   tick, its command runs at the next drain, and the session never waits for it. A decision
-  that must act at an exact tick belongs inside the boundary, as core logic or a Tier 3
+  that must act at an exact tick belongs inside the boundary, as engine core logic or a Tier 3
   mod. A mind that only watches submits nothing and paces nothing. In a networked session a
   logic mod runs once, on a mod client (`design_multiplayer.md` §4.2).
 

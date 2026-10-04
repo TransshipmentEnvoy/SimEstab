@@ -289,7 +289,7 @@ no ring depth does. Blocks nothing in M1.
 
 ### Q51. Transport and session formation
 
-Transport, session formation, NAT traversal, rejoin and late join. Nothing in the core
+Transport, session formation, NAT traversal, rejoin and late join. Nothing in the engine core
 depends on the choice. Late join needs a bit-exact state transfer, which is not the snapshot
 format (`engine_core` §5).
 
@@ -335,7 +335,7 @@ tier may decide that a late player has dropped (`multiplayer` §4.1).
 ### Q57. GPU per-entity state across frames
 
 Trails, selection and level-of-detail caches need per-entity state that survives from one
-frame to the next. Snapshot rows shift, but core slots are stable for an entity's whole
+frame to the next. Snapshot rows shift, but engine core slots are stable for an entity's whole
 life, and both halves of an id are `u32` (`data_container` §2.2, §5). So such state could
 key on slot and generation, if an engine view projects them. Whether and how engine views project them is
 open.

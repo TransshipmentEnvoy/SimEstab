@@ -126,7 +126,7 @@ This is safe because log naming is not part of the replay header (`design_engine
 §2.3).
 
 **Runtime control.** Log level and sink toggles are **control calls**, never simulation
-commands. They change no core state and are never recorded in the replay's input stream
+commands. They change no engine core state and are never recorded in the replay's input stream
 (`design_engine_core.md` §1, `design_python_api.md` §3). A future
 `Engine.set_log_level(...)` will forward to this subsystem, and a replay may run at any
 verbosity.

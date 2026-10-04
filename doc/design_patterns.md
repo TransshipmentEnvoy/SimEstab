@@ -48,6 +48,11 @@ How to read this doc:
   importer of `sim_estab` cannot, and `sim_estab.cppm` cannot re-export it.
 - Optional/heavy subsystems that pull extra dependencies live in a
   **separate module** (`sim_estab.viz`). That module does `import sim_estab;`.
+- Namespaces follow the modules. The primary module is the core, the program
+  that runs without a window, so a partition's namespace is
+  `sim_estab::core::<partition>`: `sim_estab::core::log`, `sim_estab::core::gpu`.
+  A separate module has its own namespace outside `core`: `sim_estab::viz`.
+  The AI and modding parts may get one too.
 - Small cross-cutting helpers go in the `:util` partition. They live in
   sub-namespaces of `sim_estab::core::util`. Example:
   `util::thread_util::is_main_thread()`.
@@ -155,7 +160,7 @@ Implementation rules:
   reason applies beyond logging. The logging guard runs on every emission in the process. If
   it took the log mutex, `log_deinit` would deadlock, because it emits its last record while
   holding that mutex. And every emission in the process, including those inside the parallel
-  core update, would queue on one lock. A lock-free query is what makes the lock hierarchy
+  engine core update, would queue on one lock. A lock-free query is what makes the lock hierarchy
   below possible.
 - **`is_init` is advisory.** Its answer can be stale as soon as it returns. It may gate a
   best-effort action, such as emitting a record or skipping a toggle. It must never gate a
@@ -599,7 +604,7 @@ Rules:
   after that check, so a record started while the subsystem is being torn down may be
   dropped. That is the contract: `log_deinit` requires the caller to stop emission first,
   and never waits for records in flight.
-- **Logging inside a tick must go through a buffered path.** Core (Tier 3) systems run
+- **Logging inside a tick must go through a buffered path.** Engine core (Tier 3) systems run
   inside the parallel phase (`design_engine_core.md` §4.1), where a lock per record inside
   the log core would serialize exactly the work the phase runs in parallel. So the host
   ABI's `log fn` writes into a **per-worker buffer**, which the engine drains at the phase
@@ -608,7 +613,7 @@ Rules:
   register of `design_engine_core.md` §1.1: the phase close is already a barrier that merges
   per-task staged buffers in fixed task order (§4.1 there), and the log buffer is one more
   buffer merged there. That fixed task order is also what gives the records a deterministic
-  order. Records are not core state, so determinism would hold either way, but only the
+  order. Records are not engine core state, so determinism would hold either way, but only the
   buffered form keeps the throughput. Engine code inside the phase uses the same path. What
   happens when a buffer fills is open
   ([Q38](open_question.md#q38-what-happens-when-a-per-worker-log-buffer-fills-during-a-phase)).

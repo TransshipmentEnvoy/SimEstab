@@ -45,9 +45,9 @@ Mods come in three tiers. Each tier has more power than the one before and costs
 
 | Tier | Form | Runs | Changes the world through | Trust and isolation |
 |---|---|---|---|---|
-| 1 **Content** | declarative data (units, stats, recipes) | loaded into the core before the freeze (§6) | nothing: it *is* the initial state | hashed into session identity |
+| 1 **Content** | declarative data (units, stats, recipes) | loaded into the engine core before the freeze (§6) | nothing: it *is* the initial state | hashed into session identity |
 | 2 **Logic** | Python package | its own **thread** or its own **process** | commands only | limited by capabilities; can be isolated |
-| 3 **Core** | native `.so` / `.dll` | inside the deterministic tick | registering systems directly | fully trusted; audited and certified |
+| 3 **Engine core** | native `.so` / `.dll` | inside the deterministic tick | registering systems directly | fully trusted; audited and certified |
 
 Rules:
 
@@ -87,7 +87,7 @@ inputs.
 
   In every case sim *state* is untouched. Determinism is never lost; at worst the process
   is.
-- **Where a mod computed, and for how long, never affects the core beyond what is
+- **Where a mod computed, and for how long, never affects the engine core beyond what is
   recorded.** A mod names no tick. Its command runs at the first tick whose drain finds it,
   and the record says which (`design_engine_core.md` §5.1). A slow mod's command simply
   lands later; nothing is refused for being late, and the session never waits for it.
@@ -170,8 +170,8 @@ never more than one. The default and the cap behind `deadline_ms` are `HostPolic
 and both values are open ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
 
 **Why no mod names a tick.** A command that must act at an exact tick, or a rule that must
-run identically on every peer every tick, belongs inside the tick: a Tier 3 core mod (§5).
-A Python loop outside the core cannot promise either without holding the session for every
+run identically on every peer every tick, belongs inside the tick: a Tier 3 engine core mod (§5).
+A Python loop outside the engine core cannot promise either without holding the session for every
 tick. In a networked session a logic mod runs once, on a mod client, and its commands reach
 every peer through the turn stream like a player's (`design_multiplayer.md` §4.2).
 
@@ -195,7 +195,7 @@ Rules:
     at spawn. So a failed spawn cannot renumber the other mods.
   - Commands carry the number, so the replay header records the **map between names and
     source ids**. Without it, a recorded stream could not be traced back to a named mod.
-  - The core orders each tick's commands by (source id, sequence) (`design_engine_core.md`
+  - The engine core orders each tick's commands by (source id, sequence) (`design_engine_core.md`
     §5). The drain assigns both; the mod never supplies them (`design_python_api.md` §7.1).
 
   The same id also keys:
@@ -229,7 +229,7 @@ Rules:
   header, so a replay knows exactly which mods produced it. The freeze writes it, after
   every mod has loaded (`design_engine_core.md` §2.4). It is never written piece by piece as
   mods arrive, so it cannot describe a load that did not finish. In multiplayer every peer
-  needs the same content and core mods. A logic mod runs on one mod client only, so other
+  needs the same content and engine core mods. A logic mod runs on one mod client only, so other
   peers know its source id but never load its code
   (`design_multiplayer.md` §4.2). Comparing the set between peers is open
   ([Q54](open_question.md#q54-enforcing-the-same-mod-set-on-every-peer)).
@@ -293,7 +293,7 @@ Rules:
 
 ## 4. Tier 2: logic mods
 
-A logic mod is a Python package that runs in a mod host, outside the core. It reads events,
+A logic mod is a Python package that runs in a mod host, outside the engine core. It reads events,
 and snapshots on a thread host (a process host has none in v1). It changes the world only by
 submitting commands. This section covers the API a mod uses (§4.1), the mod host loop (§4.2)
 and the two kinds of mod host (§4.3).
@@ -461,7 +461,7 @@ Rules:
 - **No order of calls can deadlock a mod.** A mod holds no tick, so nothing the engine
   does waits for it. It may submit, wait for an outcome or wait for the next tick in any
   order (`design_engine_core.md` §5.1).
-- **Backpressure.** A slow mod lags *its own* inbox, never the main loop, the core or
+- **Backpressure.** A slow mod lags *its own* inbox, never the main loop, the engine core or
   another mod. A mod that stays behind risks **suspension** (below), not a growing queue.
   - Overflow follows the event's delivery class, not a per-mod setting: coalescible state is
     merged, and best-effort events are dropped. A mod declares its inbox *size* and nothing
@@ -647,7 +647,7 @@ rules:
 |---|---|
 | Mode | **always `SHARED`.** A `PRIVATE` reader chooses the publisher's next block. `SHARED` exposes only bounded pin counts. The publisher may read them as availability, but never derives an address, index, epoch or loop bound from bytes the child can write |
 | Mappings | the payload blocks and the published `(epoch,index)` word are read/write for the engine and read-only for the child. The four aligned block-state words sit in a separate region that is read/write for both, because pin and unpin are part of the reader protocol. Page separation is required. Permissions may not be weakened just to simplify the layout |
-| What a scribble can do | corrupt the child's own read, or pin all candidate blocks so that the publisher skips only that engine view. The publisher claims only a state word exactly equal to zero, uses engine-private block addresses, cursor and epoch, and scans at most three candidates. Child bytes cannot steer core memory or delay the tick |
+| What a scribble can do | corrupt the child's own read, or pin all candidate blocks so that the publisher skips only that engine view. The publisher claims only a state word exactly equal to zero, uses engine-private block addresses, cursor and epoch, and scans at most three candidates. Child bytes cannot steer engine core memory or delay the tick |
 | Contents | the engine view's projection spec **is** the capability set, so the segment holds only the columns the mod may read, plus the `id` column. Filtering happens at projection time, where the schema is, not in a later copy step |
 | Mod-side read | load the published word; atomically pin that block unless it is `WRITING`; reload and require the exact same published word; then copy the payload and unpin. Ordinary pointer or payload access starts only after this revalidation |
 | ABI | a shared-memory engine view **is** a stable cross-boundary layout: fixed aligned `u32` state words and a `u64` published word at pinned literal offsets. It never uses `hardware_destructive_interference_size` or a native struct memcpy. Heap engine views use `std::atomic`. Shared memory uses platform interprocess-atomic wrappers over raw aligned integers (`__atomic_*` on supported Unix, `Interlocked*` on Windows). Startup refuses a platform on which these widths are not always lock-free, and the protocol is tested across processes |
@@ -699,21 +699,21 @@ process-host engine views exist.
   bounds that exhaustion vector
   ([Q64](open_question.md#q64-bounding-a-process-hosts-copy-on-write-pages)).
 
-## 5. Tier 3: core mods (native plugins)
+## 5. Tier 3: engine core mods (native plugins)
 
-A core mod is native code that registers systems into the deterministic scheduler. It runs
+An engine core mod is native code that registers systems into the deterministic scheduler. It runs
 inside the determinism boundary, so it is trusted code, and it is audited twice.
 
 **TL;DR**
 
-- A core mod registers real systems into the deterministic scheduler. It lives inside the
+- An engine core mod registers real systems into the deterministic scheduler. It lives inside the
   determinism boundary.
 - Two separate audits: determinism (automatable, based on checksums) and trust (procedural,
   because native code in the process cannot be sandboxed).
 
 ### 5.1 Pattern: ABI and registration
 
-A core mod exports one versioned C function, which the engine calls to register it. The
+An engine core mod exports one versioned C function, which the engine calls to register it. The
 engine later calls an optional session-start callback, once the column set is closed.
 
 ```c
@@ -722,7 +722,7 @@ sim_estab_mod_info_v1 *sim_estab_mod_register_v1(const sim_estab_host_v1 *host);
 
 /* sim_estab_host_v1: engine ABI version, struct sizes, and the host services —
  *   register_column, resolve_column, get_row_set, get_column
- *     (design_data_container.md §7.3), core RNG stream derivation,
+ *     (design_data_container.md §7.3), engine core RNG stream derivation,
  *     checksum hook, log fn (buffered inside a phase — see below)
  * sim_estab_mod_info_v1: mod id/version, declared systems
  *     { name, read_set, write_set, phase, tick_fn },
@@ -798,19 +798,19 @@ Rules:
   user consent (§6). C++ owns mechanism: `dlopen`/`LoadLibrary`, the handshake,
   registration. Python hands the engine a vetted path; the engine never scans directories
   itself.
-- Core mods load before the session starts and stay for the whole session. There is no hot
+- Engine core mods load before the session starts and stay for the whole session. There is no hot
   reload, because it would invalidate replay identity.
-- A core mod never reads snapshots. Inside the tick it reads and writes *live* columns
+- An engine core mod never reads snapshots. Inside the tick it reads and writes *live* columns
   through the host services table (`design_data_container.md` §7.3). A mod may ship an async
   peripheral half, such as a planner or a neural-net brain. That half is an ordinary
   peripheral with no special access: it reads snapshots and submits commands (§2).
 
 ### 5.2 The determinism contract
 
-A core mod's `tick_fn` must obey the same rules as any core system (`design_engine_core.md`
-§2). They are restated here as the contract the mod author signs.
+An engine core mod's `tick_fn` must obey the same rules as any engine core system
+(`design_engine_core.md` §2). They are restated here as the contract the mod author signs.
 
-- fixed-point and integer math only for state; no floats in anything that touches core
+- fixed-point and integer math only for state; no floats in anything that touches engine core
   state; no libm;
 - time is the tick counter; no wall clock;
 - randomness only from the RNG streams the host services table derives from the session
@@ -827,7 +827,7 @@ A core mod's `tick_fn` must obey the same rules as any core system (`design_engi
   ([Q38](open_question.md#q38-what-happens-when-a-per-worker-log-buffer-fills-during-a-phase)).
   And **records appear in a deterministic order**, however the workers were scheduled. So a
   log that differs between two runs of the same replay is a real signal, not scheduling
-  noise. Records are never core state and never enter the checksum;
+  noise. Records are never engine core state and never enter the checksum;
 - persistent deterministic mod state lives only in registered dynamic columns, or in another
   engine-owned, checksummed state object (`design_data_container.md` §7.3). Undeclared
   private state that affects outcomes breaks the contract. Certification catches it and it
@@ -891,20 +891,20 @@ def certify(mod_path, golden_replays):
 
 ### 5.4 Trust (the procedural audit and its limits)
 
-Core mods cannot be contained, so trust rests on gatekeeping before load. This section lists
+Engine core mods cannot be contained, so trust rests on gatekeeping before load. This section lists
 the gates and says plainly what they cannot do.
 
 - `dlopen`ed code has **full process access. Native code in the process cannot be
-  sandboxed.** Core mods are trusted code by definition. Every measure below is gatekeeping,
+  sandboxed.** Engine core mods are trusted code by definition. Every measure below is gatekeeping,
   not containment:
   - a signature or hash allowlist. Unsigned or unlisted mods are refused by default. Loading
     one anyway is an explicit act by the user, written as an `allowlist` entry in
     `ModPolicy` (§3.1). That decision is **recorded in policy, not answered in a dialog**.
     So it survives into CI, can be reviewed in a diff, and cannot be clicked through;
-  - capabilities in the manifest are *declarative documentation* for core mods, since they
+  - capabilities in the manifest are *declarative documentation* for engine core mods, since they
     cannot be enforced at run time. They are still required and still inspectable;
   - the version handshake (§5.1) prevents accidental ABI corruption, not malice.
-- User-facing docs should say this plainly: installing a core mod means running a program.
+- User-facing docs should say this plainly: installing an engine core mod means running a program.
 
 ## 6. Loading pipeline and main-loop integration
 
@@ -949,7 +949,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
 #   engine.start_session()          # THE FREEZE (design_engine_core.md §2.4): column ids,
 #                                   #   source ids + stable live endpoints, closed engine view set,
 #                                   #   seed, identity, log file, tick-0 snapshot,
-#                                   #   then each core mod's on_session_start
+#                                   #   then each engine core mod's on_session_start
 #                                   #   -> engine is `running`
 #   mods.start()                    # AFTER the freeze: spawns one host per logic mod. A
 #                                   #   host may read a snapshot in on_load, and its source
@@ -970,7 +970,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   |---|---|
   | **policy work**: discovery, parsing, toposort, signature verification, capability resolution | `ModLoadError`, and the engine is still **`configuring`**. None of this touches the engine: the whole block runs before `register_hosts`, the boundary between policy work and engine load. So a bad path or a refused capability is *retryable*: fix the policy and call `load_mods` again |
   | **engine load**: from `register_hosts` on, meaning content, `dlopen` and handshake, column registration, and registration of mod-host engine views | `ModLoadError`, and the engine is `load_failed` (`design_python_api.md` §2). No identity was computed, no header written, no mod host spawned, and no log file named for a session. Recovery is a new `Engine`. A Tier 3 failure is also final for that mod in that process (§5.1) |
-  | **freeze**: an identity mismatch against a loaded replay header, or a core mod failing `on_session_start` | `ReplayIdentityError` or `ModLoadError` from **`start_session()`**, not from `load_mods`. The same clean terminal state |
+  | **freeze**: an identity mismatch against a loaded replay header, or an engine core mod failing `on_session_start` | `ReplayIdentityError` or `ModLoadError` from **`start_session()`**, not from `load_mods`. The same clean terminal state |
   | **spawn**: a mod host fails to start in `mods.start()` | **quarantine** (§4.2), not a load failure. The source id and the header entry already exist and stay correct, and the session runs without that mod's commands. The mod leaves the gate at once, with a reliable `participant.left` event (`design_engine_core.md` §3.3) |
 
   The `register_hosts` boundary is why the pipeline puts *all* policy work first. The
@@ -1091,7 +1091,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
 
 ## 7. Checklists
 
-These checklists cover three common additions: a logic mod, a command type and a core mod.
+These checklists cover three common additions: a logic mod, a command type and an engine core mod.
 
 New **logic mod** (for mod authors):
 
@@ -1122,7 +1122,7 @@ New **logic mod** (for mod authors):
    the next drain (§3, §4.1). Your reaction latency is however long you take. If you must
    not miss a publish, declare `private_view = "paced"`: the gate then waits for your take,
    up to `deadline_ms`, so take promptly. A command that must act at an exact tick belongs in
-   a Tier 3 core mod instead.
+   a Tier 3 engine core mod instead.
 7. **Drain your inbox.** A mod that lets it overflow is suspended: fed nothing, out of
    pacing, and resumed when it catches up (§4.2). Its endpoint and the commands already in
    it are kept, and nothing is unloaded. But the mod loses events: overflow drops
@@ -1150,7 +1150,7 @@ New **command type** (engine side; this is the mod security surface):
 5. It is automatically part of the canonical payload schema (the one-schema rule: replay and
    IPC). Bump the schema version; readers reject newer versions instead of guessing.
 
-New **core mod** (author and engine):
+New **engine core mod** (author and engine):
 
 1. Manifest tier `core`; document the intended systems and component sets.
 2. Implement against the versioned C ABI (§5.1). No exceptions out, no C++ types across.

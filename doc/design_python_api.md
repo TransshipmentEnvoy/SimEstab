@@ -17,7 +17,7 @@ a process host has no engine view.
 
 Terms are defined in [glossary.md](glossary.md). Companion docs:
 
-- `design_engine_core.md`: the deterministic core, commands and snapshots.
+- `design_engine_core.md`: the deterministic engine core, commands and snapshots.
 - `design_patterns.md`: C++ lifecycle idioms. Its §8 binding conventions apply to everything
   here.
 - `design_modding.md`: the mod system built on this API.
@@ -254,7 +254,7 @@ Rules:
 
   **The check is always on and raises `EngineThreadError`.** It is not debug-only. Each
   checked call is O(1) per frame (§5 rule 1), and a debug-only check would leave an ordinary
-  Python mistake as undefined behaviour in the core. Below the binding, the C++
+  Python mistake as undefined behaviour in the engine core. Below the binding, the C++
   abort-on-invariant rule is unchanged. `close()` follows the same check. Called off the
   owner thread it raises `EngineThreadError` before it touches anything, so the engine is
   exactly as it was and the owner thread can still close it. Its promise never to raise is
@@ -330,7 +330,7 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
 
   | What | Behaviour in `failed` |
   |---|---|
-  | core state, command rings, engine view blocks | kept alive (leaked), not freed under a running thread |
+  | engine core state, command rings, engine view blocks | kept alive (leaked), not freed under a running thread |
   | logging | `critical`, naming exactly what was leaked |
   | `engine.state` | reports `failed` |
   | any further API call | raises `sim_estab.EngineFailedError` |
@@ -345,10 +345,10 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
 - **A resource the session cannot continue without ends the process, not the engine.** Two
   failures leave nothing to continue with:
   - GPU device loss (`design_engine_core.md` §5). The GPU is in the peripheral domain, so
-    core state is untouched and the session can still be replayed;
+    engine core state is untouched and the session can still be replayed;
   - a failed memory commit in the terminal commit (`design_data_container.md` §2.2). Memory
     is reserved at each object type's cap, and the commit commits the pages it needs before
-    it changes anything. So a failure leaves core state whole at tick N, and the tick is
+    it changes anything. So a failure leaves engine core state whole at tick N, and the tick is
     simply abandoned. It is never turned into a rejection.
 
   Neither is a stuck thread, so there is nothing to wait out and nothing to leak on
@@ -365,8 +365,8 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
 
 - There is one frozen config object. It is validated in Python and converted once at the
   boundary.
-- Anything that changes core state at runtime is a **command**. Runtime tuning that never
-  touches core state is a **control call**, and it is never recorded.
+- Anything that changes engine core state at runtime is a **command**. Runtime tuning that never
+  touches engine core state is a **control call**, and it is never recorded.
 
 ### Pattern
 
@@ -536,11 +536,11 @@ Rules:
   - Both are frozen dataclasses. `HostPolicy` crosses the boundary once, with the rest of
     the config. `ModPolicy` never crosses it.
 - Runtime changes split along a bright line (`design_engine_core.md` §1):
-  - **Sim commands** (§7.1) are consumed by tick functions, change core state and are
+  - **Sim commands** (§7.1) are consumed by tick functions, change engine core state and are
     recorded in the input stream. They are the only way the world changes.
   - **Control calls** are engine API: `engine.set_log_level(...)`, `engine.pause()` and
     `resume()`, `engine.set_time_scale(...)`. They tune the loop and the peripherals and
-    never touch core state. They are never recorded. A replay reproduces state bit-exactly,
+    never touch engine core state. They are never recorded. A replay reproduces state bit-exactly,
     and the operator stays free to pause, fast-forward or change log levels during playback.
 - **`entity_capacity` overrides caps; every object type has one.** A cap is the most
   entities of one type alive at one time. It comes from `[[=cap(N)]]` in the schema, or is
@@ -553,7 +553,7 @@ Rules:
     replay against a different cap is rejected by the header instead of diverging.
   - **Memory is reserved at the cap and committed as the pool fills.** A large cap costs
     address space, not memory (`design_data_container.md` §2.2). `command_policy` bounds
-    *submitted commands*, and a core mod creates entities inside its tick function without
+    *submitted commands*, and an engine core mod creates entities inside its tick function without
     submitting any, so the cap is what bounds world size. When a commit fails, the result
     is session-fatal, never a rejection. A rejection driven by machine memory would make
     two machines replaying one stream diverge by how much RAM they had
@@ -589,7 +589,7 @@ Rules:
   All four produce bit-identical state for the same command stream. They change *when* you
   look, never *what happened*. A replay can be watched at any of them.
   - Escape hatch: game speed, or something like it, may one day be wanted *as game state*,
-    for example a mod that slows time in the world. Model it then as core state changed by a
+    for example a mod that slows time in the world. Model it then as engine core state changed by a
     real command. Never smuggle control calls into the input stream.
 - `on_failed_stop` chooses what happens on every `failed` entry path (§2): the sim-thread
   join timeout, a participant's second expiry under `FAIL`, an endpoint revocation timeout,
@@ -776,7 +776,7 @@ with Engine(replace(config, headless=True, event_drain="sink")) as engine:
   naming the first difference. So a different engine build, schema, content or mod set
   cannot silently produce "a replay that desyncs for invisible reasons". That is what the
   identity fields in the artifact are *for*.
-- **Replay sessions load Tier 1 content and Tier 3 core mods.** Both are inside the
+- **Replay sessions load Tier 1 content and Tier 3 engine core mods.** Both are inside the
   determinism boundary and part of session identity, so the header names exactly which, and
   `load_mods` loads exactly those. **Tier 2 logic hosts are not spawned.** Their only effect
   is commands, which are already in the record. So a replay simply does not call
@@ -820,11 +820,11 @@ thread.
   session declares a sink drain (§3). The rest of this section applies unchanged.
 - The sim thread is an implementation detail behind unchanged artifacts:
   - **Ownership.** The sim thread alone owns the steady clock, the accumulator, the tick
-    loop and all core state. Every other thread touches only the three artifacts: commands,
+    loop and all engine core state. Every other thread touches only the three artifacts: commands,
     engine views and events. This is the same one-way boundary as the Python/C++ split, one level
     down. It holds because of *when*, not because of which threads exist: the sim thread
-    owns core state while it runs. Three operations read core state from another thread:
-    the freeze's tick-0 publish, `checksum()` and `snapshot()` (`design_engine_core.md`
+    owns engine core state while it runs. Three operations read engine core state from another
+    thread: the freeze's tick-0 publish, `checksum()` and `snapshot()` (`design_engine_core.md`
     §3.1). The owner thread makes all three, at moments when no tick can be running.
   - **One gate predicate, fed by independent fields.** The host is not a participant
     (`design_engine_core.md` §3.3). Its control state is:
@@ -869,7 +869,7 @@ thread.
     `first_unexecuted` under the gate mutex after each tick's publish and notifies a waiter,
     so the wait follows the engine's one wake-up rule. The release/acquire pair orders the
     sim thread's tick and its publish before `step()` returns. That makes `checksum()` on
-    the next line well-defined, instead of a race against the thread that owns core state.
+    the next line well-defined, instead of a race against the thread that owns engine core state.
 
     The waited-on condition is a counter that only increases, never a flag, so a waiter
     that wakes late still finds it true. And the notifications are never the condition: the
@@ -896,7 +896,7 @@ thread.
   - **A stepped tick publishes exactly what any tick publishes.** Every engine view due by
     its cadence (§7.2) is published, and no other. An engine view always has a writable
     block, so every due publication succeeds, and a stepped tick cannot silently drop one.
-    `step()`'s return guarantee covers the completed core tick and its publication. A reader
+    `step()`'s return guarantee covers the completed engine core tick and its publication. A reader
     that must *observe* every stepped tick registers a paced engine view at cadence 1.
     Publication guarantees the snapshot exists; pacing guarantees someone took it. A reader
     that wants the state after a step without registering anything calls `snapshot()`.
@@ -910,7 +910,7 @@ thread.
     thread keeps looping while it runs zero ticks, or a scaled number. Neither is recorded:
     in tick time nothing happened, so replays are unaffected.
   - **Unbounded time scale** (`set_time_scale(None)`, §3). Ticks run back to back, with no
-    wall-clock accumulator and no catch-up clamp: as fast as the core runs. Publication and
+    wall-clock accumulator and no catch-up clamp: as fast as the engine core runs. Publication and
     event emission are unchanged, so render simply sees fewer of the states in between. The
     frame rate does not rise; the sim rate does. This is the windowed equivalent of headless
     `step(n)`. It gives a fast-forward button without touching `tick_rate`. The frame loop
@@ -955,7 +955,7 @@ thread.
     a requested speed is never clamped, because a machine that sustains it never owes a
     quarter second. Only a stall is. It is a build constant in `sim_estab:limits`, not a
     config field (`design_limits.md` §1.2).
-  - **Every wait is named, and every wait on another party is bounded.** The core blocks in
+  - **Every wait is named, and every wait on another party is bounded.** The engine core blocks in
     one place only, the gate. Every participant it waits for has a declared deadline and a
     declared expiry policy (`design_engine_core.md` §3.3). A pause and a backed-up event
     ring hold it with no deadline, because nothing in a paused session can be late. Callers
@@ -1122,7 +1122,7 @@ Rules:
     a full host endpoint returns `queue_full`, and `outcome(h)` returns `pending` until its
     tick has run (§4.3).
   - **`engine.snapshot()`**: owner thread and quiescent, like `checksum()` below. It reads
-    core state into the engine's snapshot buffer, so it is legal only while no tick can
+    engine core state into the engine's snapshot buffer, so it is legal only while no tick can
     run: no sim thread runs, or it is paused with no step in flight, or the session has
     stopped (`design_engine_core.md` §3.1). Off the owner thread it raises
     `EngineThreadError`, and while the sim thread runs it raises `EngineStateError`. A
@@ -1136,7 +1136,7 @@ Rules:
     locks. Sharing an array view keeps its block alive, and so delays the next `take()`
     (§7.2). That is a lifetime consequence, not a thread-safety one.
   - **`checksum()`**: owner thread and quiescent. `snapshot()` shares this family, the only
-    one with a second condition. It reads core state, which the sim thread alone owns
+    one with a second condition. It reads engine core state, which the sim thread alone owns
     (§4.3). So it is legal only while that thread stands still: no sim thread runs, or it
     is paused with no step in flight, or the session has stopped. The call confirms
     quiescence itself (§4.3) instead of making the caller arrange it, so `step(1);
@@ -1408,7 +1408,7 @@ Rules:
 - Commands are validated against the submitter's source-id capabilities (`design_modding.md`
   §3).
 - **Recording**: the input stream is recorded at tick consumption, so it holds exactly the
-  commands the core runs. The recorded stream is therefore identical to the applied stream
+  commands the engine core runs. The recorded stream is therefore identical to the applied stream
   by construction. Rejected commands never enter the record. No command can be admitted but
   unrecorded, or recorded but dropped, and so corrupt a replay.
 - **One schema, three uses.** One canonical command payload schema serves the replay file,
@@ -1427,7 +1427,7 @@ Rules:
 
 ### 7.2 Snapshots (outbound state)
 
-State leaves the core in two ways: a snapshot the engine makes when the owner thread asks,
+State leaves the engine core in two ways: a snapshot the engine makes when the owner thread asks,
 or an engine view a reader registered (`design_engine_core.md` §3.1). Which one you use
 decides which cost you pay. Every engine view is `PRIVATE` in v1.
 
@@ -1559,7 +1559,7 @@ Rules:
   parameters into the engine view's return header. They reach the publisher at the **next
   `take()`**, because that exchange is what publishes them (`design_engine_core.md` §3.5).
   Two consequences follow:
-  - **Parameters are one publish cycle stale, by design.** The core's predicate is
+  - **Parameters are one publish cycle stale, by design.** The engine core's predicate is
     conservative on purpose: a region, not a visibility answer. So the staleness needs no
     safety margin. Exact culling belongs to the reader, against the camera it has this
     frame.
@@ -1582,7 +1582,7 @@ Rules:
   that goes with it. The publisher may ignore it, and always does on a paced engine view. A
   reader that cannot miss a tick uses `paced=True` instead.
 - **An engine view may be paced.** Registering it with `paced=True` and a deadline makes its reader
-  a participant (`design_engine_core.md` §3.3). The core will not advance past a tick the
+  a participant (`design_engine_core.md` §3.3). The engine core will not advance past a tick the
   engine view has not taken. That is how a recorder or training-data collector makes sure it misses
   no tick. It costs what it says: up to the declared deadline of tick latency, and only
   while that engine view is behind. **Taking is the declaration.** `take()` of the block of
@@ -1599,7 +1599,7 @@ Rules:
   limit.
 
   The default is `False`, and an engine view that is not paced cannot delay a tick, however slow it
-  is. Pacing is the only way to guarantee no missed tick. A reader that only wants the core
+  is. Pacing is the only way to guarantee no missed tick. A reader that only wants the engine core
   to ease off sends a cadence hint in its return header instead (`design_engine_core.md`
   §3.5). The hint is advisory and never enters the gate.
 - **`close()` waits for running calls, then detaches retained blocks. It never raises, and
@@ -1634,12 +1634,12 @@ Rules:
     in a global keeps that memory until interpreter exit. The cost is bounded: one block per
     `PRIVATE` engine view and the one snapshot buffer, once per process, since one engine is
     closed once and an engine view holds one block. It can neither recur nor grow.
-- Fixed-point to float conversion happened at publish, by a core rule. Python sees floats
+- Fixed-point to float conversion happened at publish, by an engine core rule. Python sees floats
   and may do anything with them. Nothing flows back except commands.
 - Column names, dtypes and extents come from the generated snapshot container instance
-  (`design_data_container.md` §5.1), with the same schema descriptors as core state.
+  (`design_data_container.md` §5.1), with the same schema descriptors as engine core state.
   Snapshots are **dense**: publish gathers only live rows, so every row is a live entity,
-  there is no validity column and there is nothing to mask. Core storage has holes; a
+  there is no validity column and there is nothing to mask. Engine core storage has holes; a
   snapshot never does (`design_data_container.md` §5.1).
 - **Identity is the `id` column, not the row position.**
   - An id is a `uint64`, its slot and its generation, and the only valid command target.
@@ -1649,7 +1649,7 @@ Rules:
   - `snap.find(type, id)` is the intended lookup. The `id` column is sorted for every object
     type, so `np.searchsorted` works as well (above).
   - A command naming an entity that has since died is rejected deterministically by the
-    core. It is never undefined behaviour and never a silent hit on another entity: a later
+    engine core. It is never undefined behaviour and never a silent hit on another entity: a later
     occupant of the slot has a different generation. This is normal reaction latency.
   - That is an application-time rejection (§7.1): submitted, recorded, rejected at
     consumption, and reported through that command's own outcome. Both of a command's
@@ -1663,7 +1663,7 @@ Rules:
 
 ### 7.3 Events (outbound happenings)
 
-Events report what happened in the core. They travel on the event ring to the session's
+Events report what happened in the engine core. They travel on the event ring to the session's
 event drain: the owner thread, which drains them once per frame, or the engine's own sink
 (§3).
 
@@ -1713,7 +1713,7 @@ Rules:
   Each inbox's size is declared in the manifest and capped by `HostPolicy.max_inbox_size`
   (§3, `design_modding.md` §4.2). On overflow, an inbox follows the event's delivery class
   (below). There is no separate per-mod overflow policy to declare (`design_modding.md`
-  §4.2). A slow subscriber can never push back on the loop or the core. A mod that stays
+  §4.2). A slow subscriber can never push back on the loop or the engine core. A mod that stays
   behind is suspended instead of being left to pile up events.
 - **Delivery classes** (`design_engine_core.md` §5):
   - **Reliable/audit**: a system's create refused by a declared game-rule cap, a participant

@@ -302,10 +302,10 @@ dynamic columns by attribution below.
 **Attribution is kept, because it is not about a bound.** Every column of a type is reserved
 at the cap, zeroed at every erase and written at every create (`design_data_container.md`
 §2.2). So a Tier 3 mod that registers dynamic columns raises the memory and per-entity cost
-of a core object type (`design_data_container.md` §7.3). That document requires such a cost
+of an engine core object type (`design_data_container.md` §7.3). That document requires such a cost
 to be bounded and attributable. Nothing caps it, so attribution carries the whole
 requirement. **Registered dynamic columns are counted and reported per (object type,
-mod).** A third party that inflates a core type's cost is named, even though nothing refuses
+mod).** A third party that inflates an engine core type's cost is named, even though nothing refuses
 it. Where the counts are reported is open
 ([Q36](open_question.md#q36-where-are-per-type-mod-attribution-counts-reported)). An
 expensive mod is diagnosed, not rejected, but it is never anonymous.
@@ -532,7 +532,7 @@ Each value has a named trigger, so that revisiting it is a decision, not a drift
 | catch-up clamp | `sim.behind` fires in ordinary play, with no stall behind it, or a real stall recovers too slowly. It is a pacing value outside determinism, so a change touches no replay |
 | endpoint capacity | `queue_full` reaches a producer that is not exceeding its own declaration. Capacity is per tick and per endpoint, so this means the declaration is wrong, not the engine |
 | source cap | A legitimate session wants a 257th source. Raising it costs almost nothing (§2.1), so hitting it is information, not a wall |
-| participant cap | The same, with more suspicion: every participant is one more way for the core to stop. Raising it does not admit more *pacing*. Submitting already paces a peripheral, so the cap bounds how many distinct things are paced, not whether they are |
+| participant cap | The same, with more suspicion: every participant is one more way for the engine core to stop. Raising it does not admit more *pacing*. Submitting already paces a peripheral, so the cap bounds how many distinct things are paced, not whether they are |
 | player cap | A game design wants more than 128 humans. It is a game rule, so this is a design decision, not an engine one |
 | Engine view cap | A session legitimately wants a sixty-fifth engine view. The cap is meant not to bind, so hitting it is information |
 | the `SHARED` engine view mode itself | A process-host mod needs a snapshot. The mode is deferred, not deleted (`design_engine_core.md` Appendix A). A revival should re-derive the copy-per-reader cost against the row counts of §5 before restoring the pin count as written ([Q60](open_question.md#q60-reviving-the-shared-engine-view)) |

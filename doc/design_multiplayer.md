@@ -46,7 +46,7 @@ Lockstep has real costs:
 | Cost | Detail |
 |---|---|
 | The session runs at the speed of the slowest node it waits for | Every instance must finish tick `t` before anyone runs `t+1` (§3.1). The server tier moves this cost rather than removing it. A client waits on one server node. The server nodes absorb the wait between peers, over a few reliable links instead of across 128 clients (§4.1) |
-| Every peer needs the identical content and core mods | A Tier 3 mod is native code inside the tick. One different version causes a desync. Logic mods are the exception: each runs on one mod client only (§4.2) |
+| Every peer needs the identical content and engine core mods | A Tier 3 mod is native code inside the tick. One different version causes a desync. Logic mods are the exception: each runs on one mod client only (§4.2) |
 | Late join needs a state transfer | A joining peer must replay from tick 0 or receive a full snapshot, which is the transfer lockstep otherwise avoids |
 | Every client knows the whole map | Every peer simulates everything. Hiding information is a UI feature and gives no security |
 
@@ -60,7 +60,7 @@ The determinism design already covers most of what lockstep needs:
 | Commands as the only way to change the world | §1 |
 | One wire encoding | §2.3: little-endian, fixed widths, fully validated. Replay, IPC and the network all use this one schema |
 | Desync detection | §2.3, §4.2 and `design_limits.md` §6: one checksum algorithm at three levels. Peers compare the tick digest every tick and the rolling checksum, which covers the whole world every N ticks |
-| A gate that waits for participants before each tick | §3.3: the core waits until every registered participant is ready for the tick, up to a declared deadline. A peer is a participant |
+| A gate that waits for participants before each tick | §3.3: the engine core waits until every registered participant is ready for the tick, up to a declared deadline. A peer is a participant |
 | A command endpoint per peer | §5.1: an endpoint is a single-producer (SPSC) ring. A network receive thread is that single producer |
 | A submit call that names the tick | §5.1: every submission names its tick, so peers need no special call. The only extra thing a peer declares is a nonzero stamp margin |
 | A way to report what a command did | §5.1: the outcome channel. A peer's outcomes are identical on every machine. They help spot trouble early and give the transport a way to push back, but carry no new information about the world |
@@ -71,7 +71,7 @@ The determinism design already covers most of what lockstep needs:
 
 ### 3.1 A peer is a participant
 
-Lockstep's core rule is that tick `t` runs only when the command set for `t` is complete on
+Lockstep's main rule is that tick `t` runs only when the command set for `t` is complete on
 every peer. Otherwise peers compute from different sets. The next tick digest then shows a
 differing command set, or the rolling checksum shows the diverged state within N ticks. The
 gate in `design_engine_core.md` §3.3 already enforces this rule for every participant, and a
@@ -196,7 +196,7 @@ may stamp a command.
 
 ### 3.3 Pause, step and time scale apply to the whole session
 
-Pause is a control call (`design_python_api.md` §3). It never changes core state and is
+Pause is a control call (`design_python_api.md` §3). It never changes engine core state and is
 never recorded. The host controls the gate through two independent fields, `run_until` and
 `stop_requested`. The sim also keeps its own message backlog count. All three feed the same
 gate check as every peer's `ready_through` (`design_engine_core.md` §3.3). They are kept
@@ -212,7 +212,7 @@ peer could time out while the game is paused, and be dropped for something it di
 (`design_engine_core.md` §3.3).
 
 Pause is therefore an agreement between peers that takes effect at an agreed turn. It must
-not be a command: commands change core state and are recorded for replay, and pause does
+not be a command: commands change engine core state and are recorded for replay, and pause does
 neither. Pause belongs in the session protocol, next to the turn stream. The same applies to
 `step()`, `set_time_scale(None)` and any other control that changes when ticks run. The
 session-control protocol distributes all of them, and each instance applies them to its
@@ -235,7 +235,7 @@ authority only for commands from non-deterministic peripherals:
 | Command source | Needs an authority? | Why |
 |---|---|---|
 | Player input (every player's peer endpoint, the local player's included) | No | The gate is enough. The submitting peer names the tick and broadcasts it, and every other peer waits for that tick |
-| Deterministic core mods, and agent minds inside the determinism boundary | No | Every peer computes the identical command from identical state (`design_engine_core.md` §6) |
+| Deterministic engine core mods, and agent minds inside the determinism boundary | No | Every peer computes the identical command from identical state (`design_engine_core.md` §6) |
 | Logic mods (Tier 2) | Yes: the mod client that runs it | It runs once, on one machine, and its commands travel in the turn stream like a player's (§4.2) |
 | Other non-deterministic peripherals: float, GPU or LLM-based minds outside the boundary | Yes | Peers would compute *different* commands. Either one peer computes and broadcasts them, or the mind moves inside the boundary |
 
@@ -331,7 +331,7 @@ Rules:
 - Third-party Python on the operator's machines belongs in process hosts
   (`design_modding.md` §4.3).
 - A rule that must run identically on every peer, every tick, is not a logic mod. It is a
-  Tier 3 core mod: deterministic, inside the tick, run by every peer in lockstep, and it
+  Tier 3 engine core mod: deterministic, inside the tick, run by every peer in lockstep, and it
   sends nothing over the network.
 
 How session formation assigns mods to mod clients, failover, the margin's value and
