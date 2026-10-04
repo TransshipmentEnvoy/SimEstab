@@ -27,11 +27,11 @@ def test_severity_level_enum():
 
 
 def test_log_error_exception():
-    """Test that log_error is exposed as LogError, under the SimEstabError root."""
-    assert hasattr(if_module, 'SimEstabError')
-    assert issubclass(if_module.SimEstabError, RuntimeError)
-    assert hasattr(if_module.log, 'LogError')
-    assert issubclass(if_module.log.LogError, if_module.SimEstabError)
+    """Test that log_error is exposed, under the sim_estab_error root."""
+    assert hasattr(if_module, 'sim_estab_error')
+    assert issubclass(if_module.sim_estab_error, RuntimeError)
+    assert hasattr(if_module.log, 'log_error')
+    assert issubclass(if_module.log.log_error, if_module.sim_estab_error)
 
 
 def test_log_init_and_is_init():
@@ -78,7 +78,7 @@ def test_all_logging_apis_exist():
     """Test that all expected logging APIs are exposed."""
     # Check that all expected functions exist in the log submodule
     assert hasattr(if_module.log, 'severity_level')
-    assert hasattr(if_module.log, 'LogError')
+    assert hasattr(if_module.log, 'log_error')
     assert hasattr(if_module.log, 'log_init')
     assert hasattr(if_module.log, 'log_deinit')
     assert hasattr(if_module.log, 'log_is_init')

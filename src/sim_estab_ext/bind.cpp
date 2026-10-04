@@ -20,7 +20,7 @@ NB_MODULE(_if, m) {
     // Bind the root of the exception family (inherit from RuntimeError). It is bound before
     // any derived exception: nanobind tries the newest translator first, so a derived
     // exception must register after its base to be raised as itself.
-    static nb::exception<sim_estab::core::error::sim_estab_error> sim_estab_error_exc(m, "SimEstabError",
+    static nb::exception<sim_estab::core::error::sim_estab_error> sim_estab_error_exc(m, "sim_estab_error",
                                                                                       PyExc_RuntimeError);
 
     // Create log submodule
@@ -35,8 +35,8 @@ NB_MODULE(_if, m) {
         .value("error", sim_estab::core::log::severity_level::error)
         .value("critical", sim_estab::core::log::severity_level::critical);
 
-    // Bind log_error exception as LogError (inherit from SimEstabError)
-    static nb::exception<sim_estab::core::log::log_error> log_error_exc(log_module, "LogError",
+    // Bind log_error exception (inherit from sim_estab_error)
+    static nb::exception<sim_estab::core::log::log_error> log_error_exc(log_module, "log_error",
                                                                         sim_estab_error_exc.ptr());
 
     // Bind logging functions

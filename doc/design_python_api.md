@@ -1765,11 +1765,11 @@ owner thread.
 
 Rules:
 
-- Every C++ subsystem exception is bound under a PascalCase Python name
-  (`nb::exception<x_error>(mod, "XError", base)`, `design_patterns.md` §8): `gpu_error` is
-  `GpuError`. Every one derives from `SimEstabError`, the root of the library's exception
-  family, which derives from `RuntimeError`. No C++ exception ever crosses the boundary
-  untranslated.
+- Every C++ subsystem exception is bound (`nb::exception<x_error>(mod, "x_error", base)`,
+  `design_patterns.md` §8) and surfaced under a Python-style name (`sim_estab.GpuError`,
+  ...). Every bound exception derives from `sim_estab_error`, the root of the library's
+  exception family, which derives from `RuntimeError`. No C++ exception ever crosses the
+  boundary untranslated.
 - **Async errors** (whenever a sim thread runs): an error on the C++ sim thread is
   captured, and the sim thread stops safely. The exception is raised again at the next
   **rendezvous point** on the driving thread: any pump call, `stop_sim_async()`, or an

@@ -636,12 +636,11 @@ Rules:
 - The nanobind module is `sim_estab._if`. Each subsystem gets a
   `def_submodule("log", ...)`.
 - Bind enums value-by-value.
-- A Python exception has a PascalCase name, as every Python exception does:
-  `x_error` is bound as `XError`, and the root `sim_estab_error` as
-  `SimEstabError`.
+- A bound exception keeps its C++ name: `x_error` is bound as `x_error`, and
+  the root as `sim_estab_error`.
 - Bind the root first, on the `_if` module itself, with `PyExc_RuntimeError` as
   its base. Bind each subsystem exception in its submodule with its C++ base
-  as the Python base: `static nb::exception<x_error>(mod, "XError", base)`.
+  as the Python base: `static nb::exception<x_error>(mod, "x_error", base)`.
   Python then sees the same tree as C++ (§6).
 - Bind a base before the classes derived from it. nanobind tries the newest
   translator first, so a derived exception registered before its base would be
