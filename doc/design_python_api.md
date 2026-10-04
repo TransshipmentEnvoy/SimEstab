@@ -86,7 +86,8 @@ src/sim_estab/
 Rules:
 
 - `_if` stays a thin 1:1 mirror of the C++ API, following the binding conventions of
-  `design_patterns.md` §8. Anything Pythonic lives in the pure-Python layer above it, never
+  `design_patterns.md` §8. It mirrors what is bound: binding is decided per API, and not
+  every C++ API is bound. Anything Pythonic lives in the pure-Python layer above it, never
   in `bind.cpp`: context managers, dataclasses, defaults, keyword conveniences.
 - The pure-Python layer never goes around `_if`: no ctypes, no direct `.so` loading.
 
@@ -1838,8 +1839,9 @@ Rules:
 
 Go through this list for every new piece of Python API.
 
-1. New C++ API? Bind it 1:1 in `bind.cpp`, following `design_patterns.md` §8. Put the
-   Pythonic layer in pure Python above it.
+1. New C++ API that Python needs? Bind it 1:1 in `bind.cpp`, following
+   `design_patterns.md` §8. Put the Pythonic layer in pure Python above it. A C++ API that
+   Python does not need stays unbound.
 2. Can the call run long? Add the GIL-release call guard (§5 rule 2).
 3. New data flowing to Python? It is a snapshot, an event or a query, never per-entity call
    traffic (§5 rule 1). Make it zero-copy where it recurs every frame.

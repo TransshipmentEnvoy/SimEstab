@@ -635,6 +635,9 @@ Rules:
 
 ## 8. Python binding conventions (`bind.cpp`)
 
+- Binding is decided per API. Nothing is bound only because it exists, and a
+  subsystem without bindings is complete: `gpu` and `viz` have none. The rules
+  below say how to bind what is chosen.
 - The nanobind module is `sim_estab._if`. Each subsystem gets a
   `def_submodule("log", ...)`.
 - Bind enums value-by-value.
@@ -676,5 +679,6 @@ Rules:
 6. Third-party types leaking into the interface? Wrap them as opaque
    wrappers (§5b) or `void *` handles (§1).
 7. Log lifecycle transitions on channel `sim_estab.<name>` per §7.
-8. Bind to Python per §8. Add tests: Boost.Test under `test/libsim_estab/`,
-   pytest under `test/`.
+8. Decide what Python needs, and bind only that, per §8. Add tests:
+   Boost.Test under `test/libsim_estab/`, and pytest under `test/` for what is
+   bound.
