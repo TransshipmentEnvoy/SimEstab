@@ -135,8 +135,9 @@ name**: the last component of the module name.
 - For process-global subsystems that initialize once.
 - Three functions: throwing idempotent `init`, noexcept idempotent `deinit`,
   noexcept `is_init` query.
-- One global mutex per subsystem guards its mutable state. The `is_init` query does not take
-  it: it is an atomic load (see the lock hierarchy below).
+- One global mutex per subsystem guards its mutable state. The `is_init` query prefers to be
+  lock-free: an atomic load (see the lock hierarchy below). Where a mutex already guards the
+  state the query reads, the query may lock that mutex.
 
 ### Pattern
 
@@ -157,12 +158,18 @@ Implementation rules:
   - whatever tracking containers the subsystem needs.
 - Use a **single global mutex per subsystem**. Take it as the first line of every function
   that touches mutable state.
-- **`X_is_init()` takes no lock.** It is one acquire load of the atomic `init_status`. The
-  reason applies beyond logging. The logging guard runs on every emission in the process. If
-  it took the log mutex, `log_deinit` would deadlock, because it emits its last record while
-  holding that mutex. And every emission in the process, including those inside the parallel
-  engine core update, would queue on one lock. A lock-free query is what makes the lock hierarchy
-  below possible.
+- **`X_is_init()` prefers to be lock-free.** Make it one acquire load of an atomic, such as
+  `init_status`. A lock-free query cannot deadlock against a caller that already holds the
+  subsystem mutex, and it never queues its callers on one lock.
+- **Where a mutex already guards the state the query reads, the query may lock that mutex.**
+  No separate atomic is needed then. The refcount pattern of §3 works this way: its mutex
+  guards the count, and its query locks the mutex to read it. Such a query must not be
+  called by code that already holds the same mutex.
+- **For logging, a lock-free query is required.** The logging guard runs on every emission
+  in the process. If it took the log mutex, `log_deinit` would deadlock, because it emits
+  its last record while holding that mutex. And every emission in the process, including
+  those inside the parallel engine core update, would queue on one lock. A lock-free query
+  is what makes the lock hierarchy below possible.
 - **`is_init` is advisory.** Its answer can be stale as soon as it returns. It may gate a
   best-effort action, such as emitting a record or skipping a toggle. It must never gate a
   decision that has to stay true after the call. Anything that needs such a decision takes
@@ -279,7 +286,9 @@ Implementation rules:
   - a `static std::mutex`;
   - a `static int ref_count`;
   - the resource pointer/flags.
-- Every function locks the mutex first.
+- Every function locks the mutex first. That includes `X_is_init()`: the
+  mutex already guards the count, so the query locks it and reads the count
+  (§2).
 - **First acquire creates. Last release destroys.**
 - `release` decrements. It tears down only at zero. Calling `release` with
   `ref_count <= 0` is a safe no-op.
@@ -334,6 +343,10 @@ encode them. Discover the equivalents for any new resource:
   throwing.
 - Layering: `GPU_device_acquire` throws `gpu_error` if
   `SDL_ctx_is_init()` is false.
+- Init queries: `SDL_ctx_is_init()` and `GPU_device_is_init()` lock their
+  mutex and read the count. `GPU_device_acquire` calls `SDL_ctx_is_init()`
+  while it holds `GPU_device_mutex`. That nesting is the lock order stated in
+  §2.
 - Thread affinity: SDL's video/main thread is whichever thread first
   initializes video. On Apple platforms, that must be the real main thread.
   So `SDL_ctx_acquire` throws `gpu_error` when `ref_count == 0` off the main
@@ -673,7 +686,7 @@ Rules:
    `src/<name>.cpp`. File names and folders follow §1 "File layout".
 2. Export `<name>_error`, derived from `sim_estab_error` (§6).
 3. Process-global state? → init/deinit/is_init triad (§2). Single `detail::`
-   mutex. Idempotent both ways.
+   mutex. Idempotent both ways. Prefer a lock-free `is_init`.
 4. Shared unique resource? → acquire/release refcount pair (§3). Throwing
    acquire, noexcept release, `_get`/`_is_init` queries. Also write
    down the constraints the resource itself imposes: per-process uniqueness,
