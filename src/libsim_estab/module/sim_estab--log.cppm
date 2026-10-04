@@ -151,7 +151,7 @@ export void log_deinit() noexcept;
  * Check if the logging system is initialized
  * @return true if logging system is initialized and ready to use, false otherwise
  */
-export bool log_is_init() noexcept;
+export [[nodiscard]] bool log_is_init() noexcept;
 
 /**
  * Enable console logging output

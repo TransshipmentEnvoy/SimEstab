@@ -145,7 +145,7 @@ Use for process-global subsystems. They initialize once, not per object.
 ```cpp
 export void X_init();                 // may throw; idempotent (second call is a no-op)
 export void X_deinit() noexcept;      // idempotent, exception-safe, allows re-init afterwards
-export bool X_is_init() noexcept;     // pure query
+export [[nodiscard]] bool X_is_init() noexcept;  // pure query
 ```
 
 Implementation rules:
