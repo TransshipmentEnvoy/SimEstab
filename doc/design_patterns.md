@@ -638,15 +638,22 @@ Rules:
 - Binding is decided per API. Nothing is bound only because it exists, and a
   subsystem without bindings is complete: `gpu` and `viz` have none. The rules
   below say how to bind what is chosen.
-- The nanobind module is `sim_estab._if`. Each subsystem gets a
-  `def_submodule("log", ...)`.
+- The nanobind module is `sim_estab._if`. Its submodules mirror the C++
+  modules, so a binding is found from its C++ name:
+  - a partition `<p>` of `sim_estab` is the submodule `_if.<p>`:
+    `sim_estab::core::log` is `_if.log`, made with `def_submodule("log", ...)`;
+  - a separate module `sim_estab.<m>` is the submodule `_if.<m>`;
+  - a bound entity keeps its C++ name inside its submodule.
+
+  The two kinds of submodule cannot collide, because a separate module's short
+  name differs from every partition name (§1).
 - Bind enums value-by-value.
 - A bound exception keeps its C++ name: `x_error` is bound as `x_error`, and
   the root as `sim_estab_error`.
-- Bind the root first, on the `_if` module itself, with `PyExc_RuntimeError` as
-  its base. Bind each subsystem exception in its submodule with its C++ base
-  as the Python base: `static nb::exception<x_error>(mod, "x_error", base)`.
-  Python then sees the same tree as C++ (§6).
+- Bind the root first, in `_if.error`, with `PyExc_RuntimeError` as its base.
+  Bind each subsystem exception in its submodule with its C++ base as the
+  Python base: `static nb::exception<x_error>(mod, "x_error", base)`. Python
+  then sees the same tree as C++ (§6).
 - Bind a base before the classes derived from it. nanobind tries the newest
   translator first, so a derived exception registered before its base would be
   raised as the base.

@@ -28,10 +28,10 @@ def test_severity_level_enum():
 
 def test_log_error_exception():
     """Test that log_error is exposed, under the sim_estab_error root."""
-    assert hasattr(if_module, 'sim_estab_error')
-    assert issubclass(if_module.sim_estab_error, RuntimeError)
+    assert hasattr(if_module.error, 'sim_estab_error')
+    assert issubclass(if_module.error.sim_estab_error, RuntimeError)
     assert hasattr(if_module.log, 'log_error')
-    assert issubclass(if_module.log.log_error, if_module.sim_estab_error)
+    assert issubclass(if_module.log.log_error, if_module.error.sim_estab_error)
 
 
 def test_log_init_and_is_init():

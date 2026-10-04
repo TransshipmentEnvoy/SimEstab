@@ -17,10 +17,13 @@ import sim_estab;
 namespace nb = nanobind;
 
 NB_MODULE(_if, m) {
+    // Create error submodule
+    nb::module_ error_module = m.def_submodule("error", "Exception family of SimEstab");
+
     // Bind the root of the exception family (inherit from RuntimeError). It is bound before
     // any derived exception: nanobind tries the newest translator first, so a derived
     // exception must register after its base to be raised as itself.
-    static nb::exception<sim_estab::core::error::sim_estab_error> sim_estab_error_exc(m, "sim_estab_error",
+    static nb::exception<sim_estab::core::error::sim_estab_error> sim_estab_error_exc(error_module, "sim_estab_error",
                                                                                       PyExc_RuntimeError);
 
     // Create log submodule
