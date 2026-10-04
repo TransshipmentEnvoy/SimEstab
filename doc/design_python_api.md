@@ -78,6 +78,8 @@ src/sim_estab/
   snapshot.py     # zero-copy snapshot views (§7.2)
   event.py        # event types, drain/dispatch bus (§7.3)
   loop.py         # reference loops: windowed (sim thread) / headless / replay (§4)
+  gpu.py          # Python layer over the gpu bindings, once any exist
+  viz.py          # Python layer over the viz bindings, once any exist
   mod/            # mod manager — see design_modding.md
   upkeep/         # process-wide subsystems that outlive any Engine:
                   #   log.py = refcounted acquire/release over the C++ triad (§2)
@@ -90,6 +92,9 @@ Rules:
   every C++ API is bound. Anything Pythonic lives in the pure-Python layer above it, never
   in `bind.cpp`: context managers, dataclasses, defaults, keyword conveniences.
 - The pure-Python layer never goes around `_if`: no ctypes, no direct `.so` loading.
+- The Python layer over `gpu` and over `viz` each gets its own file, `gpu.py` and `viz.py`.
+  The native bindings stay in `_if`, as `_if.gpu` and `_if.viz`. Neither subsystem is bound
+  today, so neither file exists yet.
 
 ## 2. Engine lifecycle
 
