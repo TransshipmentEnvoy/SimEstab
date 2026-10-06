@@ -126,9 +126,9 @@ SDL_GPUDevice_ptr GPU_device_acquire(bool debug_mode, bool prefer_low_power) {
         }
 
         // Create shared GPU device
-        sim_estab_log("sim_estab.gpu", severity_level::info, "Creating shared GPU device (debug_mode=",
-                      debug_mode ? "true" : "false", ", prefer_low_power=",
-                      prefer_low_power ? "true" : "false", ")");
+        sim_estab_log("sim_estab.gpu", severity_level::info,
+                      "Creating shared GPU device (debug_mode=", debug_mode ? "true" : "false",
+                      ", prefer_low_power=", prefer_low_power ? "true" : "false", ")");
 
         detail::GPU_device_debug_mode       = debug_mode;
         detail::GPU_device_prefer_low_power = prefer_low_power;
@@ -286,8 +286,8 @@ ComputeContext::ComputeContext(bool prefer_low_power) {
 
     try {
         sim_estab_log("sim_estab.gpu", severity_level::info,
-                      "Initializing ComputeContext (headless, prefer_low_power=",
-                      prefer_low_power ? "true" : "false", ")");
+                      "Initializing ComputeContext (headless, prefer_low_power=", prefer_low_power ? "true" : "false",
+                      ")");
 
         // Acquire SDL context with video subsystem (required for GPU device creation)
         SDL_ctx_acquire(SDL_INIT_VIDEO);

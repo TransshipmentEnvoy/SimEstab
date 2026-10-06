@@ -130,8 +130,7 @@ VizContext::VizContext(int width, int height, std::string_view title, bool resiz
 #endif
 
         try {
-            impl_->gpu_device =
-                static_cast<SDL_GPUDevice *>(sim_estab::core::gpu::GPU_device_acquire(gpu_debug_mode));
+            impl_->gpu_device = static_cast<SDL_GPUDevice *>(sim_estab::core::gpu::GPU_device_acquire(gpu_debug_mode));
         } catch (const sim_estab::core::gpu::gpu_error& e) {
             throw viz_error(std::string("GPU device acquisition failed: ") + e.what());
         }

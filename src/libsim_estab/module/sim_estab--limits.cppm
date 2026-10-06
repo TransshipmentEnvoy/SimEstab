@@ -121,9 +121,9 @@ export inline constexpr std::uint32_t max_paced_participants = 256;
 // ---------------------------------------------------------------------------
 
 #ifndef LIBSIM_ESTAB__CHUNK_ELEMENTS
-    // Fallback for a build that did not go through this project's CMake. The cache
-    // variable is the source of truth; keep the two in step.
-    #define LIBSIM_ESTAB__CHUNK_ELEMENTS 1024
+// Fallback for a build that did not go through this project's CMake. The cache
+// variable is the source of truth; keep the two in step.
+#define LIBSIM_ESTAB__CHUNK_ELEMENTS 1024
 #endif
 
 /// The chunk quantum in ELEMENTS. A chunk is a fixed range of row offsets and the unit of
@@ -135,8 +135,7 @@ export inline constexpr std::size_t chunk_elements = LIBSIM_ESTAB__CHUNK_ELEMENT
 /// One cache line's worth of elements of type T - the rule column<T> pads its element
 /// count up to (design_data_container.md §3). Stating it in bytes is what makes
 /// one rule hold at every ISA level from SSE to AVX-512.
-export template <typename T>
-inline constexpr std::size_t padding_elements = 64u / sizeof(T);
+export template <typename T> inline constexpr std::size_t padding_elements = 64u / sizeof(T);
 
 // ---------------------------------------------------------------------------
 // Entity capacity (build constants - [[=cap(N)]], EngineConfig.entity_capacity)
@@ -187,29 +186,25 @@ export inline constexpr std::uint64_t default_projection_warn_bytes_per_second =
 
 static_assert(default_tick_rate > 0, "a tick rate of zero has no meaning; the counter is the clock");
 
-static_assert(default_endpoint_capacity <= max_endpoint_capacity,
-              "the default capacity must be requestable");
+static_assert(default_endpoint_capacity <= max_endpoint_capacity, "the default capacity must be requestable");
 static_assert(default_host_endpoint_capacity <= max_endpoint_capacity,
               "the host endpoint requests its capacity through the same ceiling as any other");
 static_assert(default_peer_endpoint_capacity <= max_endpoint_capacity,
               "a peer endpoint requests its capacity through the same ceiling as any other");
 static_assert(default_drain_interval_ticks > 0, "D is a count of ticks the engine buffers, never zero");
 
-static_assert(max_sources > max_players,
-              "a full lobby allocates one source per peer, so the source ceiling must leave "
-              "room for the host and for mods beside the players it was sized for");
+static_assert(max_sources > max_players, "a full lobby allocates one source per peer, so the source ceiling must leave "
+                                         "room for the host and for mods beside the players it was sized for");
 static_assert(max_paced_participants <= max_sources,
               "participants share the source ceiling: a paced producer is both a source "
               "and a participant, so the two sets mostly overlap");
 
 static_assert(max_engine_views > 0, "a cap of zero would forbid the renderer's engine view, so no window could draw");
-static_assert(max_paced_participants > 0,
-              "every paced producer and paced engine view is a participant, so a cap of "
-              "zero would forbid every peer and every recorder");
+static_assert(max_paced_participants > 0, "every paced producer and paced engine view is a participant, so a cap of "
+                                          "zero would forbid every peer and every recorder");
 
 static_assert(default_entity_capacity > 0, "a cap of zero admits no entity, so no type could exist");
-static_assert(default_entity_capacity <= max_entity_capacity,
-              "the default cap must be one a type could also declare");
+static_assert(default_entity_capacity <= max_entity_capacity, "the default cap must be one a type could also declare");
 
 static_assert(chunk_elements >= 64, "a chunk must hold a whole cache line of the narrowest (1-byte) column type");
 static_assert((chunk_elements & (chunk_elements - 1)) == 0, "the chunk quantum must be a power of two");

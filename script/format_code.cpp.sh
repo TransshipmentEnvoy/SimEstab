@@ -12,7 +12,10 @@ if ! command -v clang-format >/dev/null 2>&1; then
     exit 127
 fi
 
-find src test -type f \
+# src/sim_estab/lib holds the installed copy of the library, not sources.
+find src test \
+    -path src/sim_estab/lib -prune -o \
+    -type f \
     \( \
         -name '*.c' -o \
         -name '*.cc' -o \
