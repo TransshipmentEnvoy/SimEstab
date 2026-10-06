@@ -52,6 +52,11 @@ How to read this doc:
   that runs without a window, so a partition's namespace is
   `sim_estab::core::<partition>`: `sim_estab::core::log`, `sim_estab::core::gpu`.
   A separate module has its own namespace outside `core`: `sim_estab::viz`.
+- A **family of partitions** shares a prefix: `sim_estab:engine.view`. The
+  dot is part of the name, and C++ gives it no meaning: `:engine.view` is not
+  inside `:engine`, and each imports the other only explicitly. The namespace
+  writes the dot as `::` (`sim_estab::core::engine::view`). The file names
+  keep it: `module/sim_estab--engine.view.cppm`, `src/engine.view.cpp`.
 - Not every peripheral is in the core. A peripheral may have its own module:
   viz has one, and the AI and modding parts may get one.
 - Small cross-cutting helpers go in the `:util` partition. They live in
@@ -802,7 +807,8 @@ the exception, and the existing name stays.
 
 **Tests**
 
-- A C++ test file is `test_<partition>.cpp`. Its Boost.Test suites end in
+- A C++ test file is `test_<partition>.cpp`, with a dot in the partition
+  written `_`: `test_engine_view.cpp`. Its Boost.Test suites end in
   `_tests`.
 - A test of a non-exported partition is itself a unit of the module. Its
   file declares `module sim_estab;` and imports the partition, so it tests

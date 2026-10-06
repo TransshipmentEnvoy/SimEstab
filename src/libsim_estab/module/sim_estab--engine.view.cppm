@@ -1,5 +1,5 @@
 /**
- * @file sim_estab--engine_view.cppm
+ * @file sim_estab--engine.view.cppm
  * @brief Non-exported module partition for the engine view
  *
  * An engine view carries snapshots from the publisher to one reader: three blocks and one
@@ -31,13 +31,13 @@ module;
 #include <memory>
 
 // Module declaration
-module sim_estab:engine_view;
+module sim_estab:engine.view;
 
 /**
- * @namespace sim_estab::core::engine_view
+ * @namespace sim_estab::core::engine::view
  * @brief The engine view protocol and its return header
  */
-namespace sim_estab::core::engine_view {
+namespace sim_estab::core::engine::view {
 
 /// Size of PredicateParams in bytes. Provisional: the row predicate kinds that take
 /// parameters arrive with projection (M5). It has room for six planes of four 32-bit
@@ -161,4 +161,4 @@ struct EngineView {
     [[nodiscard]] const Block& held_block() const noexcept { return *block[read_index]; }
 };
 
-} // namespace sim_estab::core::engine_view
+} // namespace sim_estab::core::engine::view
