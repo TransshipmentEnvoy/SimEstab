@@ -21,6 +21,7 @@ export import :limits;
 export import :log;
 export import :gpu;
 export import :util;
+export import :types;
 
 /**
  * @namespace sim_estab
@@ -39,5 +40,6 @@ export import :util;
  * - sim_estab::core::log - Hierarchical logging system
  * - sim_estab::core::gpu - Headless GPU compute context
  * - sim_estab::core::util - General-purpose utilities (thread_util, ...)
+ * - sim_estab::core::types - Strong types of function signatures (Tick)
  * - (Additional subsystems to be added as modules are migrated)
  */

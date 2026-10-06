@@ -135,6 +135,7 @@ target_sources(sim_estab PUBLIC
     module/sim_estab--log.cppm
     module/sim_estab--gpu.cppm
     module/sim_estab--util.cppm
+    module/sim_estab--types.cppm
     module/sim_estab--engine.view.cppm
     module/sim_estab.viz/viz.cppm)
 target_link_libraries(sim_estab PUBLIC

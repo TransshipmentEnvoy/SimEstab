@@ -33,6 +33,8 @@ module;
 // Module declaration
 module sim_estab:engine.view;
 
+import :types;
+
 /**
  * @namespace sim_estab::core::engine::view
  * @brief The engine view protocol and its return header
@@ -133,11 +135,11 @@ struct EngineView {
 
     /// Reader: write the return header that the next successful take() hands to the
     /// publisher. Call it before take() (design_engine_core.md §3.5).
-    void write_return(std::uint64_t last_consumed_tick, std::uint32_t cadence_hint,
+    void write_return(types::Tick last_consumed_tick, std::uint32_t cadence_hint,
                       const PredicateParams& params) noexcept {
         ReturnHeader& header      = ret[read_index];
         header.seq                = ++last_seq;
-        header.last_consumed_tick = last_consumed_tick;
+        header.last_consumed_tick = last_consumed_tick.value;
         header.cadence_hint       = cadence_hint;
         header.params             = params;
     }

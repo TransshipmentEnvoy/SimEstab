@@ -29,6 +29,7 @@ module sim_estab;
 import :engine.view;
 
 using namespace sim_estab::core::engine::view;
+using sim_estab::core::types::Tick;
 
 namespace {
 
@@ -99,7 +100,7 @@ BOOST_AUTO_TEST_CASE(test_blocks_arrive_whole_and_in_order) {
         const PredicateParams params{};
         for (;;) {
             const bool finished = done.load(std::memory_order_acquire);
-            view.write_return(last_tick, 0, params);
+            view.write_return(Tick{last_tick}, 0, params);
             if (view.take()) {
                 const Block& held = view.held_block();
                 if (!is_whole(held)) {
@@ -153,7 +154,7 @@ BOOST_AUTO_TEST_CASE(test_return_headers_arrive_whole) {
             const std::uint32_t seq = view.last_seq + 1;
             PredicateParams params;
             params.bytes.fill(static_cast<std::byte>(seq & 0xFF));
-            view.write_return(last_tick, seq, params);
+            view.write_return(Tick{last_tick}, seq, params);
             if (view.take()) {
                 last_tick = view.held_block().tick;
             }

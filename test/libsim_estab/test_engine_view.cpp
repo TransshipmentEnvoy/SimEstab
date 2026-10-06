@@ -24,6 +24,7 @@ module sim_estab;
 import :engine.view;
 
 using namespace sim_estab::core::engine::view;
+using sim_estab::core::types::Tick;
 
 namespace {
 
@@ -173,7 +174,7 @@ BOOST_AUTO_TEST_CASE(test_the_publisher_adopts_a_return_header) {
     publish(view, 1);
     BOOST_TEST(view.adopted.seq == 0u);
 
-    view.write_return(0, 5, params_of(std::byte{0xA1}));
+    view.write_return(Tick{0}, 5, params_of(std::byte{0xA1}));
     BOOST_TEST(view.take());
     BOOST_TEST(view.adopted.seq == 0u); // the block has not come back yet
 
@@ -193,13 +194,13 @@ BOOST_AUTO_TEST_CASE(test_the_publisher_keeps_the_newest_return_header) {
     EngineView view{payload_bytes};
 
     publish(view, 1);
-    view.write_return(0, 5, params_of(std::byte{0xA1}));
+    view.write_return(Tick{0}, 5, params_of(std::byte{0xA1}));
     BOOST_TEST(view.take());
 
     publish(view, 2);
     BOOST_TEST(view.adopted.seq == 1u);
 
-    view.write_return(1, 7, params_of(std::byte{0xB2}));
+    view.write_return(Tick{1}, 7, params_of(std::byte{0xB2}));
     BOOST_TEST(view.take());
 
     publish(view, 3);
@@ -219,7 +220,7 @@ BOOST_AUTO_TEST_CASE(test_the_publisher_keeps_the_newest_return_header) {
 BOOST_AUTO_TEST_CASE(test_a_return_header_without_a_take_stays_with_the_reader) {
     EngineView view{payload_bytes};
 
-    view.write_return(0, 5, params_of(std::byte{0xA1}));
+    view.write_return(Tick{0}, 5, params_of(std::byte{0xA1}));
     BOOST_TEST(!view.take());
 
     publish(view, 1);
