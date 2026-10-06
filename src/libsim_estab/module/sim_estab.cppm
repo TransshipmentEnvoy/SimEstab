@@ -22,6 +22,7 @@ export import :log;
 export import :gpu;
 export import :util;
 export import :types;
+export import :engine;
 
 /**
  * @namespace sim_estab
@@ -41,5 +42,6 @@ export import :types;
  * - sim_estab::core::gpu - Headless GPU compute context
  * - sim_estab::core::util - General-purpose utilities (thread_util, ...)
  * - sim_estab::core::types - Strong types of function signatures (Tick)
+ * - sim_estab::core::engine - The engine: the tick loop
  * - (Additional subsystems to be added as modules are migrated)
  */

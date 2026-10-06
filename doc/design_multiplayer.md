@@ -267,7 +267,7 @@ Two rules follow.
 **Only the server tier may decide that a peer has dropped.** A peer's commands are part of
 the command set for each turn. An instance that removed a peer on its own timer would run a
 different command set from everyone else, and desync (`design_engine_core.md` §3.3,
-`on_expiry = DROP`). So a client's participant deadline only *reports*. Until the server
+`on_expiry = Drop`). So a client's participant deadline only *reports*. Until the server
 tier answers, the client pauses and says why. It never continues without the peer.
 
 **A drop takes effect at an agreed turn.** Removing a peer changes the command set, so the
@@ -393,7 +393,7 @@ These are tracked in [open_question.md](open_question.md). None of them blocks M
   peer's absence means for the command stream. §4.1 fixes the shape; the details need a
   transport.
 - [Q49](open_question.md#q49-peer-deadline-and-drop-escalation) The peer deadline value, and
-  the escalation protocol behind `on_expiry = DROP`.
+  the escalation protocol behind `on_expiry = Drop`.
 - [Q50](open_question.md#q50-input_delay_ticks) `input_delay_ticks`, the value of a peer's
   stamp margin (§3.2).
 - [Q51](open_question.md#q51-transport-and-session-formation) Transport, session formation,

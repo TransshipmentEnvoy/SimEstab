@@ -59,7 +59,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | `stop_requested` | Sticky flag that stops the engine core at the gate. Highest priority. | engine_core §3.3 |
 | declare ready | A participant stores `ready_through = t` to say it has finished submitting for tick `t`. | engine_core §3.3 |
 | deadline | How long the gate waits for one participant. Each participant declares one. A pause stops the clock. | engine_core §3.3 |
-| expiry policy | What happens when a participant's deadline passes: `FAIL`, `CONTINUE_WITHOUT`, `SUSPEND` or `DROP`. | engine_core §3.3 |
+| expiry policy | What happens when a participant's deadline passes: `Fail`, `ContinueWithout`, `Suspend` or `Drop`. | engine_core §3.3 |
 | gate mutex | `gate.m`: the mutex every gate input changes under. The sim re-checks under it before it parks, and tick-progress waiters park on it too. Held only for loads, stores and a notify. | engine_core §3.3 |
 | wake-up rule | Every predicate a parked thread waits on changes only while holding that park's mutex, followed by a notify. Every park in the engine follows it, so no wake-up can be lost. | engine_core §3.3 |
 | mechanism register | The table of every cross-thread mechanism in the engine, each with its atomics, memory orders, linearization point, progress guarantee and failure behaviour. | engine_core §1.1 |

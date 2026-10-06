@@ -312,7 +312,7 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
 - **`failed` is a terminal state for live execution that will not stop or finish
   safely.** It has five entry paths:
   - the sim-thread join timed out (§4.3);
-  - a participant's gate deadline expired a second time under `on_expiry = FAIL`
+  - a participant's gate deadline expired under `on_expiry = Fail`
     (`design_engine_core.md` §3.3);
   - an endpoint revocation timed out while waiting for submits already admitted
     (`design_engine_core.md` §5.1, `design_modding.md` §6). What a process host does here is
@@ -598,11 +598,11 @@ Rules:
     for example a mod that slows time in the world. Model it then as engine core state changed by a
     real command. Never smuggle control calls into the input stream.
 - `on_failed_stop` chooses what happens on every `failed` entry path (§2): the sim-thread
-  join timeout, a participant's second expiry under `FAIL`, an endpoint revocation timeout,
+  join timeout, a participant's expiry under `Fail`, an endpoint revocation timeout,
   an abandoned thread host, and the operation-lease timeout in `close()`.
   - `"raise"` (the default) enters the terminal `failed` state and raises
     `EngineFailedError`. The call that hit the path raises it. A path no call can raise
-    from, such as a participant's second expiry under `FAIL` on the sim thread, raises at
+    from, such as a participant's expiry under `Fail` on the sim thread, raises at
     the next engine call instead, and every later call raises too. Inside
     `close()`, which never raises because shutdown failed, it is logged instead. This suits
     interactive hosts that want to save unrelated work first.
@@ -1754,7 +1754,7 @@ Rules:
   | `session.stopped` | reliable | the executor | the executor met the stop at the gate; no tick runs again (§2) |
   | `sim.backlog_paused`, `sim.backlog_resumed` | coalescible | the executor | the gate paused at `high_water`, or passed again below it |
   | `sim.behind` | coalescible | the sim thread, from M6 | a wake hit the catch-up clamp (§4.3) |
-  | `participant.expired`, `participant.suspended`, `participant.resumed` | reliable | the executor | a participant's deadline expired; it left the conjunction under `SUSPEND`; it came back (`design_engine_core.md` §3.3) |
+  | `participant.expired`, `participant.suspended`, `participant.resumed` | reliable | the executor | a participant's deadline expired; it left the conjunction under `Suspend`; it came back (`design_engine_core.md` §3.3) |
   | `participant.left` | reliable | the owner thread or a mod host thread | a mod host stopped, and its participant left the gate (`design_engine_core.md` §3.3) |
   | `command.protocol_error` | reliable | the executor, at the drain | an endpoint held entries for a tick already past (`design_engine_core.md` §5.1 (S3)). One report per endpoint per tick, with the count |
   | `engine_view.bandwidth_over` | coalescible | the executor | an engine view crossed `projection_warn_bytes_per_second` (`design_limits.md` §5) |

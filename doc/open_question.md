@@ -276,10 +276,12 @@ Timeouts, drops, and what a dropped peer's absence means for the command stream.
 is fixed (`multiplayer` §4.1): only the server tier decides, and a drop applies at an agreed
 turn. The details need a transport.
 
-### Q49. Peer deadline and `DROP` escalation
+### Q49. Peer deadline and `Drop` escalation
 
-The deadline value for peer participants needs a measured round-trip time. The escalation
-protocol behind `on_expiry = DROP` is undesigned (`engine_core` §3.3; `multiplayer` §4.1).
+The deadline value for peer participants needs a measured round-trip time. It must be a
+configuration value of the session, because network conditions differ from one session to
+the next. The escalation protocol behind `on_expiry = Drop` is undesigned (`engine_core`
+§3.3; `multiplayer` §4.1).
 
 ### Q50. `input_delay_ticks`
 
@@ -381,8 +383,9 @@ algorithms on containers), which have no standard counterpart. Its last release 
 
 ### Q72. tl-function-ref or `std::function_ref`
 
-tl-function-ref is a dependency that no code uses. GCC 16 has `std::function_ref`. Check
-MSVC support before relying on the standard one (Q34).
+Settled for `std::function_ref` where the toolchain provides it. GCC 16 does, and the tick
+loop uses it. tl-function-ref stays a dependency, unused, until MSVC support is known (Q34).
+A supported compiler without `std::function_ref` falls back to it.
 
 ### Q73. magic_enum or reflection for enum names
 

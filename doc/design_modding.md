@@ -478,7 +478,7 @@ Rules:
     | Reversible | yes. Suspension is not a partial unload |
     | The mod | stops being fed: no events, no snapshots |
     | Its endpoint | **kept**, with whatever it already holds. Nothing is discarded and nothing is renumbered |
-    | Pacing | if it is a participant, it **leaves the gate's conjunction** while suspended (`design_engine_core.md` §3.3, `on_expiry = SUSPEND`) |
+    | Pacing | if it is a participant, it **leaves the gate's conjunction** while suspended (`design_engine_core.md` §3.3, `on_expiry = Suspend`) |
     | Resuming | once it drains. Feeding restarts, and a participant re-enters pacing at the current tick |
     | Reported | yes, as a reliable-class event naming the mod |
 

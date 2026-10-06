@@ -502,7 +502,7 @@ most one participant, and no participant has two writers.
 take, whether it runs the ticks itself or waits for the sim thread to run them (§3.3). So
 when that thread is also the engine view's reader, a step that runs past the engine view's
 next publish leaves the gate waiting for a take that cannot come. The gate waits out the
-engine view's deadline and then applies its expiry policy, and under `FAIL` the session ends
+engine view's deadline and then applies its expiry policy, and under `Fail` the session ends
 in `failed`. After taking the block of tick `t`, such a reader steps to `t + k` at most, then
 takes again. A reader on another thread has no such limit. The engine does not detect the
 case: an engine view's reader is whichever thread takes it (`design_python_api.md` §6).
@@ -819,15 +819,20 @@ the wait.
 ```
 struct Participant {
     std::atomic<u64> ready_through;   // monotone; U64_MAX = unconditionally ready
-    std::atomic<u32> active;          // 0 removes it from the conjunction; CONTINUE_WITHOUT
-                                      //   clears it permanently, SUSPEND reversibly
+    std::atomic<u32> active;          // 0 removes it from the conjunction; ContinueWithout
+                                      //   clears it permanently, Suspend reversibly
     u32              deadline_ms;     // declared at registration
-    OnExpiry         on_expiry;       // FAIL | DROP | SUSPEND | CONTINUE_WITHOUT
+    OnExpiry         on_expiry;       // Fail | Drop | Suspend | ContinueWithout
 };
 struct HostControl {
     std::atomic<u64> run_until;        // exclusive tick ceiling; U64_MAX = resumed
     std::atomic<u32> stop_requested;   // sticky: 0 -> 1 only
     bool             step_in_flight;   // guarded by gate.m; never read by the sim
+};
+enum class BlockerKind { NONE, STOP, EVENT_BACKLOG, HOST_PAUSE, PARTICIPANT };
+struct Blocker {
+    BlockerKind      kind;             // NONE while nothing blocks
+    u32              participant;      // which one, when kind is PARTICIPANT
 };
 struct Gate {
     std::mutex              m;          // held for loads, stores and notifies only
@@ -836,12 +841,18 @@ struct Gate {
     Blocker                 parked;     // why the sim is parked; NONE while it runs
     u32                     progress_waiters;
 };
-Participant       participants[N_PARTICIPANTS];   // fixed at the freeze
-HostControl       host;
-Gate              gate;
-std::atomic<u64>  first_unexecuted;               // sim-written; the next tick not yet run
-u64               backlog;                        // §5.2; PLAIN, sim-thread-only
+struct TickGate {                                     // the whole gate
+    Participant       participants[N_PARTICIPANTS];   // fixed at the freeze
+    HostControl       host;
+    Gate              gate;
+    std::atomic<u64>  first_unexecuted;               // sim-written; the next tick not yet run
+    u64               backlog;                        // §5.2; PLAIN, sim-thread-only
+};
 ```
+
+The pseudo-code below names the fields of the one `TickGate` directly: `gate.m`,
+`host.run_until`, `first_unexecuted`. It writes a blocker by its kind alone (`STOP`, `NONE`),
+or as `p` for a participant.
 
 **Every gate input changes under `gate.m`.** That covers each `ready_through` and `active`,
 `run_until`, `stop_requested` and `first_unexecuted`; `parked`, `step_in_flight` and
@@ -960,17 +971,17 @@ caller wait in slices: the owner thread checks for signals between them.
 not a pause, the sim records one `wait_started[t]`. Every participant's deadline for that
 tick is `wait_started[t] + participant.deadline`, even if `blocker_for` reaches that
 participant later. A spurious wake-up never recomputes either value from `now`. So
-participants use up their budgets at the same time, and the total first-attempt latency is
-bounded by the largest deadline, not the sum. An explicitly documented retry gets one new
-anchored budget.
+participants use up their budgets at the same time, and the latency the gate adds to a
+tick is bounded by the largest deadline, not the sum.
 
 **A pause stops every clock that can abort something.** This is a correctness rule. A paused
 session is not advancing, so nobody in it can be late. A deadline that kept running through
 a pause would turn "the operator stopped the game" into "the engine dropped a peer". That is
-the same defect as dropping a peer on a local timer (`DROP`, below). So when `HOST_PAUSE`
+the same defect as dropping a peer on a local timer (`Drop`, below). So when `HOST_PAUSE`
 becomes the blocker, the sim **discards `wait_started[t]`**. The first blocker after the
 pause that is not a pause anchors a fresh one, and every participant gets its full declared
-budget again. The rule covers every clock in the engine:
+budget again. With no sim thread, a step that ends discards it too: between steps the grant
+is revoked, which is a pause. The rule covers every clock in the engine:
 
 | Clock | During a pause |
 |---|---|
@@ -986,7 +997,7 @@ tick, which is what it is. Only revocation wakes a waiter early, with `revoked` 
 `close()` revokes every endpoint it has not already revoked (`design_python_api.md` §2).
 
 `HOST_PAUSE` is intentionally indefinite. Each wait uses a bounded diagnostic slice whose
-expiry means `remain parked`, never `FAIL`. `EVENT_BACKLOG` works the same way,
+expiry means `remain parked`, never `Fail`. `EVENT_BACKLOG` works the same way,
 for the same reason (§5.2): an application that stops draining events pauses the simulation
 and is reported, rather than timed out into a dead session.
 
@@ -1076,23 +1087,23 @@ because a participant costs an array entry scanned once per tick, not an allocat
 A mod's deadline comes from its manifest's `deadline_ms`, or `HostPolicy`'s default when the
 manifest gives none, and `HostPolicy` caps it (`design_modding.md` §3,
 `design_python_api.md` §3). A mod's expiry policy is derived, not declared: its paced
-engine view is continued without (`CONTINUE_WITHOUT`). A mod's commands name no tick, so the
+engine view is continued without (`ContinueWithout`). A mod's commands name no tick, so the
 gate never waited for them, and dropping the engine view from the conjunction cannot change
 them. Those are the only two answers that cannot change what the session computes behind its
 back (below).
 
 **On expiry.** The participant set never shrinks, since the freeze fixes it. What changes is
-whether a participant can still hold the gate. The `DROP` row is a correctness constraint,
+whether a participant can still hold the gate. The `Drop` row is a correctness constraint,
 not a preference:
 
 | `on_expiry` | Behaviour | Use |
 |---|---|---|
-| `FAIL` | log `critical` naming the participant and tick, retry once, then the engine enters the terminal `failed` state | a participant whose lateness is a defect, not a load condition |
-| `CONTINUE_WITHOUT` | `active.store(0, release)`, so later readiness stores cannot re-enter the conjunction; emit a reliable-class event; keep ticking | a paced recorder or mod whose absence cannot change what the engine core computes |
-| `DROP` | **escalate to the server tier and accept its answer**; never remove the participant locally | a network peer |
-| `SUSPEND` | stop feeding it, keep its endpoint, and take it out of the conjunction until it drains; reversible | a mod that is not keeping up (`design_modding.md` §4.2) |
+| `Fail` | log `critical` naming the participant and tick, then the engine enters the terminal `failed` state | a participant whose lateness is a defect, not a load condition |
+| `ContinueWithout` | `active.store(0, release)`, so later readiness stores cannot re-enter the conjunction; emit a reliable-class event; keep ticking | a paced recorder or mod whose absence cannot change what the engine core computes |
+| `Drop` | **escalate to the server tier and accept its answer**; never remove the participant locally | a network peer |
+| `Suspend` | stop feeding it, keep its endpoint, and take it out of the conjunction until it drains; reversible | a mod that is not keeping up (`design_modding.md` §4.2) |
 
-The obvious implementation of `DROP` is wrong in two ways:
+The obvious implementation of `Drop` is wrong in two ways:
 
 - **Who decides.** A peer's commands are part of the command set for tick `t`. An instance
   that drops a peer on a local timer runs a different set from every other instance and
@@ -1115,12 +1126,12 @@ or `mods.stop()` (`design_modding.md` §4.2, §6), the engine clears the `active
 mod's participant, its paced engine view, under `gate.m` and notifies a parked sim. It
 reports the departure as a reliable `participant.left` event. A retry re-enters it at the
 current tick: under `gate.m`, its `ready_through` becomes `first_unexecuted - 1` and
-`active` becomes 1. Suspension (`SUSPEND`) and resumption use the same two stores.
+`active` becomes 1. Suspension (`Suspend`) and resumption use the same two stores.
 
-`CONTINUE_WITHOUT` is allowed only for a participant whose absence provably cannot change
+`ContinueWithout` is allowed only for a participant whose absence provably cannot change
 the command stream. That excludes a peer, whose commands name ticks the gate waits for. A
 mod's paced engine view qualifies even when the mod submits, because the mod's commands
-name no tick and never depended on the gate. `SUSPEND` is what the mod bus applies to a mod
+name no tick and never depended on the gate. `Suspend` is what the mod bus applies to a mod
 whose inbox overflows (`design_modding.md` §4.2). It takes a paced engine view out of the
 conjunction too, is reported, and is reversible; it never ends the session.
 
@@ -2219,7 +2230,7 @@ response:
 |---|---|---|
 | a mod's own inbox | that mod is not draining | **suspend that mod** and report; the simulation continues (`design_modding.md` §4.2) |
 | the event ring | the application is not draining | **pause the simulation** and report: `EVENT_BACKLOG` above |
-| a peer falling behind | never decided locally; the server tier decides (§3.3, `DROP`) | until the server tier decides: **pause and report** |
+| a peer falling behind | never decided locally; the server tier decides (§3.3, `Drop`) | until the server tier decides: **pause and report** |
 
 None of these ends a session. Each pause is undone by whatever caused it: the application
 drains and the gate opens, or the server tier answers and the drop applies at its agreed

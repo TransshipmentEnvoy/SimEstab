@@ -21,6 +21,10 @@ add_executable(libsim_estab_test
     test_thread_util.cpp
     test_engine_view.cpp
     test_engine_view_tsan.cpp
+    test_engine_gate.cpp
+    test_gate_stress.cpp
+    test_tick_progress_stress.cpp
+    test_engine.cpp
 )
 
 # Enable C++20 modules if supported by compiler
@@ -69,6 +73,19 @@ foreach(race_suite engine_view_tsan_tests)
     set_tests_properties(${race_suite} PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         LABELS "tsan"
+        ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
+    )
+endforeach()
+
+# Park stress tests: one CTest entry per suite, labelled `stress`, each under a timeout. A
+# lost wake-up is a hang, so the timeout is the failure (design_patterns.md §10). The
+# libsim_estab_test entry above runs these suites too, under CTest's default timeout.
+foreach(stress_suite gate_stress_tests tick_progress_stress_tests)
+    add_test(NAME ${stress_suite} COMMAND libsim_estab_test --run_test=${stress_suite})
+    set_tests_properties(${stress_suite} PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        LABELS "stress"
+        TIMEOUT 60
         ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
     )
 endforeach()

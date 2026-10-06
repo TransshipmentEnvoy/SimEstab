@@ -123,6 +123,8 @@ target_sources(sim_estab PRIVATE
     # module-based implementation (imports module, not a module unit itself)
     src/log.cpp
     src/gpu.cpp
+    src/engine.gate.cpp
+    src/engine.cpp
     src/viz/viz.cpp
     src/util/thread_util.cpp
 )
@@ -137,6 +139,8 @@ target_sources(sim_estab PUBLIC
     module/sim_estab--util.cppm
     module/sim_estab--types.cppm
     module/sim_estab--engine.view.cppm
+    module/sim_estab--engine.gate.cppm
+    module/sim_estab--engine.cppm
     module/sim_estab.viz/viz.cppm)
 target_link_libraries(sim_estab PUBLIC
     Boost::headers
