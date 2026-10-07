@@ -88,12 +88,12 @@ struct HostControl {
 };
 
 /// The kinds of thing that block a tick, in priority order
-enum class BlockerKind : std::uint32_t { NONE, STOP, EVENT_BACKLOG, HOST_PAUSE, PARTICIPANT };
+enum class BlockerType : std::uint32_t { NONE, STOP, EVENT_BACKLOG, HOST_PAUSE, PARTICIPANT };
 
-/// What blocks a tick: a kind, and for PARTICIPANT which one
+/// What blocks a tick: a type, and for PARTICIPANT which one
 struct Blocker {
-    BlockerKind kind          = BlockerKind::NONE;
-    std::uint32_t participant = 0; ///< index into participants[]; 0 unless kind is PARTICIPANT
+    BlockerType type          = BlockerType::NONE;
+    std::uint32_t participant = 0; ///< index into participants[]; 0 unless type is PARTICIPANT
 
     bool operator==(const Blocker&) const = default;
 };
@@ -165,19 +165,19 @@ struct TickGate {
     /// Executor: what blocks `tick`, in priority order. NONE if nothing does.
     [[nodiscard]] Blocker blocker_for(types::Tick tick) const noexcept {
         if (host.stop_requested.load(std::memory_order_acquire) != 0) {
-            return {BlockerKind::STOP};
+            return {BlockerType::STOP};
         }
         if (backlog >= high_water) {
-            return {BlockerKind::EVENT_BACKLOG};
+            return {BlockerType::EVENT_BACKLOG};
         }
         if (host.run_until.load(std::memory_order_acquire) <= tick.value) {
-            return {BlockerKind::HOST_PAUSE};
+            return {BlockerType::HOST_PAUSE};
         }
         for (std::uint32_t i = 0; i < participant_count; ++i) {
             const Participant& participant = participants[i];
             if (participant.active.load(std::memory_order_acquire) != 0 &&
                 participant.ready_through.load(std::memory_order_acquire) < tick.value) {
-                return {BlockerKind::PARTICIPANT, i};
+                return {BlockerType::PARTICIPANT, i};
             }
         }
         return {};
@@ -286,7 +286,7 @@ struct TickGate {
 
     /// Writer, holding gate.m: wake the executor, and only if it is parked. (G4)
     void notify_parked() {
-        if (gate.parked.kind != BlockerKind::NONE) {
+        if (gate.parked.type != BlockerType::NONE) {
             gate.sim_cv.notify_one();
         }
     }

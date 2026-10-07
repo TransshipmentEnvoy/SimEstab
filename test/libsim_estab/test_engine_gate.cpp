@@ -39,10 +39,10 @@ constexpr Tick first_tick{1};
 /// An `until` that no test reaches
 Clock::time_point far() { return Clock::now() + 1h; }
 
-bool is_kind(const Blocker& blocker, BlockerKind kind) { return blocker.kind == kind; }
+bool is_type(const Blocker& blocker, BlockerType type) { return blocker.type == type; }
 
 bool is_participant(const Blocker& blocker, std::uint32_t index) {
-    return blocker == Blocker{BlockerKind::PARTICIPANT, index};
+    return blocker == Blocker{BlockerType::PARTICIPANT, index};
 }
 
 } // namespace
@@ -65,7 +65,7 @@ BOOST_AUTO_TEST_CASE(test_a_new_gate_is_resumed_and_ready_through_the_published_
     BOOST_TEST(tick_gate.host.run_until.load() == UINT64_MAX);
     BOOST_TEST(tick_gate.host.stop_requested.load() == 0u);
     BOOST_TEST(!tick_gate.host.step_in_flight);
-    BOOST_TEST(is_kind(tick_gate.gate.parked, BlockerKind::NONE));
+    BOOST_TEST(is_type(tick_gate.gate.parked, BlockerType::NONE));
     BOOST_TEST(tick_gate.gate.progress_waiters == 0u);
     for (std::uint32_t i = 0; i < 2; ++i) {
         BOOST_TEST(tick_gate.participants[i].ready_through.load() == first_tick.value - 1);
@@ -79,8 +79,8 @@ BOOST_AUTO_TEST_CASE(test_a_new_gate_is_resumed_and_ready_through_the_published_
 BOOST_AUTO_TEST_CASE(test_nothing_blocks_a_gate_without_participants) {
     TickGate tick_gate{0, first_tick};
 
-    BOOST_TEST(is_kind(tick_gate.blocker_for(first_tick), BlockerKind::NONE));
-    BOOST_TEST(is_kind(tick_gate.blocker_for(Tick{1'000'000}), BlockerKind::NONE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(first_tick), BlockerType::NONE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1'000'000}), BlockerType::NONE));
 }
 
 /**
@@ -92,11 +92,11 @@ BOOST_AUTO_TEST_CASE(test_a_participant_blocks_until_it_declares_ready) {
     BOOST_TEST(is_participant(tick_gate.blocker_for(Tick{1}), 0));
 
     tick_gate.declare_ready(0, Tick{1});
-    BOOST_TEST(is_kind(tick_gate.blocker_for(Tick{1}), BlockerKind::NONE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1}), BlockerType::NONE));
     BOOST_TEST(is_participant(tick_gate.blocker_for(Tick{2}), 0));
 
     tick_gate.declare_ready(0, Tick{UINT64_MAX});
-    BOOST_TEST(is_kind(tick_gate.blocker_for(Tick{1'000'000}), BlockerKind::NONE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1'000'000}), BlockerType::NONE));
 }
 
 /**
@@ -114,7 +114,7 @@ BOOST_AUTO_TEST_CASE(test_the_first_participant_that_is_not_ready_blocks) {
     BOOST_TEST(is_participant(tick_gate.blocker_for(Tick{1}), 2));
 
     tick_gate.declare_ready(2, Tick{1});
-    BOOST_TEST(is_kind(tick_gate.blocker_for(Tick{1}), BlockerKind::NONE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1}), BlockerType::NONE));
 }
 
 /**
@@ -128,13 +128,13 @@ BOOST_AUTO_TEST_CASE(test_blockers_come_in_priority_order) {
     BOOST_TEST(is_participant(tick_gate.blocker_for(Tick{1}), 0));
 
     tick_gate.pause();
-    BOOST_TEST(is_kind(tick_gate.blocker_for(Tick{1}), BlockerKind::HOST_PAUSE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1}), BlockerType::HOST_PAUSE));
 
     tick_gate.backlog = 4;
-    BOOST_TEST(is_kind(tick_gate.blocker_for(Tick{1}), BlockerKind::EVENT_BACKLOG));
+    BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1}), BlockerType::EVENT_BACKLOG));
 
     tick_gate.request_stop();
-    BOOST_TEST(is_kind(tick_gate.blocker_for(Tick{1}), BlockerKind::STOP));
+    BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1}), BlockerType::STOP));
 }
 
 /**
@@ -145,10 +145,10 @@ BOOST_AUTO_TEST_CASE(test_a_stop_is_sticky) {
 
     tick_gate.request_stop();
     BOOST_TEST(tick_gate.resume());
-    BOOST_TEST(is_kind(tick_gate.blocker_for(Tick{1}), BlockerKind::STOP));
+    BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1}), BlockerType::STOP));
 
     BOOST_TEST(tick_gate.begin_step(3).has_value());
-    BOOST_TEST(is_kind(tick_gate.blocker_for(Tick{1}), BlockerKind::STOP));
+    BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1}), BlockerType::STOP));
     tick_gate.end_step();
     BOOST_TEST(tick_gate.host.stop_requested.load() == 1u);
 }
@@ -161,11 +161,11 @@ BOOST_AUTO_TEST_CASE(test_a_pause_holds_the_next_tick_and_a_resume_releases_it) 
 
     tick_gate.pause();
     BOOST_TEST(tick_gate.host.run_until.load() == first_tick.value);
-    BOOST_TEST(is_kind(tick_gate.blocker_for(first_tick), BlockerKind::HOST_PAUSE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(first_tick), BlockerType::HOST_PAUSE));
 
     BOOST_TEST(tick_gate.resume());
     BOOST_TEST(tick_gate.host.run_until.load() == UINT64_MAX);
-    BOOST_TEST(is_kind(tick_gate.blocker_for(first_tick), BlockerKind::NONE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(first_tick), BlockerType::NONE));
 }
 
 /**
@@ -179,8 +179,8 @@ BOOST_AUTO_TEST_CASE(test_a_step_grant_covers_its_ticks) {
     BOOST_TEST((*start == first_tick));
     BOOST_TEST(tick_gate.host.step_in_flight);
     BOOST_TEST(tick_gate.host.run_until.load() == (first_tick + 3).value);
-    BOOST_TEST(is_kind(tick_gate.blocker_for(first_tick + 2), BlockerKind::NONE));
-    BOOST_TEST(is_kind(tick_gate.blocker_for(first_tick + 3), BlockerKind::HOST_PAUSE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(first_tick + 2), BlockerType::NONE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(first_tick + 3), BlockerType::HOST_PAUSE));
 
     tick_gate.finish_tick(first_tick);
     tick_gate.end_step();
@@ -249,16 +249,16 @@ BOOST_AUTO_TEST_CASE(test_pass_returns_at_once_where_a_step_ends) {
 
     tick_gate.pause();
     const PassResult paused = tick_gate.pass(first_tick, far());
-    BOOST_TEST(is_kind(paused.blocker, BlockerKind::HOST_PAUSE));
+    BOOST_TEST(is_type(paused.blocker, BlockerType::HOST_PAUSE));
     BOOST_TEST(!paused.expired);
 
     tick_gate.backlog        = 4;
     const PassResult backlog = tick_gate.pass(first_tick, far());
-    BOOST_TEST(is_kind(backlog.blocker, BlockerKind::EVENT_BACKLOG));
+    BOOST_TEST(is_type(backlog.blocker, BlockerType::EVENT_BACKLOG));
 
     tick_gate.request_stop();
     const PassResult stopped = tick_gate.pass(first_tick, far());
-    BOOST_TEST(is_kind(stopped.blocker, BlockerKind::STOP));
+    BOOST_TEST(is_type(stopped.blocker, BlockerType::STOP));
 }
 
 /**
@@ -276,11 +276,11 @@ BOOST_AUTO_TEST_CASE(test_pass_returns_when_its_slice_ends) {
     BOOST_TEST(!waiting.expired);
     BOOST_TEST((Clock::now() - before >= 30ms));
     BOOST_TEST(tick_gate.wait_started.has_value());
-    BOOST_TEST(is_kind(tick_gate.gate.parked, BlockerKind::NONE));
+    BOOST_TEST(is_type(tick_gate.gate.parked, BlockerType::NONE));
 
     // once the tick may run, its deadline clock is gone
     tick_gate.declare_ready(0, first_tick);
-    BOOST_TEST(is_kind(tick_gate.pass(first_tick, far()).blocker, BlockerKind::NONE));
+    BOOST_TEST(is_type(tick_gate.pass(first_tick, far()).blocker, BlockerType::NONE));
     BOOST_TEST(!tick_gate.wait_started.has_value());
 }
 
@@ -312,7 +312,7 @@ BOOST_AUTO_TEST_CASE(test_a_deadline_under_continue_without_takes_the_participan
     const Clock::time_point before = Clock::now();
     const PassResult passed        = tick_gate.pass(first_tick, far());
 
-    BOOST_TEST(is_kind(passed.blocker, BlockerKind::NONE));
+    BOOST_TEST(is_type(passed.blocker, BlockerType::NONE));
     BOOST_TEST(!passed.expired);
     BOOST_TEST((Clock::now() - before >= 30ms));
     BOOST_TEST(tick_gate.participants[0].active.load() == 0u);
@@ -320,7 +320,7 @@ BOOST_AUTO_TEST_CASE(test_a_deadline_under_continue_without_takes_the_participan
     // a late declaration does not bring it back, and it blocks no later tick
     tick_gate.declare_ready(0, first_tick);
     BOOST_TEST(tick_gate.participants[0].active.load() == 0u);
-    BOOST_TEST(is_kind(tick_gate.blocker_for(first_tick + 100), BlockerKind::NONE));
+    BOOST_TEST(is_type(tick_gate.blocker_for(first_tick + 100), BlockerType::NONE));
 }
 
 /**
@@ -338,7 +338,7 @@ BOOST_AUTO_TEST_CASE(test_the_deadlines_of_one_tick_share_one_start) {
     const PassResult passed        = tick_gate.pass(first_tick, far());
     const Clock::duration waited   = Clock::now() - before;
 
-    BOOST_TEST(is_kind(passed.blocker, BlockerKind::NONE));
+    BOOST_TEST(is_type(passed.blocker, BlockerType::NONE));
     BOOST_TEST((waited >= 100ms));
     BOOST_TEST((waited < 250ms)); // three deadlines one after another would take 300 ms
     for (std::uint32_t i = 0; i < 3; ++i) {
@@ -361,7 +361,7 @@ BOOST_AUTO_TEST_CASE(test_a_pause_discards_the_deadline_clock) {
     BOOST_TEST(tick_gate.wait_started.has_value());
 
     tick_gate.pause();
-    BOOST_TEST(is_kind(tick_gate.pass(first_tick, far()).blocker, BlockerKind::HOST_PAUSE));
+    BOOST_TEST(is_type(tick_gate.pass(first_tick, far()).blocker, BlockerType::HOST_PAUSE));
     BOOST_TEST(!tick_gate.wait_started.has_value());
 
     std::this_thread::sleep_for(250ms); // longer than the deadline, all of it paused
@@ -386,7 +386,7 @@ BOOST_AUTO_TEST_CASE(test_a_declaration_wakes_a_parked_executor) {
     const PassResult passed = tick_gate.pass(first_tick, far());
     participant.join();
 
-    BOOST_TEST(is_kind(passed.blocker, BlockerKind::NONE));
+    BOOST_TEST(is_type(passed.blocker, BlockerType::NONE));
 }
 
 /**
@@ -403,7 +403,7 @@ BOOST_AUTO_TEST_CASE(test_a_stop_wakes_a_parked_executor) {
     const PassResult stopped = tick_gate.pass(first_tick, far());
     controller.join();
 
-    BOOST_TEST(is_kind(stopped.blocker, BlockerKind::STOP));
+    BOOST_TEST(is_type(stopped.blocker, BlockerType::STOP));
 }
 
 /**

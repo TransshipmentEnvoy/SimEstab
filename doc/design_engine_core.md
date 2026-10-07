@@ -829,10 +829,10 @@ struct HostControl {
     std::atomic<u32> stop_requested;   // sticky: 0 -> 1 only
     bool             step_in_flight;   // guarded by gate.m; never read by the sim
 };
-enum class BlockerKind { NONE, STOP, EVENT_BACKLOG, HOST_PAUSE, PARTICIPANT };
+enum class BlockerType { NONE, STOP, EVENT_BACKLOG, HOST_PAUSE, PARTICIPANT };
 struct Blocker {
-    BlockerKind      kind;             // NONE while nothing blocks
-    u32              participant;      // which one, when kind is PARTICIPANT
+    BlockerType      type;             // NONE while nothing blocks
+    u32              participant;      // which one, when type is PARTICIPANT
 };
 struct Gate {
     std::mutex              m;          // held for loads, stores and notifies only
@@ -851,7 +851,7 @@ struct TickGate {                                     // the whole gate
 ```
 
 The pseudo-code below names the fields of the one `TickGate` directly: `gate.m`,
-`host.run_until`, `first_unexecuted`. It writes a blocker by its kind alone (`STOP`, `NONE`),
+`host.run_until`, `first_unexecuted`. It writes a blocker by its type alone (`STOP`, `NONE`),
 or as `p` for a participant.
 
 **Every gate input changes under `gate.m`.** That covers each `ready_through` and `active`,

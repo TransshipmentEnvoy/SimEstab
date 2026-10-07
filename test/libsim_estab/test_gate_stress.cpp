@@ -90,7 +90,7 @@ BOOST_AUTO_TEST_CASE(test_declarations_wake_the_gate) {
 
     std::uint64_t passed = 0;
     for (Tick tick = first_tick; tick < first_tick + ticks; tick = tick + 1) {
-        if (tick_gate.pass(tick, far()).blocker.kind == BlockerKind::NONE) {
+        if (tick_gate.pass(tick, far()).blocker.type == BlockerType::NONE) {
             ++passed;
         }
         tick_gate.finish_tick(tick);
@@ -136,7 +136,7 @@ BOOST_AUTO_TEST_CASE(test_a_pause_wakes_the_gate) {
 
     std::uint64_t paused = 0;
     for (std::uint64_t round = 1; round <= rounds; ++round) {
-        if (tick_gate.pass(first_tick, far()).blocker.kind == BlockerKind::HOST_PAUSE) {
+        if (tick_gate.pass(first_tick, far()).blocker.type == BlockerType::HOST_PAUSE) {
             ++paused;
         }
         returned.store(round, std::memory_order_release);
@@ -178,7 +178,7 @@ BOOST_AUTO_TEST_CASE(test_a_stop_wakes_the_gate) {
     std::uint64_t stopped = 0;
     for (std::uint64_t round = 1; round <= rounds; ++round) {
         entering.store(round, std::memory_order_release);
-        if (gates[round - 1]->pass(first_tick, far()).blocker.kind == BlockerKind::STOP) {
+        if (gates[round - 1]->pass(first_tick, far()).blocker.type == BlockerType::STOP) {
             ++stopped;
         }
     }

@@ -21,19 +21,19 @@ namespace sim_estab::core::engine::gate {
 PassResult TickGate::pass(types::Tick tick, Clock::time_point until) {
     for (;;) {
         const Blocker blocker = blocker_for(tick); // (G1) no lock: acquire loads
-        switch (blocker.kind) {
-        case BlockerKind::NONE:
+        switch (blocker.type) {
+        case BlockerType::NONE:
             wait_started.reset();
             return {};
-        case BlockerKind::STOP:
+        case BlockerType::STOP:
             return {blocker};
-        case BlockerKind::EVENT_BACKLOG:
-        case BlockerKind::HOST_PAUSE:
+        case BlockerType::EVENT_BACKLOG:
+        case BlockerType::HOST_PAUSE:
             // A pause stops the deadline clock: nobody in a paused session can be late. The
             // first participant to block after it starts a new one.
             wait_started.reset();
             return {blocker};
-        case BlockerKind::PARTICIPANT:
+        case BlockerType::PARTICIPANT:
             break;
         }
 

@@ -32,7 +32,7 @@ struct StepGuard {
 
 StepResult run_step(gate::TickGate& tick_gate, std::uint64_t tick_count, std::function_ref<void(Tick)> run_tick,
                     std::function_ref<bool()> is_interrupted) {
-    using gate::BlockerKind;
+    using gate::BlockerType;
     using Clock = gate::TickGate::Clock;
 
     const auto start = tick_gate.begin_step(tick_count);
@@ -47,8 +47,8 @@ StepResult run_step(gate::TickGate& tick_gate, std::uint64_t tick_count, std::fu
     Clock::time_point next_check = Clock::now() + interrupt_check_slice;
     for (;;) {
         const gate::PassResult passed = tick_gate.pass(tick, next_check); // (G1) to (G4)
-        switch (passed.blocker.kind) {
-        case BlockerKind::NONE:
+        switch (passed.blocker.type) {
+        case BlockerType::NONE:
             run_tick(tick);
             tick_gate.finish_tick(tick); // (G5)
             tick = tick + 1;
@@ -56,13 +56,13 @@ StepResult run_step(gate::TickGate& tick_gate, std::uint64_t tick_count, std::fu
                 continue;
             }
             break;
-        case BlockerKind::STOP:
+        case BlockerType::STOP:
             return {StepEnd::Stopped, tick - 1};
-        case BlockerKind::EVENT_BACKLOG:
+        case BlockerType::EVENT_BACKLOG:
             return {StepEnd::EventBacklog, tick - 1};
-        case BlockerKind::HOST_PAUSE:
+        case BlockerType::HOST_PAUSE:
             return {StepEnd::GrantEnded, tick - 1};
-        case BlockerKind::PARTICIPANT:
+        case BlockerType::PARTICIPANT:
             if (passed.expired) {
                 return {StepEnd::Failed, tick - 1, passed.blocker.participant};
             }
