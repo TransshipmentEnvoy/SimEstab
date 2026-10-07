@@ -536,7 +536,7 @@ shapes:
     start.
   - Either way, **work items and commit order are fixed by chunk index**. Work stealing may
     reorder execution, never results (`design_engine_core.md` §4.3).
-- **Access declarations from annotations.** A system declares an access kind per column:
+- **Access declarations from annotations.** A system declares an access type per column:
   `read_full`, `read_local`, `write_local`, `write_staged` or `write_dbl`
   (`design_engine_core.md` §4.1). Reflection turns each declaration into a const or mutable
   span of exactly the permitted extent, so the span a system holds *is* its permission. The
@@ -726,7 +726,7 @@ The 10⁶ case above also shows what a large world needs. Reaching 10⁷ live ro
 matter of narrower columns: a 32-byte projection is still 320 MB per publish. It needs the
 projection to stop being *every live row*, since no reader wants every live row at that
 scale. **An engine view declares both projection axes.** Over columns it declares its spec. Over
-rows it declares a predicate kind whose parameters arrive with each publish
+rows it declares a predicate type whose parameters arrive with each publish
 (`design_engine_core.md` §3.1, §3.4). §5.1's generator emits both. The row half costs it
 little: evaluating the predicate gives a mask, which is ANDed with the live bitmap, and
 everything after the mask is the publish scan and gather (§5.1). What is still open is where the
@@ -980,7 +980,7 @@ build-fingerprint check catches.
   sim_estab_column_view_v1 get_column(uint32_t column_id);
   /*  void    *data;          row 0; writable only if WRITABLE is set
    *  uint32_t elem_size, flags;              flags: WRITABLE
-   *  uint64_t read_begin,  read_end;         set from the declared access kind
+   *  uint64_t read_begin,  read_end;         set from the declared access type
    *  uint64_t write_begin, write_end;        empty unless WRITABLE
    *  uint64_t read_end_simd; read_end rounded up to the lane multiple: readable
    *                          memory whose values are unspecified, so any result
@@ -1049,7 +1049,7 @@ build-fingerprint check catches.
   the far side), not exposing another column id. Engine core mods that need relationship data get
   it as a derived data column, maintained by a built-in system.
 
-- **The spans are the permission.** A mod system declares an access kind per column at
+- **The spans are the permission.** A mod system declares an access type per column at
   registration: `read_full`, `read_local`, `write_local`, `write_staged` or `write_dbl`
   (`design_engine_core.md` §4.1). The engine computes `read_begin/read_end` and
   `write_begin/write_end` from that declaration and the phase the scheduler placed the
@@ -1134,7 +1134,7 @@ These rules from §2 to §7 apply at every tier.
   later frame. Anything held past the tick is an id. Resolved *column spans* last even less:
   one `tick_fn` invocation (§7.3).
 - **Reads are scoped, not just writes.** Every tier gets an extent computed from its
-  declared access kind: one writer per column per phase, and no cross-range read of a
+  declared access type: one writer per column per phase, and no cross-range read of a
   `write_local` column (`design_engine_core.md` §4.1). Every tier sees the same live bitmap.
   A read path masks dead rows, and only an append-only type lets it skip the mask.
 - **Every object type has a cap** (§2.1, §2.2): 2²⁴ unless declared, at most 2³²−1. Memory

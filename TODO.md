@@ -48,7 +48,7 @@ nothing reaches them from Python yet. Everything after M1 is designed but not wr
         take both `acq_rel`. The permutation invariant makes block reuse safe without
         reclamation. A due publish always has a writable block and is never skipped.
         Registered at the freeze with a projection spec, `identity` (the `id` column, on by
-        default), a row predicate kind (only `ALL` in M1) and a cadence; may be paced, and
+        default), a row predicate type (only `ALL` in M1) and a cadence; may be paced, and
         then its take declares the reader ready through the next publish
         (`doc/design_engine_core.md` §3.1, §3.2). A stepped tick publishes only the engine views
         due by cadence. The multi-reader `SHARED` mode is specified but not built (Appendix
@@ -136,7 +136,7 @@ nothing reaches them from Python yet. Everything after M1 is designed but not wr
         terminal commit
   + [ ] prove that 1 thread and N threads give the same checksums
 + [ ] **M5: engine view projection, row predicate, GPU upload**
-  + [ ] the row predicate kinds beyond `ALL` (`AABB`, `SPHERE`, `FRUSTUM`, `TAG`),
+  + [ ] the row predicate types beyond `ALL` (`AABB`, `SPHERE`, `FRUSTUM`, `TAG`),
         evaluated to a mask and reusing the publish scan and gather. Coarse in the engine core,
         exact in the reader; a filtered engine view carries the id column. Added when publish
         bandwidth calls for it (`doc/design_engine_core.md` §3.4)

@@ -378,11 +378,11 @@ terminal state instead of a half-started session.
 
    3a. **Close the engine view and participant registries** (§3.1, §3.3). Each engine view's declarations
    are now final: its projection spec, whether it carries the `id` column (§3.4), its row
-   predicate kind, its cadence, and whether it is paced. The participant set,
+   predicate type, its cadence, and whether it is paced. The participant set,
    and each participant's deadline and expiry policy, are final too. Both registries close
    here for the same reason: they set the per-tick cost. Publish cost is a sum over engine views,
    and latency is the largest deadline over participants. A cost that can change during a
-   session cannot be planned for. The predicate *kind* closes here for the same reason, but
+   session cannot be planned for. The predicate *type* closes here for the same reason, but
    its *parameters* do not. Parameters change how many rows match without changing the shape
    of the cost, so they arrive with each publish through the return header (§3.5). There is
    no engine view mode or placement to close: every v1 engine view is `PRIVATE` and heap-allocated, and
@@ -480,7 +480,7 @@ registry (§2.4 step 3a). Each engine view declares:
 | Declared | Why it is declared rather than inferred |
 |---|---|
 | **projection spec**: which columns | The projection is what the payload is. Declaring the columns per reader makes publish cost knowable at construction |
-| **row predicate kind**: which rows | This decides whether 10⁷ live rows are affordable at all (§3.4). The kind is fixed here so the cost model is closed; its parameters change per publish through the return header (§3.5) |
+| **row predicate type**: which rows | This decides whether 10⁷ live rows are affordable at all (§3.4). The type is fixed here so the cost model is closed; its parameters change per publish through the return header (§3.5) |
 | **cadence**: publish every `k` ticks | An analytics engine view at `k = 30` costs a thirtieth of a render engine view. Cadence is per engine view; there is no global cadence setting |
 | **paced**, with a deadline | A reader that must see every tick registers a paced engine view and becomes a participant (§3.3) |
 | **identity**: whether the `id` column is projected | On unless declined. A reader that never needs to know which entity a row is, such as a renderer, declares `identity=False` and saves 8 bytes per matched row (§3.4) |
@@ -638,7 +638,7 @@ would, in one way:
   position test. (Whether 12 bytes is right for Q32.32 coordinates is open:
   [Q61](open_question.md#q61-what-row-width-does-the-predicate-scan-assume).) This is the
   real floor of the design. The two ways below it are a spatial index behind the predicate
-  kind (§3.4), and running scan and gather on the worker pool. A narrower spec does not
+  type (§3.4), and running scan and gather on the worker pool. A narrower spec does not
   help.
 - The projection spec itself is the other lever. A render engine view takes the `[[=viz]]` columns,
   a GUI engine view takes two, an analytics engine view takes five at `k = 30`. With declared column
@@ -1161,10 +1161,10 @@ engine view is an output; engine core state cannot be rebuilt from a snapshot (�
 filter to completely different row sets and stay in lockstep. The predicate needs no
 determinism, takes no part in the checksum, and never enters the command stream.
 
-**The kind is declared; the parameters are not.** An engine view registers one kind from a closed
+**The type is declared; the parameters are not.** An engine view registers one type from a closed
 set:
 
-| Kind | Parameters | Use |
+| Type | Parameters | Use |
 |---|---|---|
 | `ALL` | none | the default, and what every engine view has until measurement says otherwise |
 | `AABB` | min, max | |
@@ -1175,10 +1175,10 @@ set:
 **The predicate is not a callback.** An arbitrary `bool(row)` would put unbounded
 third-party code on the sim thread and destroy the property this document depends on: cost
 that is knowable at construction. It could not be vectorized, bounded, or blamed when slow.
-The kind is fixed at the freeze so the cost model is closed. Only its parameters change per
+The type is fixed at the freeze so the cost model is closed. Only its parameters change per
 publish, through the return header (§3.5).
 
-**The engine chooses how to evaluate a kind.** A linear scan over the predicate's input
+**The engine chooses how to evaluate a type.** A linear scan over the predicate's input
 columns always works, and it is the baseline charged in §3.1. If the engine core already keeps a
 spatial structure for its own systems, `SPHERE` and `FRUSTUM` may be answered from it, and
 the scan cost disappears. That is an implementation choice behind the declaration. A reader
@@ -1237,7 +1237,7 @@ struct ReturnHeader {                // consumer-written, publisher-read
     u32              seq;            // monotone; publisher keeps the newest it has seen
     u64              last_consumed_tick;
     u32              cadence_hint;   // 0 = no preference
-    PredicateParams  params;         // §3.4; fixed size, kind-dependent interpretation
+    PredicateParams  params;         // §3.4; fixed size, type-dependent interpretation
 };
 
 ReturnHeader ret[3];                 // parallel to block[3]; never reallocated
@@ -1320,10 +1320,10 @@ the end of the tick, commits apply buffered changes in a fixed order.
 
 #### Per-column access declarations
 
-A system declares an access kind for each column it uses, not one model for itself. A system
-that reads five columns and writes two makes seven declarations. The set of kinds is closed:
+A system declares an access type for each column it uses, not one model for itself. A system
+that reads five columns and writes two makes seven declarations. The set of types is closed:
 
-| Kind | May read | May write |
+| Type | May read | May write |
 |---|---|---|
 | `read_full` | any row | nothing |
 | `read_local` | its own task range | nothing |
@@ -1338,7 +1338,7 @@ Reflection turns these declarations into read-only or writable spans of the righ
 
 > Within one phase, every column satisfies both clauses:
 >
-> 1. **At most one writer**: one system declaring any of the three `write_*` kinds.
+> 1. **At most one writer**: one system declaring any of the three `write_*` types.
 > 2. If that writer declared **`write_local`**, then **no system in the phase may read the
 >    column outside its own task range**: no `read_full`, and no `write_staged` either,
 >    since `write_staged` may read any row.
@@ -1589,7 +1589,7 @@ The design is a hybrid:
   matter. Whether to keep flecs at all is open
   ([Q56](open_question.md#q56-keep-or-drop-flecs)).
 - The engine core's system scheduler can then be a simple explicit list: a fixed system order, each
-  system declaring an access kind per column, and phases derived once, statically, by the
+  system declaring an access type per column, and phases derived once, statically, by the
   cut in §4.1. Explicit ordering worked better than attribute-driven ordering in the DOTS
   lockstep experience.
 

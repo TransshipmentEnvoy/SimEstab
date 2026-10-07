@@ -92,7 +92,7 @@ struct HostControl {
     bool step_in_flight = false;                      ///< guarded by gate.m; never read by the executor
 };
 
-/// The kinds of thing that block a tick, in priority order
+/// The types of thing that block a tick, in priority order
 enum class BlockerType : std::uint32_t { NONE, STOP, EVENT_BACKLOG, HOST_PAUSE, PARTICIPANT };
 
 /// What blocks a tick: a type, and for PARTICIPANT which one

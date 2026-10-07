@@ -81,7 +81,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | snapshot | Read-only, float-converted data for one tick, held in a block or copied out. Not a savegame. | engine_core §5 |
 | projection | What publish copies for one engine view: which columns (the projection spec), which rows (the row predicate), converted from fixed-point to float. | engine_core §3.1 |
 | projection spec | The column list an engine view declares. | engine_core §3.1 |
-| row predicate | An engine view's row filter. Its kind (`ALL`, `AABB`, `SPHERE`, `FRUSTUM`, `TAG`) is fixed at the freeze; its parameters can change on every publish. Coarse in the engine core, refined by the reader. | engine_core §3.4 |
+| row predicate | An engine view's row filter. Its type (`ALL`, `AABB`, `SPHERE`, `FRUSTUM`, `TAG`) is fixed at the freeze; its parameters can change on every publish. Coarse in the engine core, refined by the reader. | engine_core §3.4 |
 | return header | A small struct the reader writes before a take and the publisher reads afterwards: predicate parameters, last tick consumed, cadence hint. It can shape the engine view, never the world. | engine_core §3.5 |
 | cadence | An engine view is published every `k` ticks. | engine_core §3.1 |
 | cadence hint | A reader's request to be published less often. The publisher may ignore it, and always does on a paced engine view. | engine_core §3.5 |
@@ -131,7 +131,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | pool | How every object type is stored: columns indexed by slot, with holes where entities were erased. Rows never move. | data_container §2.2 |
 | column | One array holding one property for every row of an object type. | data_container §3 |
 | column id | A column's `u32` number, returned by `resolve_column` and fixed at the freeze. Not an entity id. | data_container §7.3 |
-| column span | The slice of a column a system may access, sized by its access kind. | data_container §4 |
+| column span | The slice of a column a system may access, sized by its access type. | data_container §4 |
 | slot | A position in a pool. An entity keeps its slot for its whole life. After an erase the slot may hold a new entity. | data_container §2.2 |
 | row | An entity's slot, used as an index into its columns. A bare row cannot tell a new occupant from an old one, so it never leaves the engine core. | data_container §2.2 |
 | generation | A slot's `u32` reuse counter. It starts at 1 and goes up by one at each erase. | data_container §2.2 |
@@ -148,8 +148,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | body | An agent's world-facing state (position, resources, health). Engine core state, updated deterministically. | engine_core §6 |
 | mind | Where an agent decides. Inside the determinism boundary it is engine core logic; outside it is a peripheral that submits commands. | engine_core §6 |
 | system | A deterministic update function. Declares how it accesses each column. | engine_core §4.1 |
-| access kind | `read_full`, `read_local`, `write_local`, `write_staged` or `write_dbl`. | engine_core §4.1 |
-| phase | A run of systems within one tick that can execute in parallel safely. Phases are computed at the freeze from the access kinds. | engine_core §4.1 |
+| access type | `read_full`, `read_local`, `write_local`, `write_staged` or `write_dbl`. | engine_core §4.1 |
+| phase | A run of systems within one tick that can execute in parallel safely. Phases are computed at the freeze from the access types. | engine_core §4.1 |
 | phase cut | The rule that splits the system list into phases. | engine_core §4.1 |
 | boundary commit | At the end of each phase: merge staged writes and flip double-buffered columns. Never changes row counts. | engine_core §4.1 |
 | terminal commit | Once per tick, after the last phase: every erase, then every create. The only place the live set changes, so an entity created this tick has no row until the commit. | engine_core §4.1 |

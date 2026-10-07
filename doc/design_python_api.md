@@ -1465,7 +1465,7 @@ def sample(engine_view):
 
 tick, watched, x = sample(engine_view)       # only scalars escaped
 
-# 3. Row filtering: declare the predicate KIND at registration, steer its
+# 3. Row filtering: declare the predicate TYPE at registration, steer its
 #    PARAMETERS per frame. The parameters ride the same exchange as the take.
 engine.register_engine_view("render", columns=["pop.position", "pop.kind"],
                             cadence=1, predicate="sphere", identity=False)   # draws; never looks up
@@ -1562,7 +1562,7 @@ Rules:
   snapshot-cadence control call. An analytics engine view at `cadence=30` costs a thirtieth
   of a render engine view. A tick under a `step()` grant publishes the same engine views as
   any other tick: those due by their cadence (§4.3).
-- **The predicate kind is declared at registration; its parameters are set at run time.**
+- **The predicate type is declared at registration; its parameters are set at run time.**
   `predicate=` takes one of `"all"` (the default), `"aabb"`, `"sphere"`, `"frustum"` or
   `"tag"` (`design_engine_core.md` §3.4). `engine_view.set_predicate(**params)` writes the
   parameters into the engine view's return header. They reach the publisher at the **next

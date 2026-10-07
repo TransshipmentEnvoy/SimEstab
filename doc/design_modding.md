@@ -774,10 +774,10 @@ Rules:
     engine (§6).
 - Registered systems take their place in the **fixed system order** of the phase-structured
   scheduler (`design_engine_core.md` §4.1), just like built-in systems. There is no special
-  scheduling path. A system declares an access kind **per column** it touches, from one
+  scheduling path. A system declares an access type **per column** it touches, from one
   closed set:
 
-  | Kind | May read | May write |
+  | Type | May read | May write |
   |---|---|---|
   | `read_full` | any row | nothing |
   | `read_local` | its own task range | nothing |

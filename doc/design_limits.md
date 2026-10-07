@@ -379,7 +379,7 @@ crossing is diagnosed.**
 
 **Both projection axes are declared.** Over columns, each engine view declares a column subset, so
 a renderer, an agent and a mod each pay for what they read (`design_engine_core.md` §3.1).
-Over rows, each engine view declares a predicate *kind*, whose parameters can change on every
+Over rows, each engine view declares a predicate *type*, whose parameters can change on every
 publish (`design_engine_core.md` §3.4). A renderer wants what is on screen; an agent wants
 what is near it. The row axis is what makes 10⁷ live rows reachable at all, because at that
 scale no reader wants every live row. It reuses existing machinery. Registration is the
@@ -392,7 +392,7 @@ generator.
 reads its input columns for every live row: 12 bytes per row for a position test, reads only
 ([Q61](open_question.md#q61-what-row-width-does-the-predicate-scan-assume)). The predicate
 shrinks the gather term; the scan term is the floor. The two ways below it are a spatial
-index behind the predicate kind, and running scan and gather on the worker pool. Neither is
+index behind the predicate type, and running scan and gather on the worker pool. Neither is
 decided here. Where the scan is charged is open (§7).
 
 ## 6. Checksum algorithm and levels

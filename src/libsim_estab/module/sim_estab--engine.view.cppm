@@ -41,9 +41,9 @@ import :types;
  */
 namespace sim_estab::core::engine::view {
 
-/// Size of PredicateParams in bytes. Provisional: the row predicate kinds that take
+/// Size of PredicateParams in bytes. Provisional: the row predicate types that take
 /// parameters arrive with projection (M5). It has room for six planes of four 32-bit
-/// values, the largest kind of design_engine_core.md §3.4.
+/// values, the largest type of design_engine_core.md §3.4.
 inline constexpr std::size_t provisional_predicate_params_bytes = 96;
 
 /**
@@ -58,8 +58,8 @@ struct Block {
     std::unique_ptr<std::byte[]> payload; ///< `max_payload_bytes` bytes, allocated once
 };
 
-/// Row predicate parameters: a fixed size, interpreted by the predicate kind
-/// (design_engine_core.md §3.4). Opaque until the kinds beyond ALL exist (M5).
+/// Row predicate parameters: a fixed size, interpreted by the predicate type
+/// (design_engine_core.md §3.4). Opaque until the types beyond ALL exist (M5).
 struct PredicateParams {
     std::array<std::byte, provisional_predicate_params_bytes> bytes{};
 };
