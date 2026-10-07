@@ -7,11 +7,20 @@ module;
 #include <functional>
 
 module sim_estab;
+import :engine.event_ring;
 import :engine.gate;
 
 namespace sim_estab::core::engine {
 
 namespace {
+
+/// Under the sink drain, the executor empties the event ring after every tick and when a step
+/// ends (design_engine_core.md §5.2). Under the owner drain the owner thread empties it.
+void drain_if_sink(gate::TickGate& tick_gate) {
+    if (tick_gate.events.event_drain == event_ring::EventDrain::Sink) {
+        tick_gate.events.drain_to_sink();
+    }
+}
 
 /// Ends the step on every way out of run_step(), a throwing tick included
 struct StepGuard {
@@ -24,6 +33,8 @@ struct StepGuard {
         // Between steps the grant is revoked, which is a pause, and a pause discards the
         // deadline clock (design_engine_core.md §3.3). The next step starts a new one.
         tick_gate.wait_started.reset();
+        // The step's last gate check may have raised an event that no later tick drains.
+        drain_if_sink(tick_gate);
         tick_gate.end_step();
     }
 };
@@ -50,6 +61,7 @@ StepResult run_step(gate::TickGate& tick_gate, std::uint64_t tick_count, std::fu
         switch (passed.blocker.type) {
         case BlockerType::NONE:
             run_tick(tick);
+            drain_if_sink(tick_gate);
             tick_gate.finish_tick(tick); // (G5)
             tick = tick + 1;
             if (Clock::now() < next_check) {

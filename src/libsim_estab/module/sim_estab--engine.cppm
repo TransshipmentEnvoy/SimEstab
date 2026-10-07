@@ -63,6 +63,8 @@ struct StepResult {
  * `tick_count` ticks is used up or a pause ends it early, at a stop, and at the event
  * backlog mark. It waits only for a participant that is not ready, up to its deadline.
  * Whatever ends the step, no tick is cut short, and what is left of the grant is revoked.
+ * Under the sink drain it empties the event ring after every tick and when the step ends
+ * (design_engine_core.md §5.2).
  *
  * @param tick_gate the session's gate
  * @param tick_count how many ticks to run

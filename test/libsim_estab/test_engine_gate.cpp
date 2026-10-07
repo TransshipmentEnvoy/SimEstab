@@ -3,9 +3,9 @@
  * @brief Tests for the gate
  *
  * These check what each call does: which blocker a tick meets, what a control call changes,
- * what pass() returns, and when a deadline expires (design_engine_core.md §3.3). They cannot
- * find a lost wake-up. The stress tests in test_gate_stress.cpp and
- * test_tick_progress_stress.cpp do that.
+ * what pass() returns, when a deadline expires, and which events the gate raises
+ * (design_engine_core.md §3.3, §5.2). They cannot find a lost wake-up. The stress tests in
+ * test_gate_stress.cpp and test_tick_progress_stress.cpp do that.
  *
  * sim_estab:engine.gate is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
@@ -21,11 +21,14 @@ module;
 #include <expected>
 #include <optional>
 #include <thread>
+#include <vector>
 
 module sim_estab;
+import :engine.event_ring;
 import :engine.gate;
 
 using namespace sim_estab::core::engine::gate;
+using namespace sim_estab::core::engine::event_ring;
 using sim_estab::core::types::Tick;
 using namespace std::chrono_literals;
 
@@ -45,6 +48,26 @@ bool is_participant(const Blocker& blocker, std::uint32_t index) {
     return blocker == Blocker{BlockerType::PARTICIPANT, index};
 }
 
+/// An event ring that no test fills unless it means to
+EventRing roomy_ring() { return EventRing{64, 8, EventDrain::Owner}; }
+
+/// An event ring whose backlog mark is 4 events
+EventRing small_ring() { return EventRing{4, 1, EventDrain::Owner}; }
+
+/// Fill `ring` up to its backlog mark, with events the gate never raises itself
+void fill_to_the_mark(EventRing& ring) {
+    while (ring.backlog() < ring.high_water) {
+        ring.enqueue({0, EngineEventType::ParticipantExpired, 99});
+    }
+}
+
+/// Everything the gate has raised so far
+std::vector<EngineEvent> drained(EventRing& ring) {
+    std::vector<EngineEvent> out;
+    ring.drain(out);
+    return out;
+}
+
 } // namespace
 
 //==============================================================================
@@ -58,7 +81,8 @@ BOOST_AUTO_TEST_SUITE(engine_gate_tests)
  *        tick the freeze published
  */
 BOOST_AUTO_TEST_CASE(test_a_new_gate_is_resumed_and_ready_through_the_published_tick) {
-    TickGate tick_gate{2, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{2, first_tick, events};
 
     BOOST_TEST(tick_gate.participant_count == 2u);
     BOOST_TEST(tick_gate.first_unexecuted.load() == first_tick.value);
@@ -77,7 +101,8 @@ BOOST_AUTO_TEST_CASE(test_a_new_gate_is_resumed_and_ready_through_the_published_
  * @brief With no participant, nothing blocks a tick
  */
 BOOST_AUTO_TEST_CASE(test_nothing_blocks_a_gate_without_participants) {
-    TickGate tick_gate{0, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{0, first_tick, events};
 
     BOOST_TEST(is_type(tick_gate.blocker_for(first_tick), BlockerType::NONE));
     BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1'000'000}), BlockerType::NONE));
@@ -87,7 +112,8 @@ BOOST_AUTO_TEST_CASE(test_nothing_blocks_a_gate_without_participants) {
  * @brief A participant blocks every tick past the one it is ready through
  */
 BOOST_AUTO_TEST_CASE(test_a_participant_blocks_until_it_declares_ready) {
-    TickGate tick_gate{1, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{1, first_tick, events};
 
     BOOST_TEST(is_participant(tick_gate.blocker_for(Tick{1}), 0));
 
@@ -103,7 +129,8 @@ BOOST_AUTO_TEST_CASE(test_a_participant_blocks_until_it_declares_ready) {
  * @brief The blocker is the first active participant that is not ready
  */
 BOOST_AUTO_TEST_CASE(test_the_first_participant_that_is_not_ready_blocks) {
-    TickGate tick_gate{3, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{3, first_tick, events};
 
     BOOST_TEST(is_participant(tick_gate.blocker_for(Tick{1}), 0));
 
@@ -122,15 +149,15 @@ BOOST_AUTO_TEST_CASE(test_the_first_participant_that_is_not_ready_blocks) {
  *        participant
  */
 BOOST_AUTO_TEST_CASE(test_blockers_come_in_priority_order) {
-    TickGate tick_gate{1, first_tick};
-    tick_gate.high_water = 4;
+    EventRing events = small_ring();
+    TickGate tick_gate{1, first_tick, events};
 
     BOOST_TEST(is_participant(tick_gate.blocker_for(Tick{1}), 0));
 
     tick_gate.pause();
     BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1}), BlockerType::HOST_PAUSE));
 
-    tick_gate.backlog = 4;
+    fill_to_the_mark(events);
     BOOST_TEST(is_type(tick_gate.blocker_for(Tick{1}), BlockerType::EVENT_BACKLOG));
 
     tick_gate.request_stop();
@@ -141,7 +168,8 @@ BOOST_AUTO_TEST_CASE(test_blockers_come_in_priority_order) {
  * @brief Nothing clears a stop
  */
 BOOST_AUTO_TEST_CASE(test_a_stop_is_sticky) {
-    TickGate tick_gate{0, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{0, first_tick, events};
 
     tick_gate.request_stop();
     BOOST_TEST(tick_gate.resume());
@@ -157,7 +185,8 @@ BOOST_AUTO_TEST_CASE(test_a_stop_is_sticky) {
  * @brief A pause holds the next tick, and a resume releases it
  */
 BOOST_AUTO_TEST_CASE(test_a_pause_holds_the_next_tick_and_a_resume_releases_it) {
-    TickGate tick_gate{0, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{0, first_tick, events};
 
     tick_gate.pause();
     BOOST_TEST(tick_gate.host.run_until.load() == first_tick.value);
@@ -172,7 +201,8 @@ BOOST_AUTO_TEST_CASE(test_a_pause_holds_the_next_tick_and_a_resume_releases_it) 
  * @brief A step's grant covers its ticks and no more, and ending the step revokes the rest
  */
 BOOST_AUTO_TEST_CASE(test_a_step_grant_covers_its_ticks) {
-    TickGate tick_gate{0, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{0, first_tick, events};
 
     const auto start = tick_gate.begin_step(3);
     BOOST_TEST(start.has_value());
@@ -193,7 +223,8 @@ BOOST_AUTO_TEST_CASE(test_a_step_grant_covers_its_ticks) {
  * @brief While a step is in flight, a second step and a resume are refused
  */
 BOOST_AUTO_TEST_CASE(test_a_step_in_flight_refuses_a_second_step_and_a_resume) {
-    TickGate tick_gate{0, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{0, first_tick, events};
 
     BOOST_TEST(tick_gate.begin_step(3).has_value());
 
@@ -214,7 +245,8 @@ BOOST_AUTO_TEST_CASE(test_a_step_in_flight_refuses_a_second_step_and_a_resume) {
  * @brief A grant whose ceiling does not fit a tick is refused, and changes nothing
  */
 BOOST_AUTO_TEST_CASE(test_a_step_that_does_not_fit_is_refused) {
-    TickGate tick_gate{0, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{0, first_tick, events};
 
     const auto refused = tick_gate.begin_step(UINT64_MAX - first_tick.value);
     BOOST_TEST(!refused.has_value());
@@ -232,7 +264,8 @@ BOOST_AUTO_TEST_CASE(test_a_step_that_does_not_fit_is_refused) {
  * @brief A tick that has run moves first_unexecuted past it
  */
 BOOST_AUTO_TEST_CASE(test_a_finished_tick_moves_first_unexecuted) {
-    TickGate tick_gate{0, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{0, first_tick, events};
 
     tick_gate.finish_tick(first_tick);
     BOOST_TEST(tick_gate.first_unexecuted.load() == (first_tick + 1).value);
@@ -243,16 +276,16 @@ BOOST_AUTO_TEST_CASE(test_a_finished_tick_moves_first_unexecuted) {
  *        blocking too
  */
 BOOST_AUTO_TEST_CASE(test_pass_returns_at_once_where_a_step_ends) {
-    TickGate tick_gate{1, first_tick};
+    EventRing events = small_ring();
+    TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = 3'600'000;
-    tick_gate.high_water                  = 4;
 
     tick_gate.pause();
     const PassResult paused = tick_gate.pass(first_tick, far());
     BOOST_TEST(is_type(paused.blocker, BlockerType::HOST_PAUSE));
     BOOST_TEST(!paused.expired);
 
-    tick_gate.backlog        = 4;
+    fill_to_the_mark(events);
     const PassResult backlog = tick_gate.pass(first_tick, far());
     BOOST_TEST(is_type(backlog.blocker, BlockerType::EVENT_BACKLOG));
 
@@ -262,11 +295,41 @@ BOOST_AUTO_TEST_CASE(test_pass_returns_at_once_where_a_step_ends) {
 }
 
 /**
+ * @brief The gate raises sim.backlog_paused once per stop at the mark, sim.backlog_resumed
+ *        when a tick passes after it, and session.stopped once, each stamped with the tick it
+ *        checks
+ */
+BOOST_AUTO_TEST_CASE(test_the_gate_raises_each_event_once) {
+    EventRing events = small_ring();
+    TickGate tick_gate{0, first_tick, events};
+
+    fill_to_the_mark(events);
+    BOOST_TEST(is_type(tick_gate.pass(first_tick, far()).blocker, BlockerType::EVENT_BACKLOG));
+    BOOST_TEST(is_type(tick_gate.pass(first_tick, far()).blocker, BlockerType::EVENT_BACKLOG));
+    const std::vector<EngineEvent> at_the_mark = drained(events);
+    BOOST_TEST(at_the_mark.size() == 5u); // the four that filled the ring, and one pause
+    BOOST_TEST((at_the_mark.back() == EngineEvent{first_tick.value, EngineEventType::SimBacklogPaused}));
+
+    // drained: the next tick passes, and the resume is raised once
+    BOOST_TEST(is_type(tick_gate.pass(first_tick, far()).blocker, BlockerType::NONE));
+    tick_gate.finish_tick(first_tick);
+    BOOST_TEST(is_type(tick_gate.pass(first_tick + 1, far()).blocker, BlockerType::NONE));
+    BOOST_TEST((drained(events) == std::vector<EngineEvent>{{first_tick.value, EngineEventType::SimBacklogResumed}}));
+
+    tick_gate.request_stop();
+    BOOST_TEST(is_type(tick_gate.pass(first_tick + 1, far()).blocker, BlockerType::STOP));
+    BOOST_TEST(is_type(tick_gate.pass(first_tick + 1, far()).blocker, BlockerType::STOP));
+    BOOST_TEST(
+        (drained(events) == std::vector<EngineEvent>{{(first_tick + 1).value, EngineEventType::SessionStopped}}));
+}
+
+/**
  * @brief pass() returns when the caller's slice ends, with the participant still blocking
  *        and its deadline still running
  */
 BOOST_AUTO_TEST_CASE(test_pass_returns_when_its_slice_ends) {
-    TickGate tick_gate{1, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = 3'600'000;
 
     const Clock::time_point before = Clock::now();
@@ -288,7 +351,8 @@ BOOST_AUTO_TEST_CASE(test_pass_returns_when_its_slice_ends) {
  * @brief Under Fail, a deadline that passes is reported and the participant stays in place
  */
 BOOST_AUTO_TEST_CASE(test_a_deadline_under_fail_expires) {
-    TickGate tick_gate{1, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = 30;
     tick_gate.participants[0].on_expiry   = OnExpiry::Fail;
 
@@ -299,13 +363,16 @@ BOOST_AUTO_TEST_CASE(test_a_deadline_under_fail_expires) {
     BOOST_TEST(failed.expired);
     BOOST_TEST((Clock::now() - before >= 30ms));
     BOOST_TEST(tick_gate.participants[0].active.load() == 1u);
+    BOOST_TEST(
+        (drained(events) == std::vector<EngineEvent>{{first_tick.value, EngineEventType::ParticipantExpired, 0}}));
 }
 
 /**
  * @brief Under ContinueWithout, a deadline that passes takes the participant out for good
  */
 BOOST_AUTO_TEST_CASE(test_a_deadline_under_continue_without_takes_the_participant_out) {
-    TickGate tick_gate{1, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = 30;
     tick_gate.participants[0].on_expiry   = OnExpiry::ContinueWithout;
 
@@ -316,6 +383,8 @@ BOOST_AUTO_TEST_CASE(test_a_deadline_under_continue_without_takes_the_participan
     BOOST_TEST(!passed.expired);
     BOOST_TEST((Clock::now() - before >= 30ms));
     BOOST_TEST(tick_gate.participants[0].active.load() == 0u);
+    BOOST_TEST(
+        (drained(events) == std::vector<EngineEvent>{{first_tick.value, EngineEventType::ParticipantExpired, 0}}));
 
     // a late declaration does not bring it back, and it blocks no later tick
     tick_gate.declare_ready(0, first_tick);
@@ -328,7 +397,8 @@ BOOST_AUTO_TEST_CASE(test_a_deadline_under_continue_without_takes_the_participan
  *        not the sum
  */
 BOOST_AUTO_TEST_CASE(test_the_deadlines_of_one_tick_share_one_start) {
-    TickGate tick_gate{3, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{3, first_tick, events};
     for (std::uint32_t i = 0; i < 3; ++i) {
         tick_gate.participants[i].deadline_ms = 100;
         tick_gate.participants[i].on_expiry   = OnExpiry::ContinueWithout;
@@ -344,6 +414,10 @@ BOOST_AUTO_TEST_CASE(test_the_deadlines_of_one_tick_share_one_start) {
     for (std::uint32_t i = 0; i < 3; ++i) {
         BOOST_TEST(tick_gate.participants[i].active.load() == 0u);
     }
+    const std::vector<EngineEvent> expired{{first_tick.value, EngineEventType::ParticipantExpired, 0},
+                                           {first_tick.value, EngineEventType::ParticipantExpired, 1},
+                                           {first_tick.value, EngineEventType::ParticipantExpired, 2}};
+    BOOST_TEST((drained(events) == expired));
 }
 
 /**
@@ -351,7 +425,8 @@ BOOST_AUTO_TEST_CASE(test_the_deadlines_of_one_tick_share_one_start) {
  *        after it
  */
 BOOST_AUTO_TEST_CASE(test_a_pause_discards_the_deadline_clock) {
-    TickGate tick_gate{1, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = 200;
     tick_gate.participants[0].on_expiry   = OnExpiry::Fail;
 
@@ -376,7 +451,8 @@ BOOST_AUTO_TEST_CASE(test_a_pause_discards_the_deadline_clock) {
  * @brief A declaration from another thread lets a parked executor through
  */
 BOOST_AUTO_TEST_CASE(test_a_declaration_wakes_a_parked_executor) {
-    TickGate tick_gate{1, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = 3'600'000;
 
     std::thread participant([&] {
@@ -393,7 +469,8 @@ BOOST_AUTO_TEST_CASE(test_a_declaration_wakes_a_parked_executor) {
  * @brief A stop from another thread ends the wait for a participant
  */
 BOOST_AUTO_TEST_CASE(test_a_stop_wakes_a_parked_executor) {
-    TickGate tick_gate{1, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = 3'600'000;
 
     std::thread controller([&] {
@@ -411,7 +488,8 @@ BOOST_AUTO_TEST_CASE(test_a_stop_wakes_a_parked_executor) {
  *        gives up at its `until`
  */
 BOOST_AUTO_TEST_CASE(test_a_wait_for_a_tick_ends_when_it_has_run_or_at_until) {
-    TickGate tick_gate{0, first_tick};
+    EventRing events = roomy_ring();
+    TickGate tick_gate{0, first_tick, events};
 
     BOOST_TEST(tick_gate.wait_for_tick(first_tick, far()));
 

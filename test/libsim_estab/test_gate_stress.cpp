@@ -26,9 +26,12 @@ module;
 #include <vector>
 
 module sim_estab;
+import :engine.event_ring;
 import :engine.gate;
 
 using namespace sim_estab::core::engine::gate;
+using sim_estab::core::engine::event_ring::EventDrain;
+using sim_estab::core::engine::event_ring::EventRing;
 using sim_estab::core::types::Tick;
 
 namespace {
@@ -70,7 +73,8 @@ BOOST_AUTO_TEST_CASE(test_declarations_wake_the_gate) {
     constexpr std::uint32_t participant_count = 3;
     constexpr std::uint64_t ticks             = 10'000;
 
-    TickGate tick_gate{participant_count, first_tick};
+    EventRing events{64, 8, EventDrain::Owner}; // nothing here raises an event
+    TickGate tick_gate{participant_count, first_tick, events};
     for (std::uint32_t i = 0; i < participant_count; ++i) {
         tick_gate.participants[i].deadline_ms = one_hour_ms;
     }
@@ -112,7 +116,8 @@ BOOST_AUTO_TEST_CASE(test_declarations_wake_the_gate) {
 BOOST_AUTO_TEST_CASE(test_a_pause_wakes_the_gate) {
     constexpr std::uint64_t rounds = 5'000;
 
-    TickGate tick_gate{1, first_tick};
+    EventRing events{64, 8, EventDrain::Owner}; // nothing here raises an event
+    TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = one_hour_ms;
     std::atomic<std::uint64_t> returned{0}; // rounds the executor has come back from
     std::atomic<std::uint64_t> resumed{0};  // rounds the controller has resumed after
@@ -158,9 +163,10 @@ BOOST_AUTO_TEST_CASE(test_a_pause_wakes_the_gate) {
 BOOST_AUTO_TEST_CASE(test_a_stop_wakes_the_gate) {
     constexpr std::uint64_t rounds = 2'000;
 
+    EventRing events{rounds, 1, EventDrain::Owner}; // each round's stop raises one event here
     std::vector<std::unique_ptr<TickGate>> gates;
     for (std::uint64_t round = 0; round < rounds; ++round) {
-        gates.push_back(std::make_unique<TickGate>(1u, first_tick));
+        gates.push_back(std::make_unique<TickGate>(1u, first_tick, events));
         gates.back()->participants[0].deadline_ms = one_hour_ms;
     }
     std::atomic<std::uint64_t> entering{0}; // the round whose gate the executor is entering

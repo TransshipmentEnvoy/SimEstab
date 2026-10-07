@@ -8,8 +8,8 @@ the design each item implements is in `doc/`. Unresolved design questions are in
 That covers the root of the exception family, SDL3 compute and viz contexts, logging, the SDL
 main-thread init guard, and the decided limits (M0). The toolchain the designs assume is in
 place: GCC 16, C++26 with `-freflection`, and `-march=x86-64-v3`. M1 is under way: the engine
-view protocol, the gate and the tick loop are written and tested, and nothing reaches them
-from Python yet. Everything after M1 is designed but not written.
+view protocol, the gate, the tick loop and the event ring are written and tested, and
+nothing reaches them from Python yet. Everything after M1 is designed but not written.
 
 + [x] basic setup
 + [x] graphics basics

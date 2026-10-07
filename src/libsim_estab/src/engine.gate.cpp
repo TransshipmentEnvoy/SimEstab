@@ -12,9 +12,11 @@ module;
 #include <optional>
 
 module sim_estab;
+import :engine.event_ring;
 import :engine.gate;
 
 using namespace sim_estab::core::log;
+using sim_estab::core::engine::event_ring::EngineEventType;
 
 namespace sim_estab::core::engine::gate {
 
@@ -24,10 +26,23 @@ PassResult TickGate::pass(types::Tick tick, Clock::time_point until) {
         switch (blocker.type) {
         case BlockerType::NONE:
             wait_started.reset();
+            if (backlog_paused) {
+                backlog_paused = false;
+                events.enqueue({tick.value, EngineEventType::SimBacklogResumed});
+            }
             return {};
         case BlockerType::STOP:
+            if (!stop_reported) {
+                stop_reported = true;
+                events.enqueue({tick.value, EngineEventType::SessionStopped});
+            }
             return {blocker};
         case BlockerType::EVENT_BACKLOG:
+            if (!backlog_paused) {
+                backlog_paused = true;
+                events.enqueue({tick.value, EngineEventType::SimBacklogPaused});
+            }
+            [[fallthrough]];
         case BlockerType::HOST_PAUSE:
             // A pause stops the deadline clock: nobody in a paused session can be late. The
             // first participant to block after it starts a new one.
@@ -65,6 +80,7 @@ PassResult TickGate::pass(types::Tick tick, Clock::time_point until) {
         }
 
         // The deadline passed.
+        events.enqueue({tick.value, EngineEventType::ParticipantExpired, blocker.participant});
         switch (participant.on_expiry) {
         case OnExpiry::Fail:
             sim_estab_log("sim_estab.engine.gate", severity_level::critical, "participant ", blocker.participant,

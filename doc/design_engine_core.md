@@ -846,7 +846,7 @@ struct TickGate {                                     // the whole gate
     HostControl       host;
     Gate              gate;
     std::atomic<u64>  first_unexecuted;               // sim-written; the next tick not yet run
-    u64               backlog;                        // §5.2; PLAIN, sim-thread-only
+    EventRing&        events;                         // §5.2: the backlog is write - read
 };
 ```
 
@@ -867,9 +867,9 @@ loads and stores and at most one notify, except the condition-variable waits the
 which release the mutex while they sleep. So taking it costs one uncontended lock, never a
 wait on another party.
 
-**The event backlog is not a host field.** `backlog` is a plain `u64` owned by the sim
-thread alone. The gate reads it like any other local variable. It is not an atomic, and in
-particular not a flag, for the reason §5.2 gives.
+**The event backlog is not a host field.** The gate derives it at every check from the
+event ring's two indices, `write - read` (§5.2). It is a plain value the sim computes, not
+an atomic, and in particular not a flag, for the reason §5.2 gives.
 
 **The loop.** This is the engine's whole tick loop. The engine core's only wait on another party is
 the one marked:
@@ -2143,7 +2143,7 @@ empties stalls the session while it does nothing else wrong.
 | Drain | Who empties the ring | For |
 |---|---|---|
 | **owner drain** | the owner thread, in `drain_events()`, between ticks and never inside one (`design_python_api.md` §6) | a session whose application or mods read events: every windowed session |
-| **sink drain** | the executor itself, after every tick, inside a `step(n)` too. The sink is a built-in native consumer: it counts the events and hashes their canonical encoding, and keeps nothing | a run nobody reads events from: CI, golden replays, benchmarks |
+| **sink drain** | the executor itself, after every tick and when a step ends, inside a `step(n)` too. The sink is a built-in native consumer: it counts the events and hashes their canonical encoding ([Q85](open_question.md#q85-what-does-the-sink-drain-hash-and-how)), and keeps nothing | a run nobody reads events from: CI, golden replays, benchmarks |
 
 Under a sink the backlog never grows, so `EVENT_BACKLOG` never blocks, and `drain_events()`
 is refused: the ring already has its one consumer. The sink's count and hash are what a
@@ -2164,6 +2164,11 @@ freeze, and `participant.left` by a mod host stopping (§3.3), on the owner thre
 host thread. They wait in a short side list under its own mutex, and the drain takes them
 with the ring's events, in tick order. So the ring keeps its one producer, and these events
 need no room in it.
+
+**An event raised between ticks carries the next tick to run.** That covers the side list
+and the gate's own events, such as `session.stopped`: each happened before that tick ran.
+So the drain delivers a side-list event before the ring's events of its tick. Events of one
+tick keep the order they were raised in.
 
 **The ring's size and the backlog mark are derived.** One tick emits at most `E` events into
 the ring, because every event is an engine event (above). `E` is computed at the freeze from

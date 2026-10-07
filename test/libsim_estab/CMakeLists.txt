@@ -21,6 +21,8 @@ add_executable(libsim_estab_test
     test_thread_util.cpp
     test_engine_view.cpp
     test_engine_view_tsan.cpp
+    test_engine_event_ring.cpp
+    test_event_ring_tsan.cpp
     test_engine_gate.cpp
     test_gate_stress.cpp
     test_tick_progress_stress.cpp
@@ -68,7 +70,7 @@ set_tests_properties(libsim_estab_test PROPERTIES
 # Race tests: one CTest entry per suite, labelled `tsan`. A suite proves something only in a
 # ThreadSanitizer build (design_patterns.md §10); in any other build it runs as a smoke
 # test. The libsim_estab_test entry above runs these suites too.
-foreach(race_suite engine_view_tsan_tests)
+foreach(race_suite engine_view_tsan_tests event_ring_tsan_tests)
     add_test(NAME ${race_suite} COMMAND libsim_estab_test --run_test=${race_suite})
     set_tests_properties(${race_suite} PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}

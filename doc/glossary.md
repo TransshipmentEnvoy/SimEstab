@@ -115,10 +115,11 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | event ring | The single-producer queue carrying events from the executor to the session's event drain. It holds `E × (D + 1)` entries and cannot overflow. | engine_core §5.2 |
 | event drain | Who empties the event ring. Every session declares one in `EngineConfig.event_drain`; `start_session()` refuses a session without one. | python_api §3 |
 | owner drain | An event drain the owner thread empties with `drain_events()`, between ticks. Every windowed session has one. | engine_core §5.2 |
-| sink drain | An event drain the engine empties itself after every tick, into a native sink that counts and hashes the events and keeps nothing. For CI and golden replays. | engine_core §5.2 |
+| sink drain | An event drain the engine empties itself after every tick and when a step ends, into a native sink that counts and hashes the events and keeps nothing. For CI and golden replays. | engine_core §5.2 |
 | E | The most events the engine creates itself in one tick: `T·S + S + 3·P + V + 4`, from object types, sources, participants and engine views. Computed at the freeze. | engine_core §5.2 |
 | D | The drain interval: how many ticks of events the event ring is sized to hold between two `drain_events()` calls. Default 8. | limits §2 |
 | event backlog | Events the drain has not consumed yet. A plain count owned by the executor. | engine_core §5.2 |
+| side list | Where events raised outside a tick wait, under their own mutex, until the drain merges them in. Each carries the next tick to run, and comes before that tick's ring events. | engine_core §5.2 |
 | `high_water` | The event backlog size at which the gate pauses the sim: `E × D`, derived at the freeze. Under an owner drain a `step(n)` that reaches it raises `EventBacklogError` instead. | engine_core §5.2 |
 | delivery class | How an event may be lost: reliable (never), coalescible (only the latest kept), best-effort (may drop). | engine_core §5 |
 

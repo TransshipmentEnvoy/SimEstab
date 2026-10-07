@@ -567,11 +567,12 @@ Rules:
 - **Every session declares its event drain, and nothing picks one for it.**
   `event_drain` says who empties the event ring (`design_engine_core.md` §5.2). `"owner"`
   means the owner thread calls `drain_events()` between ticks, as every windowed loop does
-  (§4.1). `"sink"` means the engine empties the ring itself after every tick, into a native
-  sink that counts the events, hashes their canonical encoding and keeps nothing: for CI,
-  golden replays and benchmarks (§4.2). A default would let a headless run that never
-  drains pause itself at the backlog mark, or let a windowed app lose its events into a
-  sink, so the field has none. `start_session()` raises `ValueError` while it is `None`,
+  (§4.1). `"sink"` means the engine empties the ring itself after every tick and when a
+  step ends, into a native sink that counts the events, hashes their canonical encoding
+  ([Q85](open_question.md#q85-what-does-the-sink-drain-hash-and-how)) and keeps nothing:
+  for CI, golden replays and benchmarks (§4.2). A default would let a headless run that
+  never drains pause itself at the backlog mark, or let a windowed app lose its events into
+  a sink, so the field has none. `start_session()` raises `ValueError` while it is `None`,
   before it freezes anything.
   - Under a sink, `drain_events()` raises `EngineStateError`: the engine already empties the
     ring. `engine.sink_digest()` returns the sink's count and hash, which a golden replay can
@@ -742,7 +743,8 @@ with Engine(replace(config, headless=True, event_drain="sink")) as engine:
     engine.start_session()                   # freeze: verifies identity vs the header
     engine.step(n_ticks)                     # exact ticks on this thread: no clock, no
                                              #   render, GIL released; the sink empties
-                                             #   the event ring after every tick
+                                             #   the event ring after every tick and
+                                             #   when the step ends
     assert engine.checksum() == golden
 ```
 
@@ -751,10 +753,10 @@ with Engine(replace(config, headless=True, event_drain="sink")) as engine:
   reached. The host is not paced, so a headless loop makes no per-tick call: commands the
   host submitted before `step(n)` run in its first tick.
 - **The harness declares a sink drain.** Nobody reads its events, so the engine empties the
-  ring itself after every tick, inside `step(n)` (§3). A long step therefore never reaches
-  the backlog mark. A notebook that wants the events declares an owner drain instead, and
-  calls `drain_events()` between steps. Its step then raises `EventBacklogError` at the mark
-  rather than wait for a drain only it can make (§4.3).
+  ring itself after every tick and when the step ends, inside `step(n)` (§3). A long step
+  therefore never reaches the backlog mark. A notebook that wants the events declares an
+  owner drain instead, and calls `drain_events()` between steps. Its step then raises
+  `EventBacklogError` at the mark rather than wait for a drain only it can make (§4.3).
 
 - **A loaded replay puts the engine in `playback`, which closes every endpoint.** Every
   `submit*`, from every source including the host endpoint, returns `revoked`. `playback` is
@@ -1688,7 +1690,7 @@ Rules:
   | Drain | Who empties the ring | Who reads the events |
   |---|---|---|
   | `"owner"` | the owner thread, in `drain_events()`, between ticks and never inside one | the application and, through the mod bus, the mods (§4.1) |
-  | `"sink"` | the engine, after every tick, even inside `step(n)` | nobody. The sink counts the events and hashes their canonical encoding; `engine.sink_digest()` returns both |
+  | `"sink"` | the engine, after every tick and when a step ends, even inside `step(n)` | nobody. The sink counts the events and hashes their canonical encoding ([Q85](open_question.md#q85-what-does-the-sink-drain-hash-and-how)); `engine.sink_digest()` returns both |
 
   A session that declares neither cannot start (§3).
 - Events are tick-stamped, typed and drained in batches. `drain_events` never blocks, and it

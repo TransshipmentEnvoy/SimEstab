@@ -24,10 +24,13 @@ module;
 #include <vector>
 
 module sim_estab;
+import :engine.event_ring;
 import :engine.gate;
 import :engine;
 
 using namespace sim_estab::core::engine;
+using sim_estab::core::engine::event_ring::EventDrain;
+using sim_estab::core::engine::event_ring::EventRing;
 using sim_estab::core::engine::gate::TickGate;
 
 namespace {
@@ -62,7 +65,8 @@ BOOST_AUTO_TEST_CASE(test_the_executor_wakes_every_waiter) {
     constexpr std::uint32_t waiter_count = 3;
     constexpr std::uint64_t ticks        = 10'000;
 
-    TickGate tick_gate{0, first_tick};
+    EventRing events{64, 8, EventDrain::Owner}; // nothing here raises an event
+    TickGate tick_gate{0, first_tick, events};
     std::array<std::atomic<std::uint64_t>, waiter_count> announced{}; // the target each waiter waits for next
 
     // each owned by its waiter until it is joined

@@ -11,6 +11,10 @@
  * is the thread inside a step. It waits only for a participant. At a stop, a pause or the
  * event backlog mark it returns to its caller.
  *
+ * The gate reads the event backlog from the session's event ring, and raises its own events
+ * there: the stop, the backlog pausing and resuming, and a participant's deadline passing
+ * (design_engine_core.md §5.2).
+ *
  * The mechanism register rows (design_engine_core.md §1.1):
  *
  * The gate
@@ -58,6 +62,7 @@ module;
 module sim_estab:engine.gate;
 
 import :types;
+import :engine.event_ring;
 
 /**
  * @namespace sim_estab::core::engine::gate
@@ -135,24 +140,29 @@ struct TickGate {
     HostControl host;
     Gate gate;
     std::atomic<std::uint64_t> first_unexecuted; ///< executor-written; the next tick not yet run
-    std::uint64_t backlog    = 0;                ///< executor-private: the event backlog (design_engine_core.md §5.2)
-    std::uint64_t high_water = UINT64_MAX;       ///< the backlog at which the gate blocks; fixed at the freeze
+
+    /// The session's event ring. The event backlog is its `write - read`, recomputed at every
+    /// check (design_engine_core.md §5.2).
+    event_ring::EventRing& events;
 
     /// Executor-private: when the wait for the tick at the gate began. Every participant's
     /// deadline for that tick counts from it. Empty while no deadline is running.
     std::optional<Clock::time_point> wait_started;
+    bool backlog_paused = false; ///< executor-private: sim.backlog_paused is raised, and no tick has passed since
+    bool stop_reported  = false; ///< executor-private: session.stopped is raised
 
     /**
-     * A gate for `count` participants, whose next tick to run is `first_tick`
+     * A gate for `count` participants, whose next tick to run is `first_tick`, raising its
+     * events into `ring`
      *
      * The tick before `first_tick` is already published (design_engine_core.md §2.4 step 9),
      * and every participant starts ready through it. So `first_tick` is at least 1. The run
      * grant starts with no ceiling. The creator sets each participant's `deadline_ms` and
      * `on_expiry` before another thread uses the gate.
      */
-    TickGate(std::uint32_t count, types::Tick first_tick)
+    TickGate(std::uint32_t count, types::Tick first_tick, event_ring::EventRing& ring)
         : participants(std::make_unique<Participant[]>(count)), participant_count(count),
-          first_unexecuted(first_tick.value) {
+          first_unexecuted(first_tick.value), events(ring) {
         for (std::uint32_t i = 0; i < participant_count; ++i) {
             participants[i].ready_through.store(first_tick.value - 1, std::memory_order_relaxed);
             participants[i].active.store(1, std::memory_order_relaxed);
@@ -167,7 +177,7 @@ struct TickGate {
         if (host.stop_requested.load(std::memory_order_acquire) != 0) {
             return {BlockerType::STOP};
         }
-        if (backlog >= high_water) {
+        if (events.backlog() >= events.high_water) {
             return {BlockerType::EVENT_BACKLOG};
         }
         if (host.run_until.load(std::memory_order_acquire) <= tick.value) {
@@ -189,6 +199,10 @@ struct TickGate {
      * It parks only while a participant blocks the tick, and at most until `until`. So a
      * caller that passes a near `until` waits in slices, and may check for an interrupt
      * between them. When a participant's deadline passes, its expiry policy applies.
+     *
+     * It raises the gate's events, each stamped with `tick`: session.stopped at the first
+     * stop, sim.backlog_paused when the backlog first blocks, sim.backlog_resumed when a
+     * tick passes after that, and participant.expired when a deadline passes.
      *
      * @return the blocker still in the way. NONE: run the tick. STOP, EVENT_BACKLOG or
      *         HOST_PAUSE: the step ends. PARTICIPANT with `expired`: its deadline passed

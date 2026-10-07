@@ -75,6 +75,13 @@ desyncs. Its snapshot type and NumPy dtype are also undefined (`data_container` 
 `std::simd` is the chosen SIMD layer (`data_container` §3), with Highway as fallback. It is
 unproven for fixed-point high-multiply and for gather/scatter (`engine_core` §4.4).
 
+### Q85. What does the sink drain hash, and how?
+
+The sink drain counts events and hashes their canonical encoding, and a golden replay
+compares both (`engine_core` §5.2; `python_api` §3, §7.3). The encoding is the event payload
+schema, which M2 specifies (`python_api` §7.3). No doc names the hash algorithm. Q27 covers
+the world checksum, not this. Until it is answered, the sink counts events only.
+
 ## Blocks M3 to M5
 
 ### Q31. What does hitting a declared cap do?
