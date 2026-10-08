@@ -103,7 +103,8 @@ void Endpoint::open() {
 
 bool Endpoint::revoke(Clock::time_point until) {
     {
-        // Both parks read lease_state, so it changes under both mutexes (design_engine_core.md §3.3)
+        // Both parks read lease_state, so the change that can wake them happens under both
+        // mutexes (design_engine_core.md §3.3). REVOKED and OPEN, stored later, wake nobody.
         std::lock_guard gate_lk(tick_gate.gate.m);
         std::lock_guard lk(m);
         lease_state.exchange(LeaseState::REVOKING, std::memory_order_acq_rel); // LINEARIZATION POINT

@@ -1046,8 +1046,10 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   1. Set `ctx.stopping`, and change the mod's endpoint lease from `OPEN` to `REVOKING`. Stop
      feeding its inbox and stop serving it snapshots. From then on a new endpoint lease
      returns `Revoked`; a call that entered its lease before the change may finish. Wait for
-     those running calls under `HostPolicy.shutdown_deadline`, then store `REVOKED`.
-     `stopping` is advisory, so `False` followed by a revoked submit is legal (§4.1).
+     those running calls under `HostPolicy.shutdown_deadline`, and store `REVOKED` once they
+     have left. If the deadline passes first, the endpoint stays `REVOKING` and the engine
+     takes the `failed` path (`design_engine_core.md` §5.1). `stopping` is advisory, so
+     `False` followed by a revoked submit is legal (§4.1).
   2. Drain the inbox, then run `on_unload`, under `HostPolicy.shutdown_deadline`. **The mod
      host drains the inbox, not the engine.** `stopping` ends the wait loop, and the mod
      host then delivers what is already in its inbox before `on_unload` (§4.2). Revocation

@@ -74,8 +74,9 @@ designed but not written.
         provisional constant until the payload schema (M2)
         (`doc/design_engine_core.md` §5.1)
   + [ ] the endpoint lease: revoke closes admission, wakes producers parked on the
-        admission wait or an outcome wait, and waits for active submits before reclaim or
-        reopen; a retry keeps the same ring (`doc/design_engine_core.md` §5.1)
+        admission wait or an outcome wait, and waits for active submits; reclaim and reopen
+        also wait for the producer's join; a retry keeps the same ring
+        (`doc/design_engine_core.md` §5.1)
   + [ ] the event ring and the event backlog, sized `E × (D + 1)` with the mark at `E × D`;
         the side list for events raised outside a tick; the two event drains, declared by
         `EngineConfig.event_drain`: the owner drain and the native sink; and
@@ -87,8 +88,10 @@ designed but not written.
   + [ ] operation leases around every native call that can overlap `close()`:
         `OPEN → CLOSING` rejects new calls, running calls drain under the shutdown
         deadline, and a timeout enters `failed` and disarms rather than freeing native
-        resources under a caller. `on_failed_stop` covers every `failed` path; a lost GPU
-        device or a failed page commit exits the process (`doc/design_python_api.md` §2, §6)
+        resources under a caller. It uses the endpoint lease's protocol, and the two share
+        one building block, whose name is chosen when it is built. `on_failed_stop` covers
+        every `failed` path; a lost GPU device or a failed page commit exits the process
+        (`doc/design_python_api.md` §2, §6)
   + [ ] the Python surface: `engine.py`, `command.py`, `event.py`, `loop.py`, with the
         headless loop of `doc/design_python_api.md` §4.2. `WindowConfig`, `LogConfig` and
         `event_drain` join `config.py` (`doc/design_python_api.md` §1, §3)

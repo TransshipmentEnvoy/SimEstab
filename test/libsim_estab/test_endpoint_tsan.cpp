@@ -9,7 +9,7 @@
  *
  * They cover the forward edge (a drained command is whole), the reverse edge (a producer
  * writes a slot again only after the drain has read it), both edges of an outcome, and the
- * endpoint lease (nothing touches the ring after revoke() returns).
+ * endpoint lease (no submit touches the ring after revoke() returns).
  *
  * sim_estab:engine.endpoint is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
@@ -273,7 +273,9 @@ BOOST_AUTO_TEST_CASE(test_a_paced_producer_refills_a_slot_only_after_the_drain_r
  *        submit returns Revoked, and nothing touches the ring once revoke() has returned
  *
  * After each revoke this thread empties the ring and overwrites every slot, as a reclaim
- * would. A submit still writing a slot then would be a race ThreadSanitizer reports.
+ * would. A submit still writing a slot then would be a race ThreadSanitizer reports. The
+ * producer reads no outcome: outcome reads take no lease, so a real reclaim also waits for
+ * the producer's join (design_engine_core.md §5.1).
  */
 BOOST_AUTO_TEST_CASE(test_nothing_touches_the_ring_after_a_revoke) {
     constexpr std::uint64_t rounds = 2'000;

@@ -53,9 +53,9 @@
  * - Failure: a handle whose slot has been reused reads Expired.
  *
  * Every park here follows the wake-up rule of design_engine_core.md §3.3, except the
- * revoker's wait for running submits: the rule's one stated exception, which rests on the
- * read-modify-write above. The lock order is `gate.m`, then the endpoint's `m`, and only
- * revoke() holds both.
+ * revoker's wait for running submits. That is a lease's wait for its running holders, the
+ * rule's one stated exception, and it rests on the read-modify-write above. The lock order
+ * is `gate.m`, then the endpoint's `m`, and only revoke() holds both.
  *
  * This partition is internal: an importer of sim_estab cannot see it. Its tests are units
  * of the module (design_patterns.md §10).
@@ -223,6 +223,10 @@ struct Endpoint {
      * @return true if every running submit has left, and the endpoint is REVOKED. false if
      *         `until` passed first: the endpoint stays REVOKING, and the caller takes the
      *         failed path without reclaiming it.
+     *
+     * After true, no submit writes the ring again. The last submit out may still notify,
+     * and outcome reads and the drain go on, so freeing or reopening the endpoint waits
+     * for the producer's join (design_engine_core.md §5.1).
      */
     [[nodiscard]] bool revoke(Clock::time_point until);
 

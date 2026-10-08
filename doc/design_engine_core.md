@@ -164,7 +164,7 @@ specified:
 | **Event drain wake** | owner thread → sim | the drain's store of `read` under `gate.m`, with a notify only if the sim is parked on `EVENT_BACKLOG` | the drain takes one short lock per call; the sim's wait is the gate's | §5.2 |
 | **The gate** | participants and host controls → sim | a participant's `ready_through` store, or a host-control store, each under `gate.m` (G3). The sim re-checks under the same mutex before it waits, and a writer notifies only a parked sim | **the sim blocks, bounded** by each blocker's declared policy; a writer takes a short lock | §3.3 |
 | **Tick progress** | sim → threads waiting for a tick to run | the sim's store of `first_unexecuted` under `gate.m` after each tick's publish (G5) | the sim takes a short lock per tick; a waiter blocks until the tick runs, the owner thread in interruptible slices | §3.3 |
-| **Operation lease** | any-thread API caller ↔ owner's `close()` | successful lease: the second acquire load of the access state; close: the `OPEN → CLOSING` CAS | call side wait-free; close drains under the shutdown deadline | `design_python_api.md` §2, §6 |
+| **Operation lease** | any-thread API caller ↔ owner's `close()` | successful lease: the second acquire load of the access state; close: the `OPEN → CLOSING` CAS | call side wait-free; close parks on the control block's mutex until the last running call leaves, under the shutdown deadline. The endpoint lease's protocol (§5.1) | `design_python_api.md` §2, §6 |
 | **Async error handoff** | sim → owner thread | `error_state.store(READY, release)` after the winning producer fills the slot | wait-free; read at the next rendezvous | `design_python_api.md` §8 |
 | **Staged join** | owner thread → sim | `stop_requested` stored under `gate.m`, with a notify if the sim is parked (§3.3); `std::thread::join` | owner blocks under a deadline | `design_python_api.md` §4.3 |
 
@@ -173,7 +173,8 @@ on the sim, one short lock per tick. Four contain a declared wait, and all four 
 kind of wait. The engine core waits for a participant; a producer waits for ring space; a producer
 waits for a tick it has already released; and the owner thread waits for the ticks a step
 granted. Every park in the engine follows the one wake-up rule of §3.3, which names its one
-exception: the revoker's wait for running submits (§5.1).
+exception: a lease's wait for its running holders. The revoker waits this way for running
+submits (§5.1), and `close()` for running calls (`design_python_api.md` §6).
 
 **Any new cross-thread mechanism gets a row here, with all five items, in the same change
 that introduces it.** This mirrors `design_python_api.md` §9, where every new raise site
@@ -933,14 +934,16 @@ backlog (§5.2). A change made outside the mutex can land between a waiter's che
 wait, and the waiter then sleeps through it. No ordering argument repairs that, so none is
 attempted, with one exception.
 
-**The one exception is the revoker's wait for running submits (§5.1).** Its predicate is
-`active_submit == 0`, and every submit changes that count outside the endpoint's mutex,
-because taking the mutex would put a lock on every submit. Two things keep it correct
-instead. The last submit to leave a closing endpoint takes the mutex before it notifies, so
-the notify cannot fall between the revoker's check and its sleep. And the revoker reads the
-count with a read-modify-write, so that submit cannot miss that the endpoint is closing. The
-second is an ordering argument, and x86 cannot show it failing, so it is checked by review.
-No other park may rely on one.
+**The one exception is a lease's wait for its running holders.** Two parks use it, with one
+protocol: the revoker's wait for running submits (§5.1), and `close()`'s wait for running
+calls (`design_python_api.md` §6). Its predicate is a count of running holders, and every
+holder changes that count outside the lease's mutex, because taking the mutex would put a
+lock on every submit and every native call. Two things keep it correct instead. The last
+holder to leave a closing lease takes the mutex before it notifies, so the notify cannot
+fall between the waiter's check and its sleep. And the waiter reads the count with a
+read-modify-write, so that holder cannot miss that the lease is closing. The second is an
+ordering argument, and x86 cannot show it failing, so it is checked by review. No other
+park may rely on one.
 
 **Why the rule makes the wake-up correct.** The sim decides to sleep only after re-checking
 under `gate.m` (G2), and `wait_until` releases the mutex in the same step as it sleeps. A
@@ -1829,9 +1832,11 @@ revoke:
       space_cv.notify_all();                           # an admission wait is not a lease leak,
       gate.progress_cv.notify_all(); }                 #   nor is an outcome wait (§3.3)
     { std::unique_lock lk(m);                          # under the shutdown deadline
-      revoke_cv.wait_until(lk, deadline,
-          [&] { return active_submit.fetch_add(0, acq_rel) == 0; }); }   # an RMW, not a load
-    lease_state.store(REVOKED, release)                 # revocation complete
+      if !revoke_cv.wait_until(lk, deadline,
+              [&] { return active_submit.fetch_add(0, acq_rel) == 0; }):  # an RMW
+          return false                                 # stays REVOKING: the failed path
+      lease_state.store(REVOKED, release) }            # revocation complete
+    return true
 
 open_or_reopen:
     require lease_state.load(acquire) == REVOKED        # new, or revoke returned true
@@ -1845,9 +1850,10 @@ touching an index or slot. Revocation also **wakes every parked producer**: one 
 the admission wait, and one waiting for an outcome. A producer asleep on the admission wait
 holds a lease, and would otherwise be waited on for the whole shutdown deadline; it wakes
 with `Revoked` and leaves. An outcome waiter wakes with `Revoked` too. Revocation is the
-only thing that wakes either wait early. The change of `lease_state` happens under both
-mutexes, as §3.3's wake-up rule requires of anything a parked thread waits on. The lock
-order is always `gate.m` before an endpoint's `m`.
+only thing that wakes either wait early. The change to `REVOKING` happens under both
+mutexes, as §3.3's wake-up rule requires of a change that can wake a parked thread. The
+later stores need no lock: `REVOKED`, under `m` alone, and `OPEN`, under neither, never make
+a waiter's predicate true. The lock order is always `gate.m` before an endpoint's `m`.
 
 **The revoker reads `active_submit` with a read-modify-write, never a load.** A submit adds
 to `active_submit` and then loads `lease_state`. The revoker exchanges `lease_state` and
@@ -1859,8 +1865,24 @@ order and synchronizes with it, and then the submit sees `REVOKING`. The same ho
 `leave`. The last submit out either is counted by the revoker's check, or sees `REVOKING`
 and notifies under `m`. The revoker checks under `m` before it sleeps, so that notify
 cannot fall between its check and its sleep, and no wake-up is lost. A normal submit
-leaves an `OPEN` endpoint and takes no lock. This park is the one stated exception to the
-wake-up rule of §3.3.
+leaves an `OPEN` endpoint and takes no lock. This park is a lease's wait for its running
+holders, the one stated exception to the wake-up rule of §3.3. The operation lease uses the
+same protocol (`design_python_api.md` §6).
+
+**A finished revocation does not leave the endpoint untouched.** When `revoke` returns
+`true`, no lease is held and none will be granted, so no submit writes the ring's indices
+or slots again. Four things can still touch the endpoint afterwards:
+
+- the last submit to leave, which subtracts before it takes `m` and notifies, so the
+  revoker may see the zero and return in between;
+- a submit that loaded `OPEN` before the exchange: it still adds, sees the revocation,
+  leaves and may notify;
+- an outcome read, which takes no lease and reads the slots;
+- the drain, which still runs the commands admitted before the revocation.
+
+So freeing the endpoint, rewriting its slots and reopening it wait for the producer's join,
+not for `revoke`. A reopen before the join could also let a woken outcome wait read `OPEN`
+again and miss the revocation.
 
 The endpoint and its control storage stay alive until the producer has been joined. If the
 deadline expires, the engine follows the existing `failed` and disarm path instead of
@@ -2154,7 +2176,7 @@ on it either, because no command's answer travels on the event ring (§5.2).
   matching load.
 - The lease's adds and loads are `acq_rel` and `acquire`, and so is the revoker's exchange.
   The revoker reads `active_submit` with a read-modify-write (above). That, not `seq_cst`,
-  is what keeps a lease and a reclaim from overlapping.
+  is what keeps the revoker from missing a running lease.
 
 **Progress.** An uncontended submit is wait-free: three lease loads, two active-count
 read-modify-writes, three bounded validity checks, one relaxed index load, one acquire
@@ -2184,8 +2206,8 @@ reading its outcomes while the drain runs reads each one whole. Three races must
 
 - **Revoke**: calls whose lease came before `REVOKING` may be accepted exactly once. Every
   later call returns `Revoked` and touches no ring memory. A producer parked on the
-  admission wait is woken rather than waited out. Reclamation never happens before running
-  calls finish.
+  admission wait is woken rather than waited out. Once `revoke` has returned `true`, no
+  submit writes the ring; a reclaim still waits for the producer's join (above).
 - **Full ring**: a producer parked at (C3) is woken by the drain that frees its slot, and
   never sleeps through one.
 - **Pause**: a pause taken while producers are parked wakes none of them. The resume that
