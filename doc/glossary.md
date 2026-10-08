@@ -63,6 +63,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | gate mutex | `gate.m`: the mutex every gate input changes under. The sim re-checks under it before it parks, and tick-progress waiters park on it too. Held only for loads, stores and a notify. | engine_core §3.3 |
 | wake-up rule | Every predicate a parked thread waits on changes only while holding that park's mutex, followed by a notify. Every park in the engine follows it, so no wake-up can be lost. The one stated exception is a lease's wait for its running holders: the revoker's (engine_core §5.1) and `close()`'s (python_api §6). | engine_core §3.3 |
 | mechanism register | The table of every cross-thread mechanism in the engine, each with its atomics, memory orders, linearization point, progress guarantee and failure behaviour. | engine_core §1.1 |
+| litmus test | A few threads' memory accesses and one outcome to check. herd7 says whether a memory model allows that outcome. `test/litmus/` holds the lease's, which x86 and ThreadSanitizer cannot check. | engine_core §5.1 |
 
 ## Engine views and snapshots
 

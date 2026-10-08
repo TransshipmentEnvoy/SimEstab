@@ -113,6 +113,7 @@ bool Endpoint::revoke(Clock::time_point until) {
     }
     // A read-modify-write, not a load. It reads the latest count, so a submit whose lease saw
     // OPEN is counted here, or has itself seen REVOKING (design_engine_core.md §5.1).
+    // test/litmus/ checks this with herd7; x86 and ThreadSanitizer cannot.
     std::unique_lock lk(m);
     if (!revoke_cv.wait_until(lk, until, [&] { return active_submit.fetch_add(0, std::memory_order_acq_rel) == 0; })) {
         return false;

@@ -1,0 +1,18 @@
+C LEASE-leave-load
+(* Control for LEASE-leave-rmw: the waiter reads the count with a plain acquire load.
+   x = the count of running holders (active_submit, active_operations).
+   y = the lease state: 0 = OPEN, 1 = closing (REVOKING, CLOSING).
+   P0 is a holder (a submit, a native call); P1 is the waiter (revoke, close).
+   Bad outcome, a lost wake-up: the holder is last out (r0=1) and sees OPEN (r1=0), so it
+   skips the notify, while the waiter still counts it (r2=1) and sleeps.
+   Expected: Sometimes. *)
+{ [x] = 1; }
+P0 (atomic_int* x, atomic_int* y) {
+  int r0 = atomic_fetch_sub_explicit(x, 1, memory_order_acq_rel);
+  int r1 = atomic_load_explicit(y, memory_order_acquire);
+}
+P1 (atomic_int* x, atomic_int* y) {
+  int r3 = atomic_exchange_explicit(y, 1, memory_order_acq_rel);
+  int r2 = atomic_load_explicit(x, memory_order_acquire);
+}
+exists (0:r0=1 /\ 0:r1=0 /\ 1:r2=1)

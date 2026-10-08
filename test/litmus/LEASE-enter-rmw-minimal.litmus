@@ -1,0 +1,18 @@
+C LEASE-enter-rmw-minimal
+(* The weakest orders the argument needs: the waiter's read-modify-write release and the
+   holder's add acquire; everything else relaxed. The code's stronger orders carry other
+   data (design_engine_core.md §5.1).
+   x = the count of running holders (active_submit, active_operations).
+   y = the lease state: 0 = OPEN, 1 = closing (REVOKING, CLOSING).
+   P0 is a holder (a submit, a native call); P1 is the waiter (revoke, close).
+   Bad outcome: the holder sees OPEN, and the waiter sees nobody inside. Expected: Never. *)
+{}
+P0 (atomic_int* x, atomic_int* y) {
+  atomic_fetch_add_explicit(x, 1, memory_order_acquire);
+  int r0 = atomic_load_explicit(y, memory_order_relaxed);
+}
+P1 (atomic_int* x, atomic_int* y) {
+  int r1 = atomic_exchange_explicit(y, 1, memory_order_relaxed);
+  int r2 = atomic_fetch_add_explicit(x, 0, memory_order_release);
+}
+exists (0:r0=0 /\ 1:r2=0)

@@ -1,0 +1,22 @@
+C LEASE-leave3-rmw
+(* Two holders inside: P0 leaves first, P1 leaves last. The waiter (P2) reaches P1 through
+   P0's subtraction, a release sequence of read-modify-writes. It holds only while every
+   write to the count is a read-modify-write (design_engine_core.md §5.1).
+   x = the count of running holders (active_submit, active_operations).
+   y = the lease state: 0 = OPEN, 1 = closing (REVOKING, CLOSING).
+   P0 is a holder (a submit, a native call); P1 is the waiter (revoke, close).
+   Bad outcome: the waiter counts both (r2=2) and sleeps, while P1, last out, sees OPEN.
+   Expected: Never. *)
+{ [x] = 2; }
+P0 (atomic_int* x, atomic_int* y) {
+  int a0 = atomic_fetch_sub_explicit(x, 1, memory_order_acq_rel);
+}
+P1 (atomic_int* x, atomic_int* y) {
+  int r0 = atomic_fetch_sub_explicit(x, 1, memory_order_acq_rel);
+  int r1 = atomic_load_explicit(y, memory_order_acquire);
+}
+P2 (atomic_int* x, atomic_int* y) {
+  int r3 = atomic_exchange_explicit(y, 1, memory_order_acq_rel);
+  int r2 = atomic_fetch_add_explicit(x, 0, memory_order_acq_rel);
+}
+exists (0:a0=2 /\ 1:r0=1 /\ 1:r1=0 /\ 2:r2=2)

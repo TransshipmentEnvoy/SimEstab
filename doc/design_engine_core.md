@@ -942,8 +942,8 @@ lock on every submit and every native call. Two things keep it correct instead. 
 holder to leave a closing lease takes the mutex before it notifies, so the notify cannot
 fall between the waiter's check and its sleep. And the waiter reads the count with a
 read-modify-write, so that holder cannot miss that the lease is closing. The second is an
-ordering argument, and x86 cannot show it failing, so it is checked by review. No other
-park may rely on one.
+ordering argument, and x86 cannot show it failing. The litmus tests in `test/litmus/` check
+it with herd7 instead (§5.1). No other park may rely on one.
 
 **Why the rule makes the wake-up correct.** The sim decides to sleep only after re-checking
 under `gate.m` (G2), and `wait_until` releases the mutex in the same step as it sleeps. A
@@ -2217,7 +2217,9 @@ The wake-up parts of these races (a parked producer woken by revocation or by a 
 the revoker woken by the last submit to leave) are hangs, not data races, so the sanitizer
 does not see them. They are the stress tests of §3.3, run under a watchdog timeout. The
 revoker's read-modify-write cannot be tested on x86 at all, which forbids the reordering it
-prevents. It is checked by review.
+prevents. The litmus tests in `test/litmus/` check it instead. herd7 runs them under the C++
+memory model, where a plain load allows the bad outcome and the read-modify-write forbids
+it. The tests' README lists the expected verdicts.
 
 ### 5.2 Event ring (normative)
 
