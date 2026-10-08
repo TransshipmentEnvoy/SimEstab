@@ -61,7 +61,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | deadline | How long the gate waits for one participant. Each participant declares one. A pause stops the clock. | engine_core §3.3 |
 | expiry policy | What happens when a participant's deadline passes: `Fail`, `ContinueWithout`, `Suspend` or `Drop`. | engine_core §3.3 |
 | gate mutex | `gate.m`: the mutex every gate input changes under. The sim re-checks under it before it parks, and tick-progress waiters park on it too. Held only for loads, stores and a notify. | engine_core §3.3 |
-| wake-up rule | Every predicate a parked thread waits on changes only while holding that park's mutex, followed by a notify. Every park in the engine follows it, so no wake-up can be lost. | engine_core §3.3 |
+| wake-up rule | Every predicate a parked thread waits on changes only while holding that park's mutex, followed by a notify. Every park in the engine follows it, so no wake-up can be lost. The one stated exception is the revoker's wait for running submits (engine_core §5.1). | engine_core §3.3 |
 | mechanism register | The table of every cross-thread mechanism in the engine, each with its atomics, memory orders, linearization point, progress guarantee and failure behaviour. | engine_core §1.1 |
 
 ## Engine views and snapshots
@@ -99,14 +99,15 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | endpoint | A single-producer command ring for one source. A source has one endpoint in v1. | engine_core §5.1 |
 | producer | The one thread that submits on an endpoint. | engine_core §5.1 |
 | command ring | An endpoint's ring buffer. Its depth is `capacity` at margin 0 and on the host endpoint, `2 × capacity` at a margin of 1 or more. Computed at the freeze. | engine_core §5.1 |
-| capacity | The most commands one endpoint may hold for one tick. Default 64, maximum 256. Exceeding it returns `queue_full`. The only number an endpoint declares. | limits §2 |
+| capacity | The most commands one endpoint may hold for one tick. Default 64, maximum 256. Exceeding it returns `QueueFull`. The only number an endpoint declares. | limits §2 |
 | stamp | The tick a command names. | engine_core §5.1 |
 | stamp margin | How far past the current tick an endpoint may stamp, and so how far ahead its producer may declare ready. 0 for engine sources; the input delay for a peer. The unpaced host endpoint stamps nothing. | engine_core §5.1 |
-| admission | The immediate answer to a submit: `admitted` with a handle, or a rejection (`queue_full`, `too_late`, `out_of_order`, `over_margin`, `invalid`, `revoked`, `host_error`). | engine_core §5.1 |
-| `too_late` | The named tick is past, or its producer has already declared it ready. | engine_core §5.1 |
+| admission | The immediate answer to a submit: `admitted` with a handle, or a rejection (`QueueFull`, `TooLate`, `OutOfOrder`, `OverMargin`, `Invalid`, `Revoked`, `HostError`). | engine_core §5.1 |
+| `TooLate` | The named tick is past, or its producer has already declared it ready. | engine_core §5.1 |
+| command handle | What an admitted submit returns: the endpoint's source id and the command's position in its ring. Its producer reads the outcome with it until it has submitted a ring depth of commands more. | engine_core §5.1 |
 | admission wait | A paced submit that finds its ring full waits, on the endpoint's mutex and condition variable, until the oldest tick in the ring has run. Only a ring with a margin can fill. A pause leaves it parked; only revocation wakes it early. | engine_core §5.1 |
 | endpoint lease | An endpoint's lifecycle state, which every submit enters and which `revoke` closes. | engine_core §5.1 |
-| outcome | The second answer to a command: whether it was applied when its tick ran. Read from the handle after that tick. For a host command it also reports the tick, and reads `pending` until then. | engine_core §5.1 |
+| outcome | The second answer to a command, read from its command handle on the producer's thread: `Pending` until the tick that runs it has run, then `Applied` with that tick, or `Dropped` if the drain refused it because its tick had passed. `Expired` once its producer has submitted a ring depth of commands after it. | engine_core §5.1 |
 | deadlock rule | A paced producer may wait only for outcomes of ticks it has already declared ready. Breaking it raises `CommandOrderError`. | engine_core §5.1 |
 | command drain | At the start of tick `t`, the sim takes every command stamped for `t` from every endpoint, in ascending source id. | engine_core §5.1 |
 | sequence | A command's position in the drain. With the source id it gives every command a total order, with no sort. | engine_core §5.1 |
@@ -214,7 +215,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | async error | An error on the sim thread, stored once and re-raised on the owner thread at its next engine call. | python_api §8 |
 | rendezvous point | An owner-thread engine call where a stored async error is raised: a pump call, `stop_sim_async()` or `raise_if_failed()`. | python_api §8 |
 | quiescent | The sim is parked and no tick is running, so state can be read safely (for example `checksum()` after `step()`). | python_api §4.3 |
-| `ipc_deadline` | How long one process-host round trip may take before it becomes `host_error`. Value open. | limits §1.1 |
+| `ipc_deadline` | How long one process-host round trip may take before it becomes `HostError`. Value open. | limits §1.1 |
 | catch-up clamp | The most real time one wake of the sim thread makes up after a stall: 0.25 s, applied before the time scale, so a requested speed is never clamped. A build constant. | limits §1.2 |
 | build constant | A limit fixed when the library compiles, such as the chunk size. Changing it needs a rebuild. | limits |
 | policy default | The shipped default of an `EngineConfig` field, which a session may override. | limits |

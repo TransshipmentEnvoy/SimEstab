@@ -332,7 +332,7 @@ endpoint, produced by the receive thread, so they carry the same source id and t
 everywhere (`multiplayer` §3.2). A logic mod's commands take the same route. Two things are
 open. First, whether the host endpoint itself is closed in a networked session, as it is in
 playback (`python_api` §4.2). Second, the turn assembler's protocol: how it learns the next
-open turn, and how it reports `queue_full` and outcomes back to the source. Only the server
+open turn, and how it reports `QueueFull` and outcomes back to the source. Only the server
 tier may decide that a late player has dropped (`multiplayer` §4.1).
 
 ## Not tied to a milestone

@@ -51,6 +51,9 @@ enum class EngineEventType : std::uint32_t {
     SimBacklogPaused,   ///< sim.backlog_paused: the gate stopped at high_water
     SimBacklogResumed,  ///< sim.backlog_resumed: a tick passed the gate again below high_water
     ParticipantExpired, ///< participant.expired: a participant's deadline passed; subject is the participant
+    /// command.protocol_error: the drain dropped commands stamped for a tick already past;
+    /// subject is the source id, count the commands dropped. Once per endpoint per tick.
+    CommandProtocolError,
 };
 
 /**

@@ -383,7 +383,7 @@ class HostPolicy:                        # engine-enforced, needed long after lo
                                          #   values decided in doc/design_limits.md §1.1
     shutdown_deadline: float = 5.0       # seconds, one budget per blocking shutdown stage
                                          #   (five stages, listed below)
-    ipc_deadline: float | None = None    # hot-path submit round trip -> host_error
+    ipc_deadline: float | None = None    # hot-path submit round trip -> HostError
                                          #   (design_modding.md §4.3). Undecided; None =
                                          #   unbounded; when set it must exceed one tick
                                          #   (Q43). It does NOT bound an outcome wait
@@ -501,7 +501,7 @@ Rules:
     to differ, and together they form one escalation staircase. The sim thread's staged join
     works the same way: one timeout applied twice (§4.3). `ipc_deadline` stays separate
     because it is not part of that staircase. It bounds a per-call round trip on the hot
-    path, and its expiry produces `host_error`, not abandonment.
+    path, and its expiry produces `HostError`, not abandonment.
   - **`ipc_deadline` does not bound an outcome wait, and could not.** A process mod reading
     what its command did is waiting for a tick to run. That wait lasts until the named tick
     has run (§7.1), which depends on the session, not on the transport. A transport deadline
@@ -666,7 +666,7 @@ def run_windowed(engine, mods):              # `mods`: the engine-registered bus
         if mods:                             # engine events -> per-mod inboxes;
             mods.publish(events)             #   non-blocking fan-out
         open_handles = app.on_outcomes(engine.outcomes(open_handles))
-                                             # polls: `pending` until the command's tick
+                                             # polls: `Pending` until the command's tick
                                              #   has run; the app keeps those handles
         engine.render()                      # presents the latest published snapshot;
                                              #   blocks on vsync (GIL released)
@@ -680,7 +680,7 @@ Rules:
   `engine.submit_batch`, on the host endpoint.
 - **The frame loop never waits on the engine; it polls.** Every call in the sketch except
   `render()` returns at once, and `render()` waits only for vsync. A full host endpoint
-  returns `queue_full`. `outcomes()` reports `pending` for a command whose tick has not run
+  returns `QueueFull`. `outcomes()` reports `Pending` for a command whose tick has not run
   yet, and the app reads it again on a later frame (§7.1). So a slow frame, a breakpoint or
   a dragged window delays only the frame. The sim keeps ticking, and nothing the loop calls
   can park the owner thread while the sim waits for it (`design_engine_core.md` §3.3).
@@ -759,7 +759,7 @@ with Engine(replace(config, headless=True, event_drain="sink")) as engine:
   `EventBacklogError` at the mark rather than wait for a drain only it can make (§4.3).
 
 - **A loaded replay puts the engine in `playback`, which closes every endpoint.** Every
-  `submit*`, from every source including the host endpoint, returns `revoked`. `playback` is
+  `submit*`, from every source including the host endpoint, returns `Revoked`. `playback` is
   a mode, not an engine state. It is independent of §2's diagram: a replayed session goes
   through the same states as a live one (`configuring`, the freeze, `running`). The mode
   changes only submission and where the command stream comes from.
@@ -973,8 +973,8 @@ thread.
     Both belong to paced producers, mods and peers, on their own threads.
 
     **The owner thread waits for neither: the frame loop never waits on the engine; it
-    polls** (`design_engine_core.md` §3.3). A full host endpoint returns `queue_full`, and
-    `outcome(h)` returns `pending` until its tick has run. The owner thread waits in only
+    polls** (`design_engine_core.md` §3.3). A full host endpoint returns `QueueFull`, and
+    `outcome(h)` returns `Pending` until its tick has run. The owner thread waits in only
     two places, and only on the sim or on a deadline: `step(n)` (above) and the shutdown
     calls (§2). `snapshot()` does not wait: the owner thread makes the copy itself, while
     no tick can run (§7.2). If a step's next tick is blocked by something only the owner
@@ -993,8 +993,8 @@ thread.
     | publish | one `acq_rel` exchange, with no wait for the reader. It may commit pages of its reserved block before filling it; that is budgeted tick work, not part of the atomic step, and the block's address never changes (`design_engine_core.md` §3.1, §3.2) |
     | Engine view take | one `acq_rel` exchange, which also hands the reader's return header to the publisher (`design_engine_core.md` §3.5) |
     | the command drain | reads whatever index each producer has made visible and stops there. A command submitted a moment later is drained at the next tick (`design_engine_core.md` §5.1) |
-    | `submit` into a ring with room | an operation lease, an endpoint lease, three bounded validity checks, then one release store. It never raises, and `queue_full` is a returned result (§6, §7.1). A *full* ring is the admission wait for a paced producer, which is declared above rather than absent here, and `queue_full` for the host |
-    | `outcome(h)` on the owner thread | returns `pending` until the tick that drained the command has run (§7.1) |
+    | `submit` into a ring with room | an operation lease, an endpoint lease, three bounded validity checks, then one release store. It never raises, and `QueueFull` is a returned result (§6, §7.1). A *full* ring is the admission wait for a paced producer, which is declared above rather than absent here, and `QueueFull` for the host |
+    | `outcome(h)` on the owner thread | returns `Pending` until the tick that drained the command has run (§7.1) |
     | `drain_events` | never blocks. *Not* calling it is what pauses the sim (§7.3) |
 
     The join is `stop_sim_async()`, and it is staged:
@@ -1127,7 +1127,7 @@ Rules:
     `design_engine_core.md` §5.1, until it has finished touching the ring.
   - **The host endpoint's producer is the owner thread.** `engine.submit`,
     `engine.submit_batch` and the host's `outcome` calls belong to it. None of them parks:
-    a full host endpoint returns `queue_full`, and `outcome(h)` returns `pending` until its
+    a full host endpoint returns `QueueFull`, and `outcome(h)` returns `Pending` until its
     tick has run (§4.3).
   - **`engine.snapshot()`**: owner thread and quiescent, like `checksum()` below. It reads
     engine core state into the engine's snapshot buffer, so it is legal only while no tick can
@@ -1211,7 +1211,7 @@ h   = engine.submit(cmd)                # host endpoint; ADMISSION. No tick: the
 hs  = engine.submit_batch(cmds)         # one crossing (§5 rule 1); one handle per command,
                                         #   in array order
 ...
-res = engine.outcome(h)                 # never waits: `pending` until the tick that drained
+res = engine.outcome(h)                 # never waits: `Pending` until the tick that drained
                                         #   it has run, then what it DID and at which tick
 
 # a logic mod (design_modding.md §4.1) submits like the host
@@ -1264,14 +1264,23 @@ Rules:
 
 - **Two answers per command, at different times.** Submitting answers *is it in the queue?*
   The outcome answers *what happened when it ran?*, and that answer does not exist until the
-  tick runs. Neither answer is an event, and neither can be lost.
+  tick runs. Neither answer is an event, and the engine drops neither. An outcome stays
+  readable until its producer has submitted a ring depth of commands after it (below).
 
   | Aspect | **Admission**: the return of `submit` | **Outcome**: read from the handle |
   |---|---|---|
   | Who | every producer, peers included | every producer |
   | Why | the alternative is dropping a command, and for a peer a dropped command is a certain desync | feedback, and the only place a rejection at application time is reported |
-  | Length | a paced producer: until the oldest tick in its ring has run. An unpaced producer: none; a full ring returns `queue_full` | a paced producer: until the named tick has run. The host: none; `pending` until its tick has run. A logic mod: as it chooses, polling or waiting |
+  | Length | a paced producer: until the oldest tick in its ring has run. An unpaced producer: none; a full ring returns `QueueFull` | a paced producer: until the named tick has run. The host: none; `Pending` until its tick has run. A logic mod: as it chooses, polling or waiting |
   | Can it fail? | only if the producer breaks its own contract (the table below) | no. It *reports* failures; it is not one |
+
+- **An outcome is `Pending`, `Applied` or `Dropped`, with its tick, and a handle reads it
+  for a while.** `Dropped` means the drain refused the command because its tick had passed.
+  That reports a defect, and the event `command.protocol_error` reports it too
+  (`design_engine_core.md` §5.1). A handle stays readable until its producer has submitted
+  a ring depth of commands after it, and then reads `Expired`. So a producer reads its
+  outcomes as it goes: the host before its next `capacity` submits, a peer within the two
+  ticks its ring holds.
 
 - **For a paced producer, admission is a wait, not a coin flip.** `submit` blocks until the
   ring has room. A margin-0 ring never fills while its producer stays within its own
@@ -1279,7 +1288,7 @@ Rules:
   ahead, such as a peer with several turns delivered, waits until the oldest tick in its
   ring has run. It cannot deadlock: those ticks are ones the producer has already released
   (`design_engine_core.md` §5.1). A pause wakes nobody. The waiter stays parked and continues
-  when the session does; only revocation wakes it early, with `revoked`.
+  when the session does; only revocation wakes it early, with `Revoked`.
 
 - **The deadlock rule, and the engine enforces it.** A deadlock exists only if something
   waits for the outcome of a tick it is itself holding up. Ordering the calls removes it:
@@ -1298,50 +1307,50 @@ Rules:
   no tick: the host's `outcome(h)` never waits, and a logic mod's may wait without any risk
   of deadlock.
 
-- **One capacity rejection, and only one.** `queue_full` means *more than you allocated for
+- **One capacity rejection, and only one.** `QueueFull` means *more than you allocated for
   this tick*: a producer breaking its own declaration, not a busy engine. An engine that is
   briefly behind makes a paced producer wait; it never rejects. So for a paced producer the
   full result set is the contract violations, one lifecycle state and one transport failure,
   and none of them is a load signal. An unpaced endpoint, the host's or a logic mod's, is the
   exception: it never waits, so a sim that is paused or behind lets it fill, and its
-  `queue_full` is the one load signal, which its producer reads (§4.3):
+  `QueueFull` is the one load signal, which its producer reads (§4.3):
 
   | Result | Class | Meaning |
   |---|---|---|
   | `admitted{handle}` | none | in the ring for the tick you named; the handle reads the outcome |
-  | `queue_full` | contract | more than `capacity` commands stamped for one tick on this endpoint. On an unpaced endpoint: more than `capacity` commands waiting for the next drain |
-  | `too_late` | contract | the named tick is in the past, or this producer has already declared it ready |
-  | `out_of_order` | contract | the named tick is earlier than one already named on this endpoint. Stamps never decrease, and this result enforces it |
-  | `over_margin` | contract | further ahead than this endpoint's declared margin; for a margin-0 producer, any tick but the current one |
-  | `invalid` | contract | a malformed payload, or a capability the source does not hold |
-  | `revoked` | lifecycle | this endpoint is not admitting: it is torn down, or the session is in playback (§4.2). Terminal for the caller |
-  | `host_error` | transport | the submitter's own transport failed or timed out; process hosts only (`design_modding.md` §4.3) |
+  | `QueueFull` | contract | more than `capacity` commands stamped for one tick on this endpoint. On an unpaced endpoint: more than `capacity` commands waiting for the next drain |
+  | `TooLate` | contract | the named tick is in the past, or this producer has already declared it ready |
+  | `OutOfOrder` | contract | the named tick is earlier than one already named on this endpoint. Stamps never decrease, and this result enforces it |
+  | `OverMargin` | contract | further ahead than this endpoint's declared margin; for a margin-0 producer, any tick but the current one |
+  | `Invalid` | contract | a malformed payload, or a capability the source does not hold |
+  | `Revoked` | lifecycle | this endpoint is not admitting: it is torn down, or the session is in playback (§4.2). Terminal for the caller |
+  | `HostError` | transport | the submitter's own transport failed or timed out; process hosts only (`design_modding.md` §4.3) |
 
-  An unpaced endpoint names no tick, so it never returns `too_late`, `out_of_order` or
-  `over_margin`.
+  An unpaced endpoint names no tick, so it never returns `TooLate`, `OutOfOrder` or
+  `OverMargin`.
 
   Results are returned, never delivered, and they never raise. A return value has no size
-  limit, no second recipient and no overflow policy. So an outcome cannot be dropped, split
-  between callers, or used to flood a queue.
+  limit, no second recipient and no overflow policy. So an outcome cannot be dropped by an
+  overflow, split between callers, or used to flood a queue.
 
-- **`too_late` means the tick is past, or the producer has already released it.** The tick
+- **`TooLate` means the tick is past, or the producer has already released it.** The tick
   the engine is currently waiting on is not late. A command stamped for it is the normal
   case, since the producer submitting is the one the gate is waiting for. A tick the
   producer has declared ready is refused even before it runs: the declaration said the
   producer had finished with it, and the gate may pass it at any moment
-  (`design_engine_core.md` §5.1). In a healthy session `too_late` cannot happen, so it
+  (`design_engine_core.md` §5.1). In a healthy session `TooLate` cannot happen, so it
   reports a defect, not load.
 
 - **Revocation closes the endpoint before reclaiming the ring.** Every submit takes the
   endpoint lease of `design_engine_core.md` §5.1, then touches the ring. Revocation changes
   `OPEN -> REVOKING` and refuses new leases. It wakes any producer parked in the admission
-  wait or an outcome wait with `revoked`; nothing else wakes either wait early. It then
+  wait or an outcome wait with `Revoked`; nothing else wakes either wait early. It then
   waits, under the shutdown deadline, for calls already admitted, and stores `REVOKED`. A
   timeout of that wait is a `failed` path (§2).
 
   A call admitted before revocation may still return any ordinary result. A later poll of
   `ctx.stopping` is only advisory. The submit result is authoritative, so seeing `stopping
-  == False` and then `revoked` is a legal race, not a contradiction.
+  == False` and then `Revoked` is a legal race, not a contradiction.
 
 - **Outcomes are never events, and rejections are outcomes.** The line is drawn by *who is
   still there to be told*:
@@ -1406,13 +1415,13 @@ Rules:
 
   A batch larger than the endpoint's per-tick capacity cannot succeed whole. The size bound
   is derived from capacity, not picked. A batch that exceeds it is admitted as far as it
-  fits, with `queue_full` for the rest, in array order. Partial acceptance is the honest
+  fits, with `QueueFull` for the rest, in array order. Partial acceptance is the honest
   outcome. The alternative would be to reserve the whole ring before publishing anything,
   which needs a staging arena, and this design has none. Nothing bounds *attempts*. A
   producer may retry freely, and pays in its own mod host CPU accounting
   (`design_modding.md` §4.2), never in shared capacity.
 - **Playback closes every endpoint** (§4.2). While a replay is loaded, no endpoint admits
-  and every `submit` returns `revoked`. The recorded stream is injected at consumption
+  and every `submit` returns `Revoked`. The recorded stream is injected at consumption
   instead.
 - Commands are validated against the submitter's source-id capabilities (`design_modding.md`
   §3).
@@ -1827,12 +1836,12 @@ Rules:
   | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` or `snapshot()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_engine_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
   | `snap.column(...)` for a column outside the caller's capabilities (`design_modding.md` §4.1) | `ColumnNotGrantedError` | no; capabilities are fixed at load |
   | `load_mods` failing: a mod fails discovery, verification, handshake or column registration. Or `start_session` failing at the freeze's `on_session_start` (`design_modding.md` §6) | `ModLoadError` | only before the engine is touched. A policy-stage failure leaves the engine `configuring`, and `load_mods` may be retried. From `register_hosts` on, the engine is `load_failed`, and recovery is a new `Engine` |
-  | A paced producer's `outcome(h)` for a tick it has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang. The host's `outcome(h)` never raises it: it returns `pending` |
+  | A paced producer's `outcome(h)` for a tick it has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang. The host's `outcome(h)` never raises it: it returns `Pending` |
   | The computed session identity differs from a loaded replay header (§4.2) | `ReplayIdentityError` | no; the artifact does not describe this build, schema or mod set |
 
   Neither of a command's two answers is in this table. Admission is `submit`'s return value,
   and the outcome is read from its handle. They are never exceptions and never events
-  (§7.1), and that includes `queue_full`. `pending` is not in it either: it is an outcome
+  (§7.1), and that includes `QueueFull`. `Pending` is not in it either: it is an outcome
   that does not exist yet, returned like any other. `CommandOrderError` is the one nearby
   raise, and it is not an outcome. It reports that the *call itself* was made in an order the model
   forbids.

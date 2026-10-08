@@ -762,7 +762,7 @@ the exception, and the existing name stays.
 - An **API value** is PascalCase. It is a value a caller sees:
   `GPUBackend::Vulkan`, `BufferUsage::TransferSrc`.
 - A bound enumerator keeps its C++ spelling in Python (§8).
-- A design doc may write an API value in lowercase (`queue_full`) while its
+- A design doc may write an API value in lowercase (`configuring`) while its
   enum does not exist. The change that adds the enum respells the value in
   the docs.
 - The log subsystem's enumerators are snake_case and stay:

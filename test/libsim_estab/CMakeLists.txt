@@ -26,6 +26,10 @@ add_executable(libsim_estab_test
     test_engine_gate.cpp
     test_gate_stress.cpp
     test_tick_progress_stress.cpp
+    test_engine_endpoint.cpp
+    test_endpoint_tsan.cpp
+    test_admission_wait_stress.cpp
+    test_revoke_wait_stress.cpp
     test_engine.cpp
 )
 
@@ -70,7 +74,7 @@ set_tests_properties(libsim_estab_test PROPERTIES
 # Race tests: one CTest entry per suite, labelled `tsan`. A suite proves something only in a
 # ThreadSanitizer build (design_patterns.md §10); in any other build it runs as a smoke
 # test. The libsim_estab_test entry above runs these suites too.
-foreach(race_suite engine_view_tsan_tests event_ring_tsan_tests)
+foreach(race_suite engine_view_tsan_tests event_ring_tsan_tests endpoint_tsan_tests)
     add_test(NAME ${race_suite} COMMAND libsim_estab_test --run_test=${race_suite})
     set_tests_properties(${race_suite} PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
@@ -82,7 +86,8 @@ endforeach()
 # Park stress tests: one CTest entry per suite, labelled `stress`, each under a timeout. A
 # lost wake-up is a hang, so the timeout is the failure (design_patterns.md §10). The
 # libsim_estab_test entry above runs these suites too, under CTest's default timeout.
-foreach(stress_suite gate_stress_tests tick_progress_stress_tests)
+foreach(stress_suite gate_stress_tests tick_progress_stress_tests admission_wait_stress_tests
+                     revoke_wait_stress_tests)
     add_test(NAME ${stress_suite} COMMAND libsim_estab_test --run_test=${stress_suite})
     set_tests_properties(${stress_suite} PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}

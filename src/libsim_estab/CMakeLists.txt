@@ -124,6 +124,7 @@ target_sources(sim_estab PRIVATE
     src/log.cpp
     src/gpu.cpp
     src/engine.event_ring.cpp
+    src/engine.endpoint.cpp
     src/engine.gate.cpp
     src/engine.cpp
     src/viz/viz.cpp
@@ -142,6 +143,7 @@ target_sources(sim_estab PUBLIC
     module/sim_estab--engine.view.cppm
     module/sim_estab--engine.event_ring.cppm
     module/sim_estab--engine.gate.cppm
+    module/sim_estab--engine.endpoint.cppm
     module/sim_estab--engine.cppm
     module/sim_estab.viz/viz.cppm)
 target_link_libraries(sim_estab PUBLIC

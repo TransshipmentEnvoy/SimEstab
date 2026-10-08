@@ -128,7 +128,7 @@ Four details make this work:
 | Detail | Why it matters |
 |---|---|
 | An empty turn is still sent | `ready_through` cannot tell "nobody acted in turn 1000" from "turn 1000 has not arrived". So the relay sends turn `t` even when it is empty, and peers report for `t` even with nothing to submit (§1) |
-| A peer's commands arrive before its readiness | So a command stamped for the tick the engine is currently waiting on is normal, not late. `too_late` rejects only a tick that has already run or that the peer has already declared (`design_engine_core.md` §5.1). The order shown above is the whole guarantee |
+| A peer's commands arrive before its readiness | So a command stamped for the tick the engine is currently waiting on is normal, not late. `TooLate` rejects only a tick that has already run or that the peer has already declared (`design_engine_core.md` §5.1). The order shown above is the whole guarantee |
 | Remote commands need no new structure | A peer is another source id with its own endpoint. Its receive thread is that endpoint's single producer, as the SPSC contract of `design_engine_core.md` §5.1 requires. The drain assigns the `(source id, sequence)` order. It is identical on every peer, because every peer drains the same per-endpoint FIFO rings in the same source order |
 | The wait is bounded twice | Turns already delivered run without blocking, so a burst of three turns runs at full speed. And the participant's deadline stops a dead peer from hanging the session |
 
@@ -142,14 +142,14 @@ may stamp a command.
 - The submitting peer picks tick `t` and broadcasts it, and the gate makes every other peer
   wait for `t`. So a command stamped for `t` runs at `t` on every peer, or the session
   stalls. It is never silently moved to another tick.
-- `too_late` cannot happen in a healthy session. If it does, it reports a defect, not a sign
+- `TooLate` cannot happen in a healthy session. If it does, it reports a defect, not a sign
   of load: some instance ran past a turn it should have waited for. The tick the engine is
   currently waiting on is not late. It is the tick a peer's packet almost always names. It
   is safe because a peer's commands arrive before it declares ready, and the gate cannot
   advance until it does (§3.1).
 - **Stamps on an endpoint must never decrease, and the engine checks this.** A submission
   that names an earlier tick than one already submitted on that endpoint is rejected at
-  submission with `out_of_order`. A queued command whose tick has already passed is a hard
+  submission with `OutOfOrder`. A queued command whose tick has already passed is a hard
   protocol error, never a late execution. The engine cannot rely on peers behaving well
   here, because the failure would be invisible. If a transport reordered commands on its
   receive path, every command behind a late one would run at the wrong tick on that machine
@@ -171,7 +171,7 @@ may stamp a command.
   - The value itself is open ([Q50](open_question.md#q50-input_delay_ticks)).
 - **An engine source has a margin of 0, and the engine checks it.** It acts within the turn
   it is about to release, so it never has more than one turn in flight. Its command stamped
-  for a later tick is a bug and is rejected with `over_margin`.
+  for a later tick is a bug and is rejected with `OverMargin`.
 - **A source that names no tick goes through the turn assembler.** In single-player the
   host endpoint and a logic mod's are unpaced: their commands name no tick, and each runs at
   the first tick that drains it (`design_engine_core.md` §3.3, §5.1). That cannot work

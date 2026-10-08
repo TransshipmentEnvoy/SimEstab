@@ -123,7 +123,7 @@ margin (below).
 
 | Symbol | Name | Value | Reasoning |
 |---|---|---|---|
-| — | endpoint capacity, default | **64** | Commands one endpoint may hold for one tick. Mods declare it in their manifest; this is the value when nothing is declared. Exceeding it is `queue_full`, the only capacity rejection in the engine |
+| — | endpoint capacity, default | **64** | Commands one endpoint may hold for one tick. Mods declare it in their manifest; this is the value when nothing is declared. Exceeding it is `QueueFull`, the only capacity rejection in the engine |
 | — | endpoint capacity, engine cap | **256** | The ceiling a manifest may request |
 | — | host endpoint (source 0) capacity | **256** | The host gets the ceiling by default. Its endpoint is unpaced, so the number counts the commands waiting for the next drain, which every drain empties (`design_engine_core.md` §5.1). It needs no reserve carved out of an engine-wide pool, because rings are per endpoint: no mod can use up the host's capacity, whatever it submits |
 | — | peer endpoint capacity | **256** | A peer's endpoint carries a whole remote player's turn, so it gets the ceiling for the same reason as the host |
@@ -537,7 +537,7 @@ Each value has a named trigger, so that revisiting it is a decision, not a drift
 |---|---|
 | `tick_rate` | Never casually. It is in the replay header, so a change invalidates every existing replay |
 | catch-up clamp | `sim.behind` fires in ordinary play, with no stall behind it, or a real stall recovers too slowly. It is a pacing value outside determinism, so a change touches no replay |
-| endpoint capacity | `queue_full` reaches a producer that is not exceeding its own declaration. Capacity is per tick and per endpoint, so this means the declaration is wrong, not the engine |
+| endpoint capacity | `QueueFull` reaches a producer that is not exceeding its own declaration. Capacity is per tick and per endpoint, so this means the declaration is wrong, not the engine |
 | source cap | A legitimate session wants a 257th source. Raising it costs almost nothing (§2.1), so hitting it is information, not a wall |
 | participant cap | The same, with more suspicion: every participant is one more way for the engine core to stop. Raising it does not admit more *pacing*. Submitting already paces a peripheral, so the cap bounds how many distinct things are paced, not whether they are |
 | player cap | A game design wants more than 128 humans. It is a game rule, so this is a design decision, not an engine one |

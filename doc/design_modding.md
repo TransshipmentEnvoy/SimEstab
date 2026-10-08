@@ -206,7 +206,7 @@ Rules:
     most commands that may wait for the next drain. The manifest declares it and the engine
     caps it, and the ring holds exactly that many (`design_limits.md` §2). There is no
     separate drain quota to exceed, because every drain takes everything waiting. A mod that
-    submits more than its capacity before the next drain gets `queue_full` **from the
+    submits more than its capacity before the next drain gets `QueueFull` **from the
     submitting call**, and nowhere else (`design_python_api.md` §7.1). Neither of a command's two
     answers is an event, so a mod cannot flood the event ring by submitting hard. Rings are
     per endpoint, so one mod's burst cannot use up another's capacity at all.
@@ -342,9 +342,9 @@ outcomes of the commands the mod submitted for that tick (§4.2).
   They submit on the mod's own endpoint and check capabilities. They name no tick: the
   endpoint is unpaced, like the host's, and the first drain after the call runs the
   commands (`design_engine_core.md` §5.1). They return **admission** per command, which the
-  mod must inspect: `admitted{handle}`, `queue_full`, `invalid`, `revoked` or `host_error`.
+  mod must inspect: `admitted{handle}`, `QueueFull`, `Invalid`, `Revoked` or `HostError`.
   - There is no buffer-and-flush step: `submit_batch` *is* the batching primitive.
-  - `submit` never waits. A full ring returns `queue_full` at once: the mod submitted more
+  - `submit` never waits. A full ring returns `QueueFull` at once: the mod submitted more
     than its capacity before the next drain. That is the mod's own contract, and also the
     one sign that the sim is paused or behind.
   - The endpoint has a **single producer**, and a source has one endpoint in v1. A mod that
@@ -363,7 +363,7 @@ outcomes of the commands the mod submitted for that tick (§4.2).
   queued?"; the outcome asks "what happened?", and that answer does not exist until the
   tick runs. A mod may poll it, or wait for it. A mod holds no tick, so the wait can never
   deadlock, and a pause leaves it parked: it continues when the session does. Only
-  revocation wakes it early, with `revoked`.
+  revocation wakes it early, with `Revoked`.
 - `snapshot()`: the ordinary way a thread-host mod reads the world, with no engine view to
   declare. The engine's own `snapshot()` belongs to the owner thread and runs only while no
   tick can (`design_python_api.md` §7.2), so a mod host thread cannot call it. How a mod
@@ -583,7 +583,7 @@ Rules:
   frames, submits on that mod's endpoint, and writes the reply frames. It is the endpoint's
   single producer, as the SPSC contract requires (`design_engine_core.md` §5.1). The round
   trip is child ↔ supervisor, under a transport deadline, `HostPolicy.ipc_deadline`
-  (`design_python_api.md` §3). When it expires, the call returns `host_error` and the
+  (`design_python_api.md` §3). When it expires, the call returns `HostError` and the
   endpoint is marked broken, which leads to quarantine. **The supervisor does no snapshot
   work.** Once process-host engine views exist, the sim thread publishes straight into the child's
   segment (below), so there is no broker and no second copy.
@@ -597,7 +597,7 @@ Rules:
   |---|---|---|
   | Frame | request → reply | request → *pending* → reply; the child can cancel it |
   | Bounded by | `ipc_deadline` | nothing of that kind: the engine answers when the tick runs |
-  | Expiry means | the transport is broken: `host_error`, and the endpoint is broken | **"still waiting"**: a keepalive, never "kill the mod" |
+  | Expiry means | the transport is broken: `HostError`, and the endpoint is broken | **"still waiting"**: a keepalive, never "kill the mod" |
   | Cancellable | no | yes, by the child, at any time |
 
   With the two shapes separate, `ipc_deadline` bounds only a round trip that should never
@@ -1044,7 +1044,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   gone (`design_engine_core.md` §3.3).
   1. Set `ctx.stopping`, and change the mod's endpoint lease from `OPEN` to `REVOKING`. Stop
      feeding its inbox and stop serving it snapshots. From then on a new endpoint lease
-     returns `revoked`; a call that entered its lease before the change may finish. Wait for
+     returns `Revoked`; a call that entered its lease before the change may finish. Wait for
      those running calls under `HostPolicy.shutdown_deadline`, then store `REVOKED`.
      `stopping` is advisory, so `False` followed by a revoked submit is legal (§4.1).
   2. Drain the inbox, then run `on_unload`, under `HostPolicy.shutdown_deadline`. **The mod
@@ -1066,7 +1066,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
 
   **So `on_unload` cannot change the world.** Step 1 comes first so that a mod cannot inject
   state during teardown or extend shutdown by submitting. After the wait for running calls,
-  every `ctx.submit*` returns `revoked`. It is a returned result, so a final flush is
+  every `ctx.submit*` returns `Revoked`. It is a returned result, so a final flush is
   refused *visibly* instead of vanishing. `on_unload` releases the mod's own resources.
 
   When a deadline expires, the two kinds of mod host differ. This difference is a main
@@ -1102,10 +1102,10 @@ New **logic mod** (for mod authors):
    from the call, and the outcome from its handle, which also says which tick ran the
    command. They always arrive, and they are the only report you get
    (`design_python_api.md` §7.1).
-   - `queue_full`: more commands than your capacity are waiting for the next drain. Declare
+   - `QueueFull`: more commands than your capacity are waiting for the next drain. Declare
      more capacity, or submit less often. It also means the sim is paused or behind.
-   - `revoked`: your endpoint is going away; stop.
-   - `invalid`: a bug in your mod.
+   - `Revoked`: your endpoint is going away; stop.
+   - `Invalid`: a bug in your mod.
 
    Prefer `submit_batch`. It is one crossing, it fixes the order of your commands within
    your source, and it is one IPC round trip instead of many. Reads are snapshots and events
