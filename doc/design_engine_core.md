@@ -760,12 +760,13 @@ engine view also makes its declaration, one short lock on `gate.m` (§3.1, §3.3
 views of the previous block are alive (§3.1). A due publish cannot be skipped, and a take
 cannot fail for any reason outside the caller.
 
-**`hardware_destructive_interference_size` depends on build flags.** It can be overridden
-with `--param` and follows `-mtune`, and GCC 16 does not warn when it is used in an
-ABI-visible position. **A heap-allocated engine view is deliberately not ABI-stable**: it is engine
-memory, never serialized, and its layout never crosses a module boundary. The deferred
-shared-memory engine view is the opposite case, and fixes every field width and offset as literals
-(`design_modding.md` §4.3).
+**Engine padding uses `cache_line_bytes`, not `hardware_destructive_interference_size`.**
+The standard constant can be overridden with `--param` and follows `-mtune`, and GCC 16
+warns when a module interface uses it (`-Winterference-size`). `cache_line_bytes` is 64 in
+every build (`design_limits.md` §3). **A heap-allocated engine view is deliberately not
+ABI-stable**: it is engine memory, never serialized, and its layout never crosses a module
+boundary. The deferred shared-memory engine view is the opposite case, and fixes every field
+width and offset as literals (`design_modding.md` §4.3).
 
 **Verification.** A functional test cannot tell a correct implementation from a broken one
 on x86-64. The sanitizer test checks:

@@ -9,9 +9,10 @@
  * Two kinds of constant live here and they are not interchangeable:
  *
  * - Build constants - fixed when this library compiles. Retuning is a rebuild, never a
- *   config change: the chunk quantum, the ceilings (max_endpoint_capacity, max_players,
- *   max_sources, max_engine_views, max_paced_participants), and the entity capacities
- *   (default_entity_capacity, max_entity_capacity).
+ *   config change: the cache line (cache_line_bytes), the chunk quantum, the ceilings
+ *   (max_endpoint_capacity, max_players, max_sources, max_engine_views,
+ *   max_paced_participants), and the entity capacities (default_entity_capacity,
+ *   max_entity_capacity).
  * - Policy defaults - the shipped default of a field a session may override at
  *   construction (EngineConfig, src/sim_estab/config.py). The engine reads the CONFIGURED
  *   value and never these; they exist so C++ and Python cannot drift, and so a session
@@ -132,10 +133,15 @@ export inline constexpr std::uint32_t max_paced_participants = 256;
 /// whole-column.
 export inline constexpr std::size_t chunk_elements = LIBSIM_ESTAB__CHUNK_ELEMENTS;
 
+/// One cache line in bytes (design_limits.md §3). Column padding and the cache-line
+/// separation of cross-thread atomics both use it. It is a constant, not
+/// std::hardware_destructive_interference_size, whose value follows -mtune and --param.
+export inline constexpr std::size_t cache_line_bytes = 64;
+
 /// One cache line's worth of elements of type T - the rule column<T> pads its element
 /// count up to (design_data_container.md §3). Stating it in bytes is what makes
 /// one rule hold at every ISA level from SSE to AVX-512.
-export template <typename T> inline constexpr std::size_t padding_elements = 64u / sizeof(T);
+export template <typename T> inline constexpr std::size_t padding_elements = cache_line_bytes / sizeof(T);
 
 // ---------------------------------------------------------------------------
 // Entity capacity (build constants - [[=cap(N)]], EngineConfig.entity_capacity)

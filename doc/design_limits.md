@@ -252,6 +252,12 @@ Retuning it is a rebuild. A chunk is the unit of parallel-for work items, SIMD i
 false-sharing isolation. It has no spatial meaning and constrains no GPU workgroup, because
 uploads are whole-column.
 
+**One cache line is 64 bytes: `cache_line_bytes`.** Column padding uses it
+(`design_data_container.md` §3), and so does every engine structure that keeps two threads'
+atomics on separate cache lines (`design_engine_core.md` §5.1). It is a build constant, not
+`std::hardware_destructive_interference_size`. That one follows `-mtune` and `--param`, and
+GCC 16 warns when a module interface uses it (`design_engine_core.md` §3.2).
+
 Each chunk also keeps a count of its live slots (`design_data_container.md` §4), so a scan
 skips a chunk with none. One chunk of a 4-byte column is about one page, so the chunk is a
 natural unit for memory as well. The data pages of a fully empty chunk may be decommitted.
@@ -495,6 +501,7 @@ This section names the one place each value lives. The C++ side is the partition
 | participant cap | — | `max_paced_participants` | enforced at the freeze |
 | Engine view cap | — | `max_engine_views` | enforced at the freeze |
 | host policy: shutdown deadline, retry limit, inbox cap | `HostPolicy.shutdown_deadline`, `HostPolicy.mod_retry_limit`, `HostPolicy.max_inbox_size` | — | policy defaults, Python only |
+| cache line | — | `cache_line_bytes` | build constant, 64 bytes (§3) |
 | chunk quantum | — | `chunk_elements` | build constant. Its one definition is the CMake cache variable `LIBSIM_ESTAB__CHUNK_ELEMENTS` in `src/libsim_estab/CMakeLists.txt`. The partition falls back to 1024 only for a build outside this CMake |
 | projection warning bandwidth | `EngineConfig.projection_warn_bytes_per_second` | `default_projection_warn_bytes_per_second` | policy default. Checked per engine view, not against the session total (§5) |
 | default entity capacity | `DEFAULT_ENTITY_CAPACITY` | `default_entity_capacity` | build constant, 2²⁴ (§4) |
