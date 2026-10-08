@@ -212,8 +212,9 @@ struct Endpoint {
     Endpoint(const Endpoint&)            = delete;
     Endpoint& operator=(const Endpoint&) = delete;
 
-    /// Lifecycle: start admitting. The ring keeps what it holds, so a reopened endpoint
-    /// drains its admitted commands before new ones. The old producer must have stopped.
+    /// Lifecycle: start admitting. The endpoint must be REVOKED: new, or revoked by a
+    /// revoke() that returned true. The old producer must have been joined. The ring keeps
+    /// what it holds, so a reopened endpoint drains its admitted commands before new ones.
     void open();
 
     /**

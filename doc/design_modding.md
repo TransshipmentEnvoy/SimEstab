@@ -524,10 +524,11 @@ Rules:
     its behalf. *Outcomes* for those commands die with the mod host; that follows from the
     mod host dying and is not a gap in the channel.
   - Retry re-spawns the mod host against the **same stable endpoint and ring**. The endpoint
-    reopens only after the old producer has stopped and no submit still holds its endpoint
-    lease (`design_engine_core.md` §5.1). Commands accepted before the exception stay in
-    FIFO order and keep draining. Reopening never copies or re-queues them. This gives
-    at-most-once delivery without replacing a ring that may still hold accepted commands.
+    reopens only after its revocation has finished, the old producer has stopped and no
+    submit still holds its endpoint lease (`design_engine_core.md` §5.1). Commands accepted
+    before the exception stay in FIFO order and keep draining. Reopening never copies or
+    re-queues them. This gives at-most-once delivery without replacing a ring that may still
+    hold accepted commands.
   - The inbound path is not lossless across a retry. The quarantined mod host's inbox dies
     with it. So events fanned out while the mod was down, reliable-class included, never
     reach the re-spawned instance. Quarantine is therefore a **loss event for that mod's

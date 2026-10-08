@@ -92,6 +92,9 @@ Endpoint::Endpoint(gate::TickGate& session_gate, std::uint32_t source_id, std::u
       active_submit(0) {}
 
 void Endpoint::open() {
+    if (lease_state.load(std::memory_order_acquire) != LeaseState::REVOKED) {
+        abort_with("open() on an endpoint that is not REVOKED; revoke() must return true first");
+    }
     if (active_submit.load(std::memory_order_acquire) != 0) {
         abort_with("open() while submits are still running; revoke() must finish first");
     }

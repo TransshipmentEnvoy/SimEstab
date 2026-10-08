@@ -1803,9 +1803,11 @@ std::atomic<u64> first_unexecuted;           // written only by the sim thread
 
 The endpoint object is allocated at the freeze and stays at the same address for the whole
 session. Starting a Tier 2 mod host opens its already-assigned endpoint. Quarantine and
-retry never swap a new ring into the drain array. Reopening is allowed only after the old
-producer has stopped and `active_submit == 0`. Admitted entries already in the ring stay
-there and drain before new ones, so the source's FIFO order holds across a retry.
+retry never swap a new ring into the drain array. Reopening is allowed only after the
+revocation has finished (`REVOKED`), the old producer has stopped and `active_submit == 0`.
+`open` aborts as a programming error on an endpoint that is not `REVOKED`. Admitted entries
+already in the ring stay there and drain before new ones, so the source's FIFO order holds
+across a retry.
 
 **Endpoint lease.** Every submit call enters the endpoint before touching its ring:
 
@@ -1832,6 +1834,7 @@ revoke:
     lease_state.store(REVOKED, release)                 # revocation complete
 
 open_or_reopen:
+    require lease_state.load(acquire) == REVOKED        # new, or revoke returned true
     require old producer stopped && active_submit.load(acquire) == 0
     lease_state.store(OPEN, release)                    # do not reset ring indices/slots
 ```
