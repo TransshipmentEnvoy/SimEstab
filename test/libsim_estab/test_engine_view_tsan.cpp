@@ -29,7 +29,7 @@ module sim_estab;
 import :engine.view;
 
 using namespace sim_estab::core::engine::view;
-using sim_estab::core::types::Tick;
+using sim_estab::core::engine::tick::Tick;
 
 namespace {
 

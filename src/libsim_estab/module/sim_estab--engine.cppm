@@ -22,7 +22,7 @@ module;
 // Module declaration
 export module sim_estab:engine;
 
-import :types;
+import :engine.tick;
 import :engine.view;
 import :engine.event_ring;
 import :engine.gate;
@@ -34,8 +34,8 @@ import :engine.endpoint;
  */
 namespace sim_estab::core::engine {
 
-/// The tick, under the engine's name. Its home is sim_estab:types.
-export using types::Tick;
+/// The tick, under the engine's name. Its home is sim_estab:engine.tick.
+export using tick::Tick;
 
 /// The value types of the engine's mechanisms, under the engine's name. Each one's home is
 /// its mechanism's partition.

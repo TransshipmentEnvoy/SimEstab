@@ -34,13 +34,15 @@ module;
 // Module declaration
 export module sim_estab:engine.view;
 
-import :types;
+import :engine.tick;
 
 /**
  * @namespace sim_estab::core::engine::view
  * @brief The engine view protocol and its return header
  */
 namespace sim_estab::core::engine::view {
+
+using tick::Tick;
 
 /// Size of PredicateParams in bytes. Provisional: the row predicate types that take
 /// parameters arrive with projection (M5). It has room for six planes of four 32-bit
@@ -136,8 +138,7 @@ struct EngineView {
 
     /// Reader: write the return header that the next successful take() hands to the
     /// publisher. Call it before take() (design_engine_core.md §3.5).
-    void write_return(types::Tick last_consumed_tick, std::uint32_t cadence_hint,
-                      const PredicateParams& params) noexcept {
+    void write_return(Tick last_consumed_tick, std::uint32_t cadence_hint, const PredicateParams& params) noexcept {
         ReturnHeader& header      = ret[read_index];
         header.seq                = ++last_seq;
         header.last_consumed_tick = last_consumed_tick.value;

@@ -56,9 +56,9 @@ CommandOutcome outcome_at(const Endpoint& endpoint, std::uint64_t position) noex
     const CommandRing& ring  = endpoint.ring;
     const std::uint64_t slot = position % ring.depth;
     if (ring.read.load(std::memory_order_acquire) <= position) { // pairs with (S4): not drained yet
-        return {CommandOutcomeType::Pending, types::Tick{endpoint.unpaced ? 0 : ring.slot[slot].tick}};
+        return {CommandOutcomeType::Pending, Tick{endpoint.unpaced ? 0 : ring.slot[slot].tick}};
     }
-    const types::Tick drained_at = endpoint.outcome_slot[slot].tick; // written before (S4)
+    const Tick drained_at = endpoint.outcome_slot[slot].tick; // written before (S4)
     if (endpoint.tick_gate.first_unexecuted.load(std::memory_order_acquire) <= drained_at.value) { // pairs with (G5)
         return {CommandOutcomeType::Pending, drained_at};
     }
@@ -162,7 +162,7 @@ std::expected<CommandHandle, Rejection> Endpoint::submit(const Command& command)
     return CommandHandle{source, index};
 }
 
-std::expected<CommandHandle, Rejection> Endpoint::submit(const Command& command, types::Tick tick) {
+std::expected<CommandHandle, Rejection> Endpoint::submit(const Command& command, Tick tick) {
     if (unpaced) {
         abort_with("submit(command, tick) on an unpaced endpoint; its commands name no tick");
     }
@@ -259,7 +259,7 @@ std::expected<CommandOutcome, OutcomeWaitRefusal> Endpoint::wait_outcome(const C
     return then;
 }
 
-void drain_commands(std::span<Endpoint *const> endpoints, types::Tick tick,
+void drain_commands(std::span<Endpoint *const> endpoints, Tick tick,
                     std::function_ref<void(const Command&, std::uint32_t, std::uint64_t)> emit) {
     std::uint64_t sequence   = 0;
     const Endpoint *previous = nullptr;

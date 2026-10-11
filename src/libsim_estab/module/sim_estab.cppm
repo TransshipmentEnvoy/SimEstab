@@ -22,7 +22,7 @@ export import :limits;
 export import :log;
 export import :gpu;
 export import :util;
-export import :types;
+export import :engine.tick;
 export import :engine.view;
 export import :engine.event_ring;
 export import :engine.gate;
@@ -46,7 +46,7 @@ export import :engine;
  * - sim_estab::core::log - Hierarchical logging system
  * - sim_estab::core::gpu - Headless GPU compute context
  * - sim_estab::core::util - General-purpose utilities (thread_util, ...)
- * - sim_estab::core::types - Strong types of function signatures (Tick)
+ * - sim_estab::core::engine::tick - The tick, the engine's clock
  * - sim_estab::core::engine - The engine: the tick loop, and the value types of its
  *   mechanisms (engine::view, engine::event_ring, engine::gate, engine::endpoint)
  * - (Additional subsystems to be added as modules are migrated)

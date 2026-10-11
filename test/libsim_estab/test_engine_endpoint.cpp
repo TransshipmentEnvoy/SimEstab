@@ -33,7 +33,7 @@ using sim_estab::core::engine::event_ring::EngineEventType;
 using sim_estab::core::engine::event_ring::EventDrain;
 using sim_estab::core::engine::event_ring::EventRing;
 using sim_estab::core::engine::gate::TickGate;
-using sim_estab::core::types::Tick;
+using sim_estab::core::engine::tick::Tick;
 
 namespace {
 

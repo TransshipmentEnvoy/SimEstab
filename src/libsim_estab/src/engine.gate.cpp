@@ -20,7 +20,7 @@ using sim_estab::core::engine::event_ring::EngineEventType;
 
 namespace sim_estab::core::engine::gate {
 
-PassResult TickGate::pass(types::Tick tick, Clock::time_point until) {
+PassResult TickGate::pass(Tick tick, Clock::time_point until) {
     for (;;) {
         const Blocker blocker = blocker_for(tick); // (G1) no lock: acquire loads
         switch (blocker.type) {

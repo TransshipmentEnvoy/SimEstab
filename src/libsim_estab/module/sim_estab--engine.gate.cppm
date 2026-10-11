@@ -62,7 +62,7 @@ module;
 // Module declaration
 export module sim_estab:engine.gate;
 
-import :types;
+import :engine.tick;
 import :engine.event_ring;
 
 /**
@@ -70,6 +70,8 @@ import :engine.event_ring;
  * @brief The gate and the tick progress wait
  */
 namespace sim_estab::core::engine::gate {
+
+using tick::Tick;
 
 /// The expiry policy: what happens when a participant's deadline passes
 /// (design_engine_core.md §3.3). Drop arrives with network peers and Suspend with mods.
@@ -161,7 +163,7 @@ struct TickGate {
      * grant starts with no ceiling. The creator sets each participant's `deadline_ms` and
      * `on_expiry` before another thread uses the gate.
      */
-    TickGate(std::uint32_t count, types::Tick first_tick, event_ring::EventRing& ring)
+    TickGate(std::uint32_t count, Tick first_tick, event_ring::EventRing& ring)
         : participants(std::make_unique<Participant[]>(count)), participant_count(count),
           first_unexecuted(first_tick.value), events(ring) {
         for (std::uint32_t i = 0; i < participant_count; ++i) {
@@ -174,7 +176,7 @@ struct TickGate {
     TickGate& operator=(const TickGate&) = delete;
 
     /// Executor: what blocks `tick`, in priority order. NONE if nothing does.
-    [[nodiscard]] Blocker blocker_for(types::Tick tick) const noexcept {
+    [[nodiscard]] Blocker blocker_for(Tick tick) const noexcept {
         if (host.stop_requested.load(std::memory_order_acquire) != 0) {
             return {BlockerType::STOP};
         }
@@ -209,10 +211,10 @@ struct TickGate {
      *         HOST_PAUSE: the step ends. PARTICIPANT with `expired`: its deadline passed
      *         under OnExpiry::Fail. PARTICIPANT without it: `until` passed.
      */
-    [[nodiscard]] PassResult pass(types::Tick tick, Clock::time_point until);
+    [[nodiscard]] PassResult pass(Tick tick, Clock::time_point until);
 
     /// Executor: `tick` has run and is published. Wakes the threads waiting for it. (G5)
-    void finish_tick(types::Tick tick) {
+    void finish_tick(Tick tick) {
         std::lock_guard lk(gate.m);
         first_unexecuted.store(tick.value + 1, std::memory_order_release); // (G5) the tick has run
         if (gate.progress_waiters != 0) {
@@ -222,7 +224,7 @@ struct TickGate {
 
     /// Writer, one per participant: declare `participant` ready through `tick`. `tick` never
     /// goes back.
-    void declare_ready(std::uint32_t participant, types::Tick tick) {
+    void declare_ready(std::uint32_t participant, Tick tick) {
         change(participants[participant].ready_through, tick.value);
     }
 
@@ -253,7 +255,7 @@ struct TickGate {
      *
      * @return the first tick of the grant, or why the step is refused
      */
-    [[nodiscard]] std::expected<types::Tick, StepRefusal> begin_step(std::uint64_t tick_count) {
+    [[nodiscard]] std::expected<Tick, StepRefusal> begin_step(std::uint64_t tick_count) {
         std::lock_guard lk(gate.m);
         if (host.step_in_flight) {
             return std::unexpected(StepRefusal::StepInFlight);
@@ -265,7 +267,7 @@ struct TickGate {
         host.step_in_flight = true;
         host.run_until.store(start + tick_count, std::memory_order_release); // (G3)
         notify_parked();                                                     // (G4)
-        return types::Tick{start};
+        return Tick{start};
     }
 
     /// Stepping thread: end the step begun with begin_step(). What is left of the grant is
@@ -282,7 +284,7 @@ struct TickGate {
      *
      * @return true if `first_unexecuted` has reached `target`
      */
-    [[nodiscard]] bool wait_for_tick(types::Tick target, Clock::time_point until) {
+    [[nodiscard]] bool wait_for_tick(Tick target, Clock::time_point until) {
         std::unique_lock lk(gate.m);
         ++gate.progress_waiters;
         const bool ran = gate.progress_cv.wait_until(

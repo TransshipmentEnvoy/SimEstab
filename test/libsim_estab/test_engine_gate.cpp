@@ -29,7 +29,7 @@ import :engine.gate;
 
 using namespace sim_estab::core::engine::gate;
 using namespace sim_estab::core::engine::event_ring;
-using sim_estab::core::types::Tick;
+using sim_estab::core::engine::tick::Tick;
 using namespace std::chrono_literals;
 
 namespace {

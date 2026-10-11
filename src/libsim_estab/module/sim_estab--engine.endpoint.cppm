@@ -81,7 +81,7 @@ module;
 // Module declaration
 export module sim_estab:engine.endpoint;
 
-import :types;
+import :engine.tick;
 import :limits;
 import :engine.gate;
 
@@ -90,6 +90,8 @@ import :engine.gate;
  * @brief Command endpoints: the command ring, the endpoint lease and command outcomes
  */
 namespace sim_estab::core::engine::endpoint {
+
+using tick::Tick;
 
 /// The bytes of a command's payload. Provisional: the slot size waits for the M2 payload
 /// schema (open_question.md Q22). 56 bytes make a Command one cache line.
@@ -139,7 +141,7 @@ export struct CommandOutcome {
     CommandOutcomeType type = CommandOutcomeType::Pending;
     /// The tick that ran or dropped it. Pending: the tick it names, or once drained the tick
     /// that drained it; 0 for an unpaced command not drained yet. Expired: 0.
-    types::Tick tick;
+    Tick tick;
 
     bool operator==(const CommandOutcome&) const = default;
 };
@@ -237,7 +239,7 @@ struct Endpoint {
 
     /// Producer, paced: submit `command` for `tick`. Waits for space if the ring is full,
     /// until the oldest tick in it has run. (C0) to (C5)
-    [[nodiscard]] std::expected<CommandHandle, Rejection> submit(const Command& command, types::Tick tick);
+    [[nodiscard]] std::expected<CommandHandle, Rejection> submit(const Command& command, Tick tick);
 
     /// Producer: the outcome of the command `handle` names. Never waits.
     [[nodiscard]] CommandOutcome outcome(const CommandHandle& handle) const;
@@ -270,7 +272,7 @@ struct Endpoint {
  *
  * The endpoints must share one gate, and be in strictly ascending source id.
  */
-void drain_commands(std::span<Endpoint *const> endpoints, types::Tick tick,
+void drain_commands(std::span<Endpoint *const> endpoints, Tick tick,
                     std::function_ref<void(const Command&, std::uint32_t, std::uint64_t)> emit);
 
 } // namespace sim_estab::core::engine::endpoint
