@@ -19,9 +19,9 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | time scale | Game speed: how fast ticks are run in wall-clock terms. A control call; never recorded. | python_api §4.3 |
 | control call | An API call that changes how the engine runs but never touches world state: pause, resume, `step(n)`, `set_time_scale`, log level. Never a command, never recorded. | python_api §3 |
 | session | The world from the freeze until `close()`. One per `Engine`. | engine_core §2.4 |
-| engine state | `created`, `configuring`, `running` (optionally with the sim thread), `stopped`, `closing`, `closed`, plus the terminal states `load_failed` and `failed`. | python_api §2 |
-| `stopped` | The engine state after `stop_sim_async()`: no tick runs again, but reads and `close()` still work. | python_api §2 |
-| freeze | The single call (`start_session()`) that moves the engine from `configuring` to `running`. It closes every set that must not change during a session, computes session identity, and publishes tick 0. | engine_core §2.4 |
+| engine state | `Configuring`, `Running` (optionally with the sim thread), `Stopped`, `Closing`, `Closed`, plus the terminal states `LoadFailed` and `Failed`. `EngineState` in C++. | python_api §2 |
+| `Stopped` | The engine state after `stop_sim_async()`: no tick runs again, but reads and `close()` still work. | python_api §2 |
+| freeze | The single call (`start_session()`) that moves the engine from `Configuring` to `Running`. It closes every set that must not change during a session, computes session identity, and publishes tick 0. | engine_core §2.4 |
 | session identity | What makes two sessions "the same": engine build, schema, content, mod set, every object type's cap, source ids and seed. Computed at the freeze and written to the replay header. | engine_core §2.3 |
 | schema identity | The schema part of session identity: the descriptor hash, mod-added columns and content hashes. | data_container §7.4 |
 | replay artifact | Everything needed to reproduce a session: the replay header plus every command recorded as it was consumed. A lockstep turn log is a replay artifact. | engine_core §2.3 |
@@ -46,6 +46,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | host | The application that owns the engine, usually the Python program. It is source 0. In single-player it is not a participant: its commands name no tick. "Mod host" is a different thing (see Mods). | engine_core §3.3 |
 | owner thread | The thread that created the `Engine`. Only it may make lifecycle calls and pump the engine. | python_api §2 |
 | owner-thread rule | The frame loop never waits on the engine; it polls. Only `step(n)` and the shutdown calls wait, and only on the sim or a deadline. | engine_core §3.3 |
+| step callback | A hook the host process registers at engine construction, by name. `step(n)` calls each one at most once per slice, at a tick boundary or between parks at the gate, with the tick reached; one that returns true ends the step there. The Python binding registers the signal check. Not a per-tick callback. | python_api §4.3 |
 | host endpoint | The host's own command endpoint: source 0. Its producer is the owner thread. Unpaced: its commands name no tick, and the first drain after a submit runs them. | python_api §7.1 |
 | unpaced | Of an endpoint: its commands name no tick, so the gate never waits for it. The host endpoint and every logic mod's, in single-player; in a networked session their submits go through the turn assembler. | engine_core §5.1 |
 | sim thread | The C++ thread that runs ticks once `run_sim_async()` starts it: always in a windowed session, and in a headless one that wants real time. | python_api §4.3 |
@@ -69,7 +70,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 
 | Term | Meaning | Where |
 |---|---|---|
-| engine view | The only way data leaves the engine core. A channel from the sim to one reader, made of three blocks and one atomic word. Registered before the freeze. `EngineView` in C++; in Python, the object `engine.view()` returns. | engine_core §3.1, §3.2 |
+| engine view | The only way data leaves the engine core. A channel from the sim to one reader, made of three blocks and one atomic word. Registered before the freeze. `EngineView` in C++, and its reader holds an `EngineViewHandle`; in Python, the object `engine.view()` returns. | engine_core §3.1, §3.2 |
 | `PRIVATE` mode | The only engine view mode in v1: one trusted reader, three blocks, no copying. | engine_core §3.1 |
 | `SHARED` mode | A deferred engine view mode for many readers, where each reader copies. Designed but not built. | engine_core Appendix A |
 | on-demand snapshot | What `snapshot()` returns: every `[[=viz]]` column of every live row, with `id`, copied in one pass into the snapshot buffer. The owner thread makes it, while no tick can run. No engine view stands behind it. | engine_core §3.1 |
@@ -82,7 +83,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | snapshot | Read-only, float-converted data for one tick, held in a block or copied out. Not a savegame. | engine_core §5 |
 | projection | What publish copies for one engine view: which columns (the projection spec), which rows (the row predicate), converted from fixed-point to float. | engine_core §3.1 |
 | projection spec | The column list an engine view declares. | engine_core §3.1 |
-| row predicate | An engine view's row filter. Its type (`ALL`, `AABB`, `SPHERE`, `FRUSTUM`, `TAG`) is fixed at the freeze; its parameters can change on every publish. Coarse in the engine core, refined by the reader. | engine_core §3.4 |
+| engine view spec | Everything an engine view declares at registration: its name, projection spec, identity, row predicate type, cadence, and whether it is paced, with its deadline and expiry policy. `EngineViewSpec` in C++. The freeze closes it. | engine_core §3.1 |
+| row predicate | An engine view's row filter. Its type (`All`, `AABB`, `Sphere`, `Frustum`, `Tag`) is fixed at the freeze; its parameters can change on every publish. Coarse in the engine core, refined by the reader. | engine_core §3.4 |
 | return header | A small struct the reader writes before a take and the publisher reads afterwards: predicate parameters, last tick consumed, cadence hint. It can shape the engine view, never the world. | engine_core §3.5 |
 | cadence | An engine view is published every `k` ticks. | engine_core §3.1 |
 | cadence hint | A reader's request to be published less often. The publisher may ignore it, and always does on a paced engine view. | engine_core §3.5 |
@@ -206,11 +208,11 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | operation lease | Every native call except `close()` registers itself; `close()` refuses new calls and waits for running ones. It uses the endpoint lease's protocol (engine_core §5.1). | python_api §2, §6 |
 | control block | The small object behind the operation lease. It outlives every native resource it guards, so a stale handle can still see that the engine is closed. | python_api §2 |
 | registered dependant | Anything that can outlive a tick and still touch engine memory (mod hosts, engine view blocks held by array views). `close()` unwinds them before releasing anything native. | python_api §2 |
-| staged join | How `stop_sim_async()` stops the sim thread: request stop, wake the gate, wait, then log and retry once before `failed`. | python_api §4.3 |
+| staged join | How `stop_sim_async()` stops the sim thread: request stop, wake the gate, wait, then log and retry once before `Failed`. | python_api §4.3 |
 | `shutdown_deadline` | How long each blocking shutdown step may wait. 5 seconds. | limits §1.1 |
-| `failed` | Terminal state when something could not be stopped safely. Resources are leaked on purpose and no new `Engine` may be created in the process. `on_failed_stop` decides whether it raises `EngineFailedError` or aborts. | python_api §2 |
-| resource failure | A lost GPU device or a failed memory commit in the terminal commit. Not a `failed` path: the engine cleans up its child processes and the process exits with a nonzero status. | python_api §2 |
-| `load_failed` | Terminal state after a failed load or freeze. Nothing leaks; create a new `Engine`. | python_api §2 |
+| `Failed` | Terminal state when something could not be stopped safely. Resources are leaked on purpose and no new `Engine` may be created in the process. `on_failed_stop` decides whether it raises `EngineFailedError` or aborts. | python_api §2 |
+| resource failure | A lost GPU device or a failed memory commit in the terminal commit. Not a `Failed` path: the engine cleans up its child processes and the process exits with a nonzero status. | python_api §2 |
+| `LoadFailed` | Terminal state after a failed load or freeze. Nothing leaks; create a new `Engine`. | python_api §2 |
 | disarm | Cleanup that deliberately releases nothing, because another thread may still use the resource. | patterns §4 |
 | detach | Disarm for one resource: an engine view block still referenced at `close()` is freed when its last array view drops. | python_api §7.2 |
 | async error | An error on the sim thread, stored once and re-raised on the owner thread at its next engine call. | python_api §8 |

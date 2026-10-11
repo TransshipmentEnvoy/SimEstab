@@ -452,7 +452,7 @@ Implementation rules:
     block of memory is handed to whoever still references it and freed on their schedule,
     while the rest of the context releases normally. An engine view's block detach at close
     (`design_engine_core.md` §3.1) works this way.
-  - The Python face of a disarmed context is the terminal `failed` engine state
+  - The Python face of a disarmed context is the terminal `Failed` engine state
     (`design_python_api.md` §2).
 
 - **Constructor exception safety**: if any step throws, destroy the
@@ -818,6 +818,11 @@ the exception, and the existing name stays.
 - A C++ test file is `test_<partition>.cpp`, with a dot in the partition
   written `_`: `test_engine_view.cpp`. Its Boost.Test suites end in
   `_tests`.
+- A partition tested in several files writes the topic after `--`:
+  `test_<partition>--<topic>.cpp`, with the suite `<partition>_<topic>_tests`
+  (`test_engine--session.cpp`, `engine_session_tests`). The `_tsan` and
+  `_stress` suffixes below stay as they are: they name a kind of test with
+  its own CTest label, not a topic.
 - A test of a non-exported partition is itself a unit of the module. Its
   file declares `module sim_estab;` and imports the partition, so it tests
   the internal types directly. It is compiled into the test executable only,

@@ -48,6 +48,9 @@ namespace sim_estab::core::engine::event_ring {
 
 /// What an event reports (design_python_api.md §7.3). The comment gives each one's topic.
 export enum class EngineEventType : std::uint32_t {
+    /// session.started: the session exists and tick 0 is published. Raised by the freeze,
+    /// outside a tick, with the first tick to run.
+    SessionStarted,
     SessionStopped,     ///< session.stopped: the executor met the stop at the gate; no tick runs again
     SimBacklogPaused,   ///< sim.backlog_paused: the gate stopped at high_water
     SimBacklogResumed,  ///< sim.backlog_resumed: a tick passed the gate again below high_water

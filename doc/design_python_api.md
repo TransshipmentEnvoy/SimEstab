@@ -168,10 +168,10 @@ Rules:
   (`design_logging.md` §2). A module-level `threading.Lock` guards the count, so `acquire`
   and `release` are safe from any thread on both the GIL and the free-threaded build.
 - **Two engine states come before the loop** (`design_engine_core.md` §2.4). The constructor
-  leaves the engine `configuring`: it holds resources but no world. `start_session()`
-  freezes the session and moves the engine to `running`.
+  leaves the engine `Configuring`: it holds resources but no world. `start_session()`
+  freezes the session and moves the engine to `Running`.
 
-  | In `configuring` | Calls |
+  | In `Configuring` | Calls |
   |---|---|
   | legal | `load_content`, `load_native_mod`, `register_hosts`, `register_engine_view`, `load_replay`, `poll_input`, control calls (§3), `state` |
   | raises `EngineStateError` | `step`, `render`, `run_sim_async`, `submit*`, `outcome*`, `snapshot()`, `view()`, `checksum()`, `drain_events`, `ModBus.start` |
@@ -179,7 +179,7 @@ Rules:
   `start_session()` is owner-thread-only (§6). It runs the ordered freeze of
   `design_engine_core.md` §2.4. It raises `ModLoadError` or `ReplayIdentityError` (§8)
   rather than start a session it cannot describe. It is a transition, not an idempotent
-  setter. Called in any state other than `configuring`, it raises `EngineStateError`, so a
+  setter. Called in any state other than `Configuring`, it raises `EngineStateError`, so a
   second call is reported, not silently ignored.
 
   **The freeze is always explicit, never implied by the first pump.** Identity errors belong
@@ -192,11 +192,11 @@ Rules:
   (`design_modding.md` §6) and the set of engine views (§7.2). Registration gives a dependant the
   right to be stopped, drained or detached at shutdown, instead of being torn out from
   under. The sets fill at different times, in this order:
-  - the mod bus is registered during `configuring`, before any mod host exists;
+  - the mod bus is registered during `Configuring`, before any mod host exists;
   - Engine views are registered before the freeze, which closes their set (`design_engine_core.md`
     §2.4 step 3a);
   - mod hosts spawn on `mods.start()`, after the freeze;
-  - held blocks can build up only while `running`, because reading an engine view raises before
+  - held blocks can build up only while `Running`, because reading an engine view raises before
     that.
 - **Shutdown is a chain of three steps**, in this order. The order is forced, not a matter
   of style:
@@ -204,13 +204,13 @@ Rules:
   1. **Stop registered mod hosts** with `mods.stop()`. It revokes submission endpoints,
      stops feeding inboxes and snapshots, drains the inboxes, runs `on_unload`, and joins
      under a deadline (`design_modding.md` §6). This step runs with the GIL held, because
-     `on_unload` is Python. It does not end the session: the session is still `running` when
+     `on_unload` is Python. It does not end the session: the session is still `Running` when
      it returns, and steps 2 and 3 end it. A caller may call `mods.stop()` on its own
      without closing the engine. The stopped mods leave the gate at once, so the session
      never waits for a mod that is gone (`design_engine_core.md` §3.3).
   2. **`stop_sim_async()`**: the staged native join (§4.3) and the error rendezvous. It may
      raise. It runs with the GIL released. It ends ticking for the session: the engine is
-     `stopped`, and no tick runs again. A session with no sim thread has nothing to join;
+     `Stopped`, and no tick runs again. A session with no sim thread has nothing to join;
      the call only sets the stop.
   3. **`close()`**: close the operation lease and wait for running calls, detach retained
      `PRIVATE` engine view blocks and a retained snapshot buffer, then release native
@@ -222,11 +222,11 @@ Rules:
   (§4.3).
 - **`close()` never raises because shutdown failed, and is idempotent**, mirroring "release
   and destroy are `noexcept`". An async error still pending at close is logged prominently,
-  never raised (§8). A timeout inside it enters `failed` and is logged, never raised. The
+  never raised (§8). A timeout inside it enters `Failed` and is logged, never raised. The
   one thing it raises for is being called wrongly: off the owner thread it raises
   `EngineThreadError` and does nothing, like every lifecycle call (below). The raising rendezvous points are `stop_sim_async()` and the pump calls. `close()`
   also never blocks indefinitely. Every wait inside it has a deadline, and an expiry leads
-  to the `failed` path below, not to a hang. It performs steps 1 and 2 itself if the caller
+  to the `Failed` path below, not to a hang. It performs steps 1 and 2 itself if the caller
   has not, so a bare `close()` is always a complete shutdown.
 - **Step 3 closes the operation lease.** The Python `Engine` wrapper owns a small control
   block `{ atomic access_state, atomic active_operations, mutex, condition_variable }`. It
@@ -235,14 +235,14 @@ Rules:
   transition is the linearization point: after it, no new call may enter. `close()` then
   waits, under the shutdown deadline, for `active_operations == 0`, which it reads with a
   read-modify-write (§6). Only a zero count allows detach and native release. A timeout
-  enters the terminal `failed` state and disarms the native contexts. The resources are then
+  enters the terminal `Failed` state and disarms the native contexts. The resources are then
   kept, not freed under a running call. The wait releases the GIL; Python mod host teardown
   has already finished in step 1.
 
   The `Engine`, every engine view or snapshot handle that can re-enter it, and every `ModContext`
   share ownership of this control block. Native pointers live behind it and are cleared only
   after the wait. So a stale handle can still observe `CLOSING`, `CLOSED` or `FAILED`
-  without dereferencing a destroyed wrapper. In the `failed` path, which disarms, the
+  without dereferencing a destroyed wrapper. In the `Failed` path, which disarms, the
   control block and the native graph are kept together.
 - `__enter__` delegates to construction. `__exit__` runs the three steps above, and step 3
   is unconditional, in a `finally`. If the `with` body is already unwinding an exception, a
@@ -275,42 +275,42 @@ Rules:
   that would re-enter the engine. The read-only array memory it already handed out stays
   valid (§7.2).
 
-Engine states are explicit and can be queried. The diagram shows only three of the `failed`
+Engine states are explicit and can be queried. The diagram shows only three of the `Failed`
 entry paths; the list below it has all of them.
 
 ```
-created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(run_sim_async)─► running+sim-async
+created ─(ctor ok)─► Configuring ─(start_session ok)─► Running ─(run_sim_async)─► Running+sim-async
    ▲                  │                                 │                                  │
-   │                  │                                 │                                  ├─(join timeout)─► failed
+   │                  │                                 │                                  ├─(join timeout)─► Failed
    │                  │                                 │                                  │ (stop_sim_async ok)
    │                  │                                 │                                  ▼
-   │                  │                                 ├──(stop_sim_async ok)────────► stopped
-   │                  │                                 ├──(host abandoned at stop)► failed
-   │                  ├─(load/freeze fails)─► load_failed   (terminal)
+   │                  │                                 ├──(stop_sim_async ok)────────► Stopped
+   │                  │                                 ├──(host abandoned at stop)► Failed
+   │                  ├─(load/freeze fails)─► LoadFailed   (terminal)
    │                  │                                 │
-   └── raise on reuse └──(close / __exit__)──────────┴──► closing ─(drain ok)─► closed
-                                                                    └─(drain timeout)─► failed
+   └── raise on reuse └──(close / __exit__)──────────┴──► Closing ─(drain ok)─► Closed
+                                                                    └─(drain timeout)─► Failed
 ```
 
-- **`load_failed` is terminal but clean.** It is the only state that separates "this session
+- **`LoadFailed` is terminal but clean.** It is the only state that separates "this session
   could not be described" from "this engine could not be stopped". A load or freeze failure
   leaks nothing and poisons no process, and `close()` releases normally. To recover, fix the
-  policy and construct a new `Engine`. That is legal, because `closed` is not `failed`. The
-  state exists so that `closed` never stands in for a session that never started, and so
+  policy and construct a new `Engine`. That is legal, because `Closed` is not `Failed`. The
+  state exists so that `Closed` never stands in for a session that never started, and so
   that a partly loaded session has no state to live in (`design_modding.md` §6).
 
   It is entered only once the engine has actually been touched. A failure in the policy
   stage of `load_mods` (a bad path, a missing signature, a denied capability) leaves the
-  engine `configuring`, and `load_mods` can be retried. That whole stage runs before
+  engine `Configuring`, and `load_mods` can be retried. That whole stage runs before
   `register_hosts` (`design_modding.md` §6).
 
-- **`stopped` ends ticking, not the engine.** `stop_sim_async()` enters it, whether or not a
+- **`Stopped` ends ticking, not the engine.** `stop_sim_async()` enters it, whether or not a
   sim thread ran. No tick runs again in the session, so `step()` and `run_sim_async()` raise
   `EngineStateError` (§8). Reads still work: `snapshot()`, `checksum()`, `drain_events()` and
   `outcome()`. `close()` releases as usual. To inspect a live session without ending it,
   pause and step instead (§4.3).
 
-- **`failed` is a terminal state for live execution that will not stop or finish
+- **`Failed` is a terminal state for live execution that will not stop or finish
   safely.** It has five entry paths:
   - the sim-thread join timed out (§4.3);
   - a participant's gate deadline expired under `on_expiry = Fail`
@@ -321,7 +321,7 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
   - a thread host was abandoned at shutdown step 1. Thread hosts are cooperative only: a
     host stuck in native code cannot be killed in-process, so it is logged and abandoned
     (`design_modding.md` §6). An abandoned host may still hold an engine view block and still call
-    `ctx.submit()`. So abandonment moves the engine to `failed`; it is not a warning that
+    `ctx.submit()`. So abandonment moves the engine to `Failed`; it is not a warning that
     shutdown then ignores. Process hosts never take this path. They can be killed, so their
     deadline ends in a kill, not abandonment. The kill also unlinks the host's engine view
     shared-memory object once process hosts have engine views (`design_engine_core.md` Appendix A);
@@ -331,23 +331,23 @@ created ─(ctor ok)─► configuring ─(start_session ok)─► running ─(r
   The table below follows from that: leak rather than free, because a live thread may
   still touch anything.
 
-  In `failed`, nothing a surviving thread can reach is destroyed. This is the Python face of
+  In `Failed`, nothing a surviving thread can reach is destroyed. This is the Python face of
   a disarmed RAII context (`design_patterns.md` §4): `close()` clears its witnesses without
   releasing anything.
 
-  | What | Behaviour in `failed` |
+  | What | Behaviour in `Failed` |
   |---|---|
   | engine core state, command rings, engine view blocks | kept alive (leaked), not freed under a running thread |
   | logging | `critical`, naming exactly what was leaked |
-  | `engine.state` | reports `failed` |
+  | `engine.state` | reports `Failed` |
   | any further API call | raises `sim_estab.EngineFailedError` |
   | `close()` | a no-op; it does not raise for the failure |
   | a new `Engine` | still raises `EngineExistsError`: the process is poisoned |
   | shared SDL and GPU reference counts | not dropped. A later acquire would hand a live device to a process that lost track of one (`design_patterns.md` §3) |
 
   `on_failed_stop` (§3) chooses, for every one of these paths, between raising and
-  terminating the process. `closed` is reachable only through a clean shutdown. The API
-  never reports `closed` to mean "gave up".
+  terminating the process. `Closed` is reachable only through a clean shutdown. The API
+  never reports `Closed` to mean "gave up".
 
 - **A resource the session cannot continue without ends the process, not the engine.** Two
   failures leave nothing to continue with:
@@ -599,10 +599,10 @@ Rules:
   - Escape hatch: game speed, or something like it, may one day be wanted *as game state*,
     for example a mod that slows time in the world. Model it then as engine core state changed by a
     real command. Never smuggle control calls into the input stream.
-- `on_failed_stop` chooses what happens on every `failed` entry path (§2): the sim-thread
+- `on_failed_stop` chooses what happens on every `Failed` entry path (§2): the sim-thread
   join timeout, a participant's expiry under `Fail`, an endpoint revocation timeout,
   an abandoned thread host, and the operation-lease timeout in `close()`.
-  - `"raise"` (the default) enters the terminal `failed` state and raises
+  - `"raise"` (the default) enters the terminal `Failed` state and raises
     `EngineFailedError`. The call that hit the path raises it. A path no call can raise
     from, such as a participant's expiry under `Fail` on the sim thread, raises at
     the next engine call instead, and every later call raises too. Inside
@@ -610,7 +610,7 @@ Rules:
     interactive hosts that want to save unrelated work first.
   - `"terminate"` runs the cleanup below, then hard-aborts the process. This suits CI and
     headless runs, where a hung run must die visibly instead of pretending to clean up.
-  - A lost GPU device or a failed memory commit is not a `failed` path. It ends the process
+  - A lost GPU device or a failed memory commit is not a `Failed` path. It ends the process
     whatever this field says, after the same cleanup (§2).
 - **`"terminate"` cleans up out-of-process state before aborting**, in this order. The
   process exit for a lost resource (§2) runs the same steps, then exits with a nonzero
@@ -762,21 +762,21 @@ with Engine(replace(config, headless=True, event_drain="sink")) as engine:
 - **A loaded replay puts the engine in `playback`, which closes every endpoint.** Every
   `submit*`, from every source including the host endpoint, returns `Revoked`. `playback` is
   a mode, not an engine state. It is independent of §2's diagram: a replayed session goes
-  through the same states as a live one (`configuring`, the freeze, `running`). The mode
+  through the same states as a live one (`Configuring`, the freeze, `Running`). The mode
   changes only submission and where the command stream comes from.
 
   The recorded stream is injected at consumption. It is already ordered and tick-stamped
   (§7.1), so submitting it again could be rejected differently. Without this mode, an
   ordinary `submit_batch` would add live commands to a replayed stream, and `checksum()`
   would diverge from `golden` for invisible reasons.
-- **`load_replay` is a `configuring` call** (§2), and it must be. The header supplies the
+- **`load_replay` is a `Configuring` call** (§2), and it must be. The header supplies the
   seed, which the freeze uses (`design_engine_core.md` §2.4 steps 4–6). Calling it while
-  `running` raises `EngineStateError`: by then the seed is spent, and a log file already
+  `Running` raises `EngineStateError`: by then the seed is spent, and a log file already
   carries a different session's name.
 
   **So `load_replay` comes before `start_session()`.** In practice it also comes before
   `load_mods`, since the policy can name the mods the header requires only after the header
-  has been read. Both calls leave the engine `configuring`. So the ordering constraint is
+  has been read. Both calls leave the engine `Configuring`. So the ordering constraint is
   between `load_replay` and the freeze, not between two loaders (`design_modding.md` §6). If
   a replay is loaded, `EngineConfig.seed` must be `None`. Supplying both is a `ValueError`
   at `load_replay`, not a silent precedence rule.
@@ -896,8 +896,13 @@ thread.
     parks at the gate after the tick it is running, and the exception propagates. With no
     sim thread, the calling thread runs the ticks itself and has no wait to slice. It
     checks for signals at tick boundaries instead, at least once per slice, and between
-    slices while it is parked at the gate. A `KeyboardInterrupt` there revokes the grant
-    the same way and ends the step at that boundary; no tick is cut short. A long
+    slices while it is parked at the gate. The check is a **step callback**: a hook the
+    host process registers at construction, by name, which the engine calls at most once
+    per slice with the tick reached. `libsim_estab` calls no Python itself (§0), so the
+    Python binding registers the signal check. A callback that returns true ends the step
+    at that boundary, and one that only observes returns false. A `KeyboardInterrupt`
+    there revokes the grant the same way and ends the step at that boundary; no tick is
+    cut short. A long
     tick is not a fault, and the host is not a participant whose lateness could be one. So
     nothing times the step out. A sim thread that never finishes its tick is caught at
     shutdown, by the staged join below. A `request_stop()` during a step returns the tick
@@ -935,7 +940,7 @@ thread.
     when the host drains. The backlog counts every entry the drain has not yet consumed.
     This is the ordinary backlog pause of `design_engine_core.md` §5.2, not a special case.
     Like a `pause()`, it has no deadline. A host that stops draining altogether pauses the
-    simulation and is reported; it is never timed out into `failed` (`design_engine_core.md`
+    simulation and is reported; it is never timed out into `Failed` (`design_engine_core.md`
     §3.3). `D` therefore keeps its meaning in every session, and the ring's size still holds
     under fast-forward. The ring holds one tick more than the mark, so the tick that passes
     the gate just below it always fits.
@@ -944,7 +949,7 @@ thread.
     waste. Lowering an engine view's cadence during fast-forward costs nothing observable, since
     every reader reads the latest publish either way.
   - **Stopping ends ticking.** `stop_sim_async()` ends ticking for the session, and the
-    engine is `stopped` (§2). `stop_requested` is sticky, so a stopped sim thread is never
+    engine is `Stopped` (§2). `stop_requested` is sticky, so a stopped sim thread is never
     restarted: `run_sim_async()` and `step()` raise `EngineStateError` once the session
     has stopped. `snapshot()`, `checksum()` and `close()` still work. To look at a live
     session, pause it and step it; to end it, stop it.
@@ -1008,11 +1013,11 @@ thread.
     3. on expiry, log `critical` with the current tick and system name for attribution, then
        retry once;
     4. on success, re-raise any stored sim-thread error (§8);
-    5. on the final timeout, the engine enters the terminal `failed` state (§2). This call
+    5. on the final timeout, the engine enters the terminal `Failed` state (§2). This call
        then raises `EngineFailedError`, or hard-aborts, depending on `on_failed_stop` (§3).
 
     `close()` makes the same attempt but logs instead of raising. A failed join leaves the
-    engine `failed`, with resources leaked on purpose, never freed under a live thread.
+    engine `Failed`, with resources leaked on purpose, never freed under a live thread.
     **The staged join releases the GIL** (§5 rule 2). Holding it would freeze every thread host
     for the join window. That is safe only because shutdown step 1 has already stopped the
     mod hosts (§2).
@@ -1047,7 +1052,9 @@ boundary, or how long a crossing holds the GIL. Rule 5 sets which thread may mak
 3. **No Python callbacks at tick rate.** There is no `on_tick` for Python code, host or mod.
    Frame-rate readers read snapshots and events, and the world changes only through
    commands. A mod submits whenever it likes and declares nothing; only a paced engine
-   view's take holds the gate (`design_modding.md` §3, §4.1).
+   view's take holds the gate (`design_modding.md` §3, §4.1). A step callback (§4.3) is
+   not an `on_tick`: it runs at most once per slice, not per tick, and the only one the
+   binding registers is the signal check.
 4. **Per-frame snapshot access is zero-copy** (§7.2), through a registered `PRIVATE` engine view.
    Copying a full projection every frame would dwarf every other cost in this document. That
    is why render owns an engine view instead of calling `engine.snapshot()`. An occasional
@@ -1356,7 +1363,7 @@ Rules:
   `OPEN -> REVOKING` and refuses new leases. It wakes any producer parked in the admission
   wait or an outcome wait with `Revoked`; nothing else wakes either wait early. It then
   waits, under the shutdown deadline, for calls already admitted, and stores `REVOKED`. A
-  timeout of that wait is a `failed` path (§2). Reclaiming the ring, or reopening the
+  timeout of that wait is a `Failed` path (§2). Reclaiming the ring, or reopening the
   endpoint, also waits for the producer's join: outcome reads take no lease, and the last
   submit out may still notify after the wait has returned.
 
@@ -1523,7 +1530,7 @@ Rules:
   the cost the engine view adds to every publish is visible where it is chosen.
 
   There is no duplicate `EngineConfig.views`. Host-application engine views are registered by calls
-  during `configuring`. Mod engine views are declared in manifests, and the loader registers them
+  during `Configuring`. Mod engine views are declared in manifests, and the loader registers them
   before the freeze (`design_modding.md` §6). Both paths end in the same closed registry.
 - **An engine view holds exactly one snapshot at a time, for as long as the reader likes.** `take()`
   returns the newest published block and hands the previous one back. There is no budget, no
@@ -1652,7 +1659,7 @@ Rules:
   | the array memory | stays valid and frozen. Nothing observable changes, since it was immutable anyway |
 
   If the wait for running calls misses its deadline, none of the native rows above is
-  released. The engine enters `failed`, disarms its contexts and keeps the whole resource
+  released. The engine enters `Failed`, disarms its contexts and keeps the whole resource
   graph. Detaching is allowed only after the count reaches zero.
 
   - **Detach happens only at close, never on the publish path.** Publishing writes a block
@@ -1838,16 +1845,16 @@ Rules:
   | Raised when | Type | Retryable? |
   |---|---|---|
   | Any new call once closing has linearized, or any call on a closed engine or handle (§2, §6, §7.2) | `EngineClosedError` | no; terminal for that engine |
-  | Under `on_failed_stop = "raise"`: the call that hit a `failed` entry path, such as `stop_sim_async()` on the final join timeout, and any call after it; `close()` logs instead (§2, §3) | `EngineFailedError` | no; terminal, and the process is poisoned |
+  | Under `on_failed_stop = "raise"`: the call that hit a `Failed` entry path, such as `stop_sim_async()` on the final join timeout, and any call after it; `close()` logs instead (§2, §3) | `EngineFailedError` | no; terminal, and the process is poisoned |
   | `engine_view.take()` or `snapshot()` while an array view on the previous result is alive (§7.2) | `EngineViewBusyError` | yes: drop the array views, or copy |
   | `snap.find(...)` on a snapshot from an engine view that declared `identity=False` (§7.2) | `ValueError` | no; the declaration is closed at the freeze. Use `snapshot()`, which always carries `id` |
   | `start_session()` while `EngineConfig.event_drain` is `None` (§3) | `ValueError` | no for this `Engine`: the config is frozen. Construct one that declares `"owner"` or `"sink"` |
   | `step()` under an owner drain when the event backlog reaches `high_water` (§4.3, §7.3) | `EventBacklogError` | yes: drain with `drain_events()`, then step again. The error names the tick reached |
   | Any lifecycle or pump call off the owner thread, `close()` and `snapshot()` included (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread. Nothing was touched |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
-  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` or `snapshot()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `configuring`, or a `configuring` call (including `register_engine_view`) while `running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
+  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` or `snapshot()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `Configuring`, or a `Configuring` call (including `register_engine_view`) while `Running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
   | `snap.column(...)` for a column outside the caller's capabilities (`design_modding.md` §4.1) | `ColumnNotGrantedError` | no; capabilities are fixed at load |
-  | `load_mods` failing: a mod fails discovery, verification, handshake or column registration. Or `start_session` failing at the freeze's `on_session_start` (`design_modding.md` §6) | `ModLoadError` | only before the engine is touched. A policy-stage failure leaves the engine `configuring`, and `load_mods` may be retried. From `register_hosts` on, the engine is `load_failed`, and recovery is a new `Engine` |
+  | `load_mods` failing: a mod fails discovery, verification, handshake or column registration. Or `start_session` failing at the freeze's `on_session_start` (`design_modding.md` §6) | `ModLoadError` | only before the engine is touched. A policy-stage failure leaves the engine `Configuring`, and `load_mods` may be retried. From `register_hosts` on, the engine is `LoadFailed`, and recovery is a new `Engine` |
   | A paced producer's `outcome(h)` for a tick it has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang. The host's `outcome(h)` never raises it: it returns `Pending` |
   | The computed session identity differs from a loaded replay header (§4.2) | `ReplayIdentityError` | no; the artifact does not describe this build, schema or mod set |
 
@@ -1863,7 +1870,7 @@ Rules:
   mod host loop.
   Catching `EngineClosedError` or `EngineFailedError` only hides a dead engine.
 - Fail loudly and early. A failed construction leaves no partial state (C++ constructor
-  rollback). A failed `run_*_async` leaves the engine in the plain `running` state.
+  rollback). A failed `run_*_async` leaves the engine in the plain `Running` state.
 
 ## 9. Checklist for new Python API surface
 

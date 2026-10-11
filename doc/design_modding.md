@@ -915,7 +915,7 @@ unloading function ends a session.
 
 ```python
 # pseudo-code — sim_estab.mod, driven from the host app after Engine construction
-def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
+def load_mods(engine, policy) -> ModBus:          # engine is `Configuring`
     manifests = discover(policy.paths)                # find + parse mod.toml
     manifests = toposort(manifests)                   # deterministic order (§3)
     verify_signatures(manifests, policy)              # gatekeeping (§5.4)
@@ -926,7 +926,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
     engine.register_hosts(bus)      # lifetime handover, BEFORE any host exists:
                                     #   from here on, engine.close() owns shutdown
     for m in manifests:             # nothing here starts a session; any failure raises
-        match m.tier:               #   ModLoadError and the engine is `load_failed`
+        match m.tier:               #   ModLoadError and the engine is `LoadFailed`
             case "content": engine.load_content(m)                # hashed into session
             case "core":    engine.load_native_mod(m.vetted_path) # dlopen + handshake,
                                                                   #   register_column (§5.1)
@@ -942,7 +942,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
             engine.register_engine_view(f"mod:{m.id}", columns=grants[m.id].columns,
                                         cadence=1)
 
-    return bus                      # engine is STILL `configuring`. load_mods does not
+    return bus                      # engine is STILL `Configuring`. load_mods does not
                                     #   freeze, and cannot: the freeze is the caller's
 
 # the caller, in this order and no other (design_python_api.md §2):
@@ -951,7 +951,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
 #                                   #   source ids + stable live endpoints, closed engine view set,
 #                                   #   seed, identity, log file, tick-0 snapshot,
 #                                   #   then each engine core mod's on_session_start
-#                                   #   -> engine is `running`
+#                                   #   -> engine is `Running`
 #   mods.start()                    # AFTER the freeze: spawns one host per logic mod. A
 #                                   #   host may read a snapshot in on_load, and its source
 #                                   #   id already exists
@@ -969,8 +969,8 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
 
   | Fails during | Outcome |
   |---|---|
-  | **policy work**: discovery, parsing, toposort, signature verification, capability resolution | `ModLoadError`, and the engine is still **`configuring`**. None of this touches the engine: the whole block runs before `register_hosts`, the boundary between policy work and engine load. So a bad path or a refused capability is *retryable*: fix the policy and call `load_mods` again |
-  | **engine load**: from `register_hosts` on, meaning content, `dlopen` and handshake, column registration, and registration of mod-host engine views | `ModLoadError`, and the engine is `load_failed` (`design_python_api.md` §2). No identity was computed, no header written, no mod host spawned, and no log file named for a session. Recovery is a new `Engine`. A Tier 3 failure is also final for that mod in that process (§5.1) |
+  | **policy work**: discovery, parsing, toposort, signature verification, capability resolution | `ModLoadError`, and the engine is still **`Configuring`**. None of this touches the engine: the whole block runs before `register_hosts`, the boundary between policy work and engine load. So a bad path or a refused capability is *retryable*: fix the policy and call `load_mods` again |
+  | **engine load**: from `register_hosts` on, meaning content, `dlopen` and handshake, column registration, and registration of mod-host engine views | `ModLoadError`, and the engine is `LoadFailed` (`design_python_api.md` §2). No identity was computed, no header written, no mod host spawned, and no log file named for a session. Recovery is a new `Engine`. A Tier 3 failure is also final for that mod in that process (§5.1) |
   | **freeze**: an identity mismatch against a loaded replay header, or an engine core mod failing `on_session_start` | `ReplayIdentityError` or `ModLoadError` from **`start_session()`**, not from `load_mods`. The same clean terminal state |
   | **spawn**: a mod host fails to start in `mods.start()` | **quarantine** (§4.2), not a load failure. The source id and the header entry already exist and stay correct, and the session runs without that mod's commands. The mod leaves the gate at once, with a reliable `participant.left` event (`design_engine_core.md` §3.3) |
 
@@ -1022,12 +1022,12 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
     those failures as `ModLoadError` naming the mod. The constructor cannot do that while it
     is bound by the C++ constructor-rollback rule (`design_patterns.md` §4). The pipeline
     also needs mod hashes to exist *before* session identity is fixed. That ordering has a
-    name: loading happens in `configuring`, identity is computed at the freeze, and the
+    name: loading happens in `Configuring`, identity is computed at the freeze, and the
     constructor comes before both (`design_engine_core.md` §2.4). Registration gets the
     safety without tangling the order.
   - **`load_mods` does not call `start_session()`, and no loading function starts a
     session.** The rule holds across the design docs: loading mods, replays, content and
-    native mods all leave the engine `configuring`. It is symmetric on the way down: **no
+    native mods all leave the engine `Configuring`. It is symmetric on the way down: **no
     unloading function ends a session**. `mods.stop()` leaves the session running, and
     `close()` ends it (`design_engine_core.md` §2.4, `design_python_api.md` §2). `load_mods`
     is the last step that knows the mod set is complete. That is not the same as knowing
@@ -1037,7 +1037,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   bus, so `mods.start()` raises `EngineStateError` there (`design_python_api.md` §3).
 - **Shutdown is `mods.stop()`, the first step of the shutdown sequence**
   (`design_python_api.md` §2). It runs with the GIL held, because `on_unload` is Python.
-  **It does not end the session**: the session is still `running` when it returns, and
+  **It does not end the session**: the session is still `Running` when it returns, and
   `close()` ends it. This is the rule of `mods.start()` read backwards: no loading function
   starts a session, and no unloading function ends one. A caller may stop its mods and keep
   simulating. Each stopped mod that is a participant leaves the gate as its mod host stops,
@@ -1048,7 +1048,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
      returns `Revoked`; a call that entered its lease before the change may finish. Wait for
      those running calls under `HostPolicy.shutdown_deadline`, and store `REVOKED` once they
      have left. If the deadline passes first, the endpoint stays `REVOKING` and the engine
-     takes the `failed` path (`design_engine_core.md` §5.1). `stopping` is advisory, so
+     takes the `Failed` path (`design_engine_core.md` §5.1). `stopping` is advisory, so
      `False` followed by a revoked submit is legal (§4.1).
   2. Drain the inbox, then run `on_unload`, under `HostPolicy.shutdown_deadline`. **The mod
      host drains the inbox, not the engine.** `stopping` ends the wait loop, and the mod
@@ -1079,17 +1079,17 @@ def load_mods(engine, policy) -> ModBus:          # engine is `configuring`
   - **A thread host can only cooperate.** A thread stuck in native code cannot be killed
     safely in-process. So a hung thread host is logged and **abandoned**. An abandoned mod
     host may still hold an engine view block and still call `ctx.submit()`. So abandonment **moves
-    the engine to `failed`** (`design_python_api.md` §2). The engine disarms instead of
+    the engine to `Failed`** (`design_python_api.md` §2). The engine disarms instead of
     releasing, and ending the process is the only hard recovery. This is the same defect as
     a sim thread that will not join, one level down. It gets the same answer, not a logged
     warning that shutdown then walks past.
 
   A timeout in the wait for running submits on an endpoint lease follows the same split.
   Either kill and confirm the process host's supervisor, or abandon the in-process thread
-  and put the engine in `failed`. In neither case is the ring reclaimed while its
+  and put the engine in `Failed`. In neither case is the ring reclaimed while its
   `active_submit` count may be nonzero. But the supervisor is an engine-side thread (§4.3)
   and cannot be killed, and `design_engine_core.md` §5.1 sends every endpoint-lease timeout
-  to `failed`. Which rule applies is open
+  to `Failed`. Which rule applies is open
   ([Q46](open_question.md#q46-process-host-drain-timeout)).
 
 ## 7. Checklists

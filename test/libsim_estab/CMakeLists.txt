@@ -31,6 +31,7 @@ add_executable(libsim_estab_test
     test_admission_wait_stress.cpp
     test_revoke_wait_stress.cpp
     test_engine.cpp
+    test_engine--session.cpp
 )
 
 # Enable C++20 modules if supported by compiler
@@ -62,12 +63,22 @@ if(LIBSIM_ESTAB__SANITIZE_THREAD)
     target_enable_tsan(libsim_estab_test)
 endif()
 
-# Add test to CTest
-add_test(NAME libsim_estab_test COMMAND libsim_estab_test)
+# Add test to CTest. It leaves out the cases labelled `poison`, which run alone below.
+add_test(NAME libsim_estab_test COMMAND libsim_estab_test "--run_test=!@poison")
 
 # Set test properties
 set_tests_properties(libsim_estab_test PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
+)
+
+# The failed path poisons the process: no Engine can be constructed again in it
+# (design_python_api.md §2). Its case runs alone, under its own entry, labelled `poison`.
+add_test(NAME engine_failed_path
+    COMMAND libsim_estab_test --run_test=engine_session_tests/test_the_failed_path_poisons_the_process)
+set_tests_properties(engine_failed_path PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    LABELS "poison"
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
 )
 

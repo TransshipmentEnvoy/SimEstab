@@ -39,7 +39,7 @@ namespace {
 /// The first tick a new session runs: the freeze has published tick 0
 constexpr Tick first_tick{1};
 
-bool never_interrupted() { return false; }
+bool never_interrupted(Tick) { return false; }
 
 /// An owner-drained event ring that no test fills unless it means to
 EventRing roomy_ring() { return EventRing{64, 8, EventDrain::Owner}; }
@@ -242,7 +242,7 @@ BOOST_AUTO_TEST_CASE(test_an_interrupt_ends_the_step_at_a_tick_boundary) {
     const TickGate::Clock::time_point before = TickGate::Clock::now();
     const StepResult result                  = run_step(
         tick_gate, 1'000'000'000'000, [&](Tick) { ++ticks; },
-        [&] {
+        [&](Tick) {
             ++checks;
             return true;
         });
@@ -268,7 +268,7 @@ BOOST_AUTO_TEST_CASE(test_an_interrupt_ends_a_step_that_waits_at_the_gate) {
 
     const StepResult result = run_step(
         tick_gate, 10, [&](Tick) { ++ticks; },
-        [&] {
+        [&](Tick) {
             ++checks;
             return checks == 2;
         });
@@ -291,7 +291,7 @@ BOOST_AUTO_TEST_CASE(test_a_step_after_an_interrupted_wait_gets_a_whole_deadline
     TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = 300;
     tick_gate.participants[0].on_expiry   = OnExpiry::Fail;
-    const auto interrupt_at_first_check   = [] { return true; };
+    const auto interrupt_at_first_check   = [](Tick) { return true; };
 
     const StepResult first = run_step(tick_gate, 1, [](Tick) {}, interrupt_at_first_check);
     BOOST_TEST((first.end == StepEnd::Interrupted));
@@ -312,7 +312,7 @@ BOOST_AUTO_TEST_CASE(test_a_throwing_interrupt_check_leaves_no_deadline_clock) {
     EventRing events = roomy_ring();
     TickGate tick_gate{1, first_tick, events};
     tick_gate.participants[0].deadline_ms = 3'600'000;
-    const auto throw_at_first_check       = []() -> bool { throw std::runtime_error("interrupted"); };
+    const auto throw_at_first_check       = [](Tick) -> bool { throw std::runtime_error("interrupted"); };
 
     BOOST_CHECK_THROW((void)run_step(tick_gate, 1, [](Tick) {}, throw_at_first_check), std::runtime_error);
 

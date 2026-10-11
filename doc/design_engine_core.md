@@ -338,21 +338,21 @@ computed and the world stops being configurable. The Python state machine is in
 `design_python_api.md` §2. Who calls the freeze, and why loading comes before it, is in
 `design_modding.md` §6.
 
-- **`configuring`**: resources are acquired, but no world is running. Allowed: load content,
+- **`Configuring`**: resources are acquired, but no world is running. Allowed: load content,
   load and register engine core mods (including `register_column`, `design_data_container.md`
   §7.3), register mod hosts, load a replay artifact, and control calls (§1). Not allowed:
   ticks, command submission, engine view reads and checksums. Each of those is defined in terms of
   a session, and there is none yet.
 - **The freeze**: one call on the owner thread, running the ordered steps below. **No
   loading function performs the freeze.** Loading content, loading a replay, loading native
-  mods and registering mod hosts all leave the engine `configuring`. The caller always
+  mods and registering mod hosts all leave the engine `Configuring`. The caller always
   starts the session with a separate call. The reverse also holds: **no unloading function
   ends a session.** Stopping mod hosts, draining inboxes and running `on_unload` leave the
   session running; `close()` ends it (`design_modding.md` §6, `design_python_api.md` §2). If
   a loader froze as a side effect, session identity would depend on which loader ran and in
   what order. It would also drag every step that must follow the freeze, starting with
   spawning mod hosts, into the loader.
-- **`running`**: the world exists and its identity is fixed. Nothing in §2.3's list may
+- **`Running`**: the world exists and its identity is fixed. Nothing in §2.3's list may
   change until the engine closes: no schema change, no mod load, no reseed, at any tier
   (`design_data_container.md` §7.4, `design_modding.md` §5.1).
 
@@ -410,9 +410,9 @@ terminal state instead of a half-started session.
    (`design_logging.md` §2).
 9. **Publish tick 0 into every registered engine view** and emit `session.started`. This marks the
    start, before tick 1. The owner thread publishes it, because no sim thread exists yet
-   (`run_sim_async` is not allowed in `configuring`). It is the only publish not made by the
+   (`run_sim_async` is not allowed in `Configuring`). It is the only publish not made by the
    tick loop, and §3.2 needs no special case for it. Reading an engine view is not allowed in
-   `configuring`, so no reader can see an engine view that has never been published. That state is
+   `Configuring`, so no reader can see an engine view that has never been published. That state is
    unreachable rather than defined, and the protocol needs no sentinel value.
 
 Steps 1 to 7 compute and allocate over state that is already loaded, plus one call into code
@@ -505,7 +505,7 @@ take, whether it runs the ticks itself or waits for the sim thread to run them (
 when that thread is also the engine view's reader, a step that runs past the engine view's
 next publish leaves the gate waiting for a take that cannot come. The gate waits out the
 engine view's deadline and then applies its expiry policy, and under `Fail` the session ends
-in `failed`. After taking the block of tick `t`, such a reader steps to `t + k` at most, then
+in `Failed`. After taking the block of tick `t`, such a reader steps to `t + k` at most, then
 takes again. A reader on another thread has no such limit. The engine does not detect the
 case: an engine view's reader is whichever thread takes it (`design_python_api.md` §6).
 
@@ -632,7 +632,7 @@ would, in one way:
   spec)`, not one full copy. Two engine views over the same columns cost twice. That is the price
   of keeping blocks without copying, for both.
 - **The row predicate shrinks the gather term.** A render engine view over 10⁷ live rows whose
-  `FRUSTUM` matches 10⁴ gathers 10⁴ rows. Without a predicate, the same engine view is 320 MB per
+  `Frustum` matches 10⁴ gathers 10⁴ rows. Without a predicate, the same engine view is 320 MB per
   publish at a 32-byte spec (`design_limits.md` §5), and no choice of columns makes that
   affordable. That is why the row filter is a declaration and not an optimization.
 - **The scan term remains, and it only reads.** A spatial predicate reads its input columns
@@ -915,8 +915,9 @@ can run.
 
 With no sim thread, `step(n)` runs this loop on the calling thread. Where the sim thread
 would park on the host's own grant (`HOST_PAUSE`) or stop, the calling thread returns
-instead. It checks for signals at tick boundaries, and an interrupt ends the step there
-(`design_python_api.md` §4.3).
+instead. It calls the step callbacks the host process registered at construction, at most
+once per slice, at a tick boundary or between parks; one that returns true ends the step
+there (`design_python_api.md` §4.3).
 
 A participant becomes ready, and a control call changes a host field, the same way:
 
@@ -1112,7 +1113,7 @@ not a preference:
 
 | `on_expiry` | Behaviour | Use |
 |---|---|---|
-| `Fail` | log `critical` naming the participant and tick, then the engine enters the terminal `failed` state | a participant whose lateness is a defect, not a load condition |
+| `Fail` | log `critical` naming the participant and tick, then the engine enters the terminal `Failed` state | a participant whose lateness is a defect, not a load condition |
 | `ContinueWithout` | `active.store(0, release)`, so later readiness stores cannot re-enter the conjunction; emit a reliable-class event; keep ticking | a paced recorder or mod whose absence cannot change what the engine core computes |
 | `Drop` | **escalate to the server tier and accept its answer**; never remove the participant locally | a network peer |
 | `Suspend` | stop feeding it, keep its endpoint, and take it out of the conjunction until it drains; reversible | a mod that is not keeping up (`design_modding.md` §4.2) |
@@ -1181,11 +1182,11 @@ set:
 
 | Type | Parameters | Use |
 |---|---|---|
-| `ALL` | none | the default, and what every engine view has until measurement says otherwise |
+| `All` | none | the default, and what every engine view has until measurement says otherwise |
 | `AABB` | min, max | |
-| `SPHERE` | centre, radius | the agent case: "what is near me" |
-| `FRUSTUM` | six planes | the render case |
-| `TAG` | mask | over a declared bitset column |
+| `Sphere` | centre, radius | the agent case: "what is near me" |
+| `Frustum` | six planes | the render case |
+| `Tag` | mask | over a declared bitset column |
 
 **The predicate is not a callback.** An arbitrary `bool(row)` would put unbounded
 third-party code on the sim thread and destroy the property this document depends on: cost
@@ -1195,14 +1196,14 @@ publish, through the return header (§3.5).
 
 **The engine chooses how to evaluate a type.** A linear scan over the predicate's input
 columns always works, and it is the baseline charged in §3.1. If the engine core already keeps a
-spatial structure for its own systems, `SPHERE` and `FRUSTUM` may be answered from it, and
+spatial structure for its own systems, `Sphere` and `Frustum` may be answered from it, and
 the scan cost disappears. That is an implementation choice behind the declaration. A reader
 never declares or depends on it.
 
 **The algorithm is already specified elsewhere.** Evaluate the predicate to a mask, AND it
 with the live bitmap, exclusive-scan the mask into destination offsets, and gather each
 column. That is exactly the publish scan and gather (`design_data_container.md` §5.1), which
-every engine view runs anyway; `ALL` is the live bitmap alone. The scan keeps ascending slot order
+every engine view runs anyway; `All` is the live bitmap alone. The scan keeps ascending slot order
 without extra care. The gather may run in parallel on the worker pool, because every
 destination comes from the prefix sum and the world does not change between the terminal
 commit and the next tick. Where the scan is charged is open
@@ -1229,7 +1230,7 @@ draws needs no id and does not pay for one. Looking an entity up by id in such a
 view's snapshot raises (`design_python_api.md` §7.2). An on-demand snapshot always carries
 `id` (§3.1).
 
-**Filtering is turned on by measurement.** `ALL` is the default, and it is right at 10⁵ live
+**Filtering is turned on by measurement.** `All` is the default, and it is right at 10⁵ live
 rows, where a full projection is a few megabytes and a predicate would add complexity for no
 gain. Row filtering is a scaling feature, turned on when `publish bytes/second` calls for
 it.
@@ -1885,7 +1886,7 @@ not for `revoke`. A reopen before the join could also let a woken outcome wait r
 again and miss the revocation.
 
 The endpoint and its control storage stay alive until the producer has been joined. If the
-deadline expires, the engine follows the existing `failed` and disarm path instead of
+deadline expires, the engine follows the existing `Failed` and disarm path instead of
 freeing memory under a caller. Polling `ctx.stopping` is only advisory: seeing `false` and
 then getting `Revoked` is legal, because revocation may happen between two calls. The submit
 result is the only admission fact a caller acts on (`design_modding.md` §4.1). A scope guard
@@ -2196,7 +2197,7 @@ synchronously, and the command is not enqueued. The admission wait has no deadli
 own, on purpose: its bound is structural (the oldest tick in the ring running), not a
 timer. A session that is not advancing is paused or held at the gate, and the waiter waits
 with it (§3.3). Revocation waits, under the shutdown deadline, for leases that already linearized.
-If that deadline expires, the engine enters the terminal `failed` state and disarms instead
+If that deadline expires, the engine enters the terminal `Failed` state and disarms instead
 of reclaiming the endpoint.
 
 **Verification.** The concurrency test is a sanitizer test. It checks that every command
@@ -2452,7 +2453,7 @@ Each step is labelled with the milestone it belongs to (see `glossary.md`).
 4. **M4: the phase-structured scheduler**: explicit system list, per-column access
    declarations, the phase cut and its invariant check, staged buffers, fixed-order commit.
    Prove that 1 thread and N threads give the same checksums.
-5. **M5 and M6: the first real system, and a renderer reading an engine view with the `ALL`
+5. **M5 and M6: the first real system, and a renderer reading an engine view with the `All`
    predicate**, with windowed sessions running their ticks on the sim thread
    (`design_python_api.md` §4.3); then grow. A row predicate (§3.4) is added when `publish bytes/second` calls
    for one, not before.

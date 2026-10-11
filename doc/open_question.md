@@ -90,7 +90,7 @@ Every object type has a cap, 2²⁴ unless declared (`data_container` §2.1). A 
 game rule (reject deterministically) or a ceiling (stop and report, the default)
 (`data_container` §2.2). The default cap is a ceiling. Neither `[[=cap(N)]]` nor
 `EngineConfig.entity_capacity` can say which kind. What "stop" means is undefined: pause or
-`failed`? For a Tier 3 mod's system, "suspend that mod" is defined only for Tier 2 mods. M3.
+`Failed`? For a Tier 3 mod's system, "suspend that mod" is defined only for Tier 2 mods. M3.
 
 The answer also sizes the `T·S` term of `E` (`engine_core` §5.2; `limits` §2). That term
 allows one cap refusal per object type and source, for every object type and every source.
@@ -223,7 +223,7 @@ dropping or merging events by delivery class. M7.
 
 `modding` §6 says to kill the process and confirm through its supervisor, but the supervisor
 is an engine-side thread (`modding` §4.3) and cannot be killed. `engine_core` §5.1 says an
-endpoint-lease timeout enters `failed`. M7.
+endpoint-lease timeout enters `Failed`. M7.
 
 ### Q47. Unloading a suspended mod
 

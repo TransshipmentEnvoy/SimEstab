@@ -43,7 +43,7 @@ constexpr Tick first_tick{1};
 /// An `until` that no test reaches, so a lost wake-up hangs
 Clock::time_point far() { return Clock::now() + std::chrono::hours(1); }
 
-bool never_interrupted() { return false; }
+bool never_interrupted(Tick) { return false; }
 
 } // namespace
 

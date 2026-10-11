@@ -47,7 +47,8 @@ export import :engine;
  * - sim_estab::core::gpu - Headless GPU compute context
  * - sim_estab::core::util - General-purpose utilities (thread_util, ...)
  * - sim_estab::core::engine::tick - The tick, the engine's clock
- * - sim_estab::core::engine - The engine: the tick loop, and the value types of its
- *   mechanisms (engine::view, engine::event_ring, engine::gate, engine::endpoint)
+ * - sim_estab::core::engine - The engine: the session, the executor and the tick loop, and
+ *   the value types of its mechanisms (engine::view, engine::event_ring, engine::gate,
+ *   engine::endpoint)
  * - (Additional subsystems to be added as modules are migrated)
  */
