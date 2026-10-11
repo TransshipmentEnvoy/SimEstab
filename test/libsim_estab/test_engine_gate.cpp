@@ -7,7 +7,7 @@
  * (design_engine_core.md §3.3, §5.2). They cannot find a lost wake-up. The stress tests in
  * test_gate_stress.cpp and test_tick_progress_stress.cpp do that.
  *
- * sim_estab:engine.gate is not exported, so this file is a unit of the module
+ * The mechanism of sim_estab:engine.gate is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
  */
 

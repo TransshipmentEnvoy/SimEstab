@@ -7,7 +7,7 @@
  * They cannot tell a correctly ordered implementation from a wrongly ordered one. The race
  * tests in test_engine_view_tsan.cpp do that.
  *
- * sim_estab:engine.view is not exported, so this file is a unit of the module
+ * The mechanism of sim_estab:engine.view is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
  */
 

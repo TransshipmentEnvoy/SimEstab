@@ -10,7 +10,7 @@
  * reuses a block only after the reader has finished with it), and the return header that
  * rides the reverse edge (design_engine_core.md §3.5).
  *
- * sim_estab:engine.view is not exported, so this file is a unit of the module
+ * The mechanism of sim_estab:engine.view is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
  */
 

@@ -1,6 +1,6 @@
 /**
  * @file sim_estab--engine.gate.cppm
- * @brief Non-exported module partition for the gate
+ * @brief Module partition for the gate; only its value type is exported
  *
  * The gate is the one place the engine core waits: before each tick, until nothing blocks
  * the tick (design_engine_core.md §3.3). This partition holds the gate's state, the calls
@@ -40,8 +40,9 @@
  * Both follow the wake-up rule: a predicate a parked thread waits on changes only under
  * `gate.m`, followed by a notify. Nothing waits, logs or calls out while holding `gate.m`.
  *
- * This partition is internal: an importer of sim_estab cannot see it. Its tests are units
- * of the module (design_patterns.md §10).
+ * This partition exports only the value type a registration declares: the expiry policy.
+ * The mechanism itself is not exported: an importer of sim_estab cannot name the gate.
+ * Its tests are units of the module (design_patterns.md §1, §10).
  */
 
 // Global module fragment - minimal headers only
@@ -59,7 +60,7 @@ module;
 #include <type_traits>
 
 // Module declaration
-module sim_estab:engine.gate;
+export module sim_estab:engine.gate;
 
 import :types;
 import :engine.event_ring;
@@ -72,7 +73,7 @@ namespace sim_estab::core::engine::gate {
 
 /// The expiry policy: what happens when a participant's deadline passes
 /// (design_engine_core.md §3.3). Drop arrives with network peers and Suspend with mods.
-enum class OnExpiry : std::uint32_t {
+export enum class OnExpiry : std::uint32_t {
     Fail,            ///< log critical; the engine enters the terminal failed state
     ContinueWithout, ///< the participant leaves the conjunction for good; ticks go on
 };

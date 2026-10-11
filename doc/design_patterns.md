@@ -46,6 +46,14 @@ How to read this doc:
   **non-exported partition**, declared without `export`
   (`module sim_estab:<name>;`). Every unit of the module can import it. An
   importer of `sim_estab` cannot, and `sim_estab.cppm` cannot re-export it.
+- A mechanism partition whose value types a public API names is an interface
+  partition that marks `export` on those types only
+  (`export module sim_estab:engine.gate;` with `export enum class OnExpiry`).
+  The mechanism's own structs carry no `export`, so an importer cannot name
+  them. `sim_estab.cppm` re-exports the partition, and the public partition
+  lifts the value types under its own name with `export using`. An exported
+  `using` can only name an exported entity, which is why the types are
+  exported where they are declared rather than re-exported from elsewhere.
 - Optional/heavy subsystems that pull extra dependencies live in a
   **separate module** (`sim_estab.viz`). That module does `import sim_estab;`.
 - Namespaces follow the modules. The primary module is the core, the program

@@ -7,7 +7,7 @@
  * lease and the deadlock rule (design_engine_core.md §5.1). They run on one thread;
  * test_endpoint_tsan.cpp runs endpoints across threads.
  *
- * sim_estab:engine.endpoint is not exported, so this file is a unit of the module
+ * The mechanism of sim_estab:engine.endpoint is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
  */
 

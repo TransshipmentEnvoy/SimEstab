@@ -6,8 +6,9 @@
  * loop that passes the gate, runs one tick and repeats (design_engine_core.md §3.3). The
  * gate itself is in sim_estab:engine.gate.
  *
- * Only the tick type is exported, as engine::Tick. The tick loop is internal, and its tests
- * are units of the module (design_patterns.md §10).
+ * It exports the tick type as engine::Tick, and the value types of the mechanisms under the
+ * engine's name: what a caller submits, reads and declares. The tick loop is internal, and
+ * its tests are units of the module (design_patterns.md §10).
  */
 
 // Global module fragment - minimal headers only
@@ -22,7 +23,10 @@ module;
 export module sim_estab:engine;
 
 import :types;
+import :engine.view;
+import :engine.event_ring;
 import :engine.gate;
+import :engine.endpoint;
 
 /**
  * @namespace sim_estab::core::engine
@@ -32,6 +36,20 @@ namespace sim_estab::core::engine {
 
 /// The tick, under the engine's name. Its home is sim_estab:types.
 export using types::Tick;
+
+/// The value types of the engine's mechanisms, under the engine's name. Each one's home is
+/// its mechanism's partition.
+export using view::Block;
+export using event_ring::EngineEvent;
+export using event_ring::EngineEventType;
+export using event_ring::EventDrain;
+export using gate::OnExpiry;
+export using endpoint::Command;
+export using endpoint::CommandHandle;
+export using endpoint::CommandOutcome;
+export using endpoint::CommandOutcomeType;
+export using endpoint::Rejection;
+export using endpoint::provisional_command_payload_bytes;
 
 /// A step checks for an interrupt at least once per slice: at a tick boundary, and between
 /// slices while it waits at the gate (design_python_api.md §4.3)

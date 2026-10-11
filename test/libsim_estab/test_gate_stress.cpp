@@ -10,7 +10,7 @@
  * The executor here calls pass() with an `until` it never reaches. A step's slices would
  * hide a lost wake-up, because the next slice finds the change.
  *
- * sim_estab:engine.gate is not exported, so this file is a unit of the module
+ * The mechanism of sim_estab:engine.gate is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
  */
 

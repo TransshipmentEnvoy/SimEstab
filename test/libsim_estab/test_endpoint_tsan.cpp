@@ -11,7 +11,7 @@
  * writes a slot again only after the drain has read it), both edges of an outcome, and the
  * endpoint lease (no submit touches the ring after revoke() returns).
  *
- * sim_estab:engine.endpoint is not exported, so this file is a unit of the module
+ * The mechanism of sim_estab:engine.endpoint is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
  */
 

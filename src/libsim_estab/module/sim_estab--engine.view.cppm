@@ -1,6 +1,6 @@
 /**
  * @file sim_estab--engine.view.cppm
- * @brief Non-exported module partition for the engine view
+ * @brief Module partition for the engine view; only its value type is exported
  *
  * An engine view carries snapshots from the publisher to one reader: three blocks and one
  * atomic word (design_engine_core.md §3.2). The reader's return header travels back on the
@@ -16,8 +16,9 @@
  * - Progress: the publisher and the reader are wait-free, one exchange each.
  * - Failure: none. A due publish always has a writable block.
  *
- * This partition is internal: an importer of sim_estab cannot see it. Its tests are units
- * of the module (design_patterns.md §10).
+ * This partition exports only the value type a reader handles: the block. The mechanism
+ * itself is not exported: an importer of sim_estab cannot name the engine view. Its tests
+ * are units of the module (design_patterns.md §1, §10).
  */
 
 // Global module fragment - minimal headers only
@@ -31,7 +32,7 @@ module;
 #include <memory>
 
 // Module declaration
-module sim_estab:engine.view;
+export module sim_estab:engine.view;
 
 import :types;
 
@@ -52,7 +53,7 @@ inline constexpr std::size_t provisional_predicate_params_bytes = 96;
  * Until the world exists a block carries opaque bytes (design_engine_core.md §7 step 1).
  * The engine publishes none. Tests fill them, to check that a block arrives whole.
  */
-struct Block {
+export struct Block {
     std::uint64_t tick = 0;               ///< the tick this block shows
     std::uint32_t size = 0;               ///< payload bytes in use
     std::unique_ptr<std::byte[]> payload; ///< `max_payload_bytes` bytes, allocated once

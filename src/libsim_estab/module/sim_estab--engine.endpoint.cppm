@@ -1,6 +1,6 @@
 /**
  * @file sim_estab--engine.endpoint.cppm
- * @brief Non-exported module partition for command endpoints
+ * @brief Module partition for command endpoints; only its value types are exported
  *
  * An endpoint carries one source's commands to the executor (design_engine_core.md §5.1).
  * Its command ring is a single-producer, single-consumer ring: the producer submits on its
@@ -57,8 +57,10 @@
  * rule's one stated exception, and it rests on the read-modify-write above. The lock order
  * is `gate.m`, then the endpoint's `m`, and only revoke() holds both.
  *
- * This partition is internal: an importer of sim_estab cannot see it. Its tests are units
- * of the module (design_patterns.md §10).
+ * This partition exports only the value types a producer handles: a command, its handle,
+ * its outcome and a rejection. The mechanism itself is not exported: an importer of
+ * sim_estab cannot name an endpoint. Its tests are units of the module
+ * (design_patterns.md §1, §10).
  */
 
 // Global module fragment - minimal headers only
@@ -77,7 +79,7 @@ module;
 #include <span>
 
 // Module declaration
-module sim_estab:engine.endpoint;
+export module sim_estab:engine.endpoint;
 
 import :types;
 import :limits;
@@ -91,14 +93,14 @@ namespace sim_estab::core::engine::endpoint {
 
 /// The bytes of a command's payload. Provisional: the slot size waits for the M2 payload
 /// schema (open_question.md Q22). 56 bytes make a Command one cache line.
-inline constexpr std::size_t provisional_command_payload_bytes = 56;
+export inline constexpr std::size_t provisional_command_payload_bytes = 56;
 
 /**
  * One command, as it sits in a ring slot (design_engine_core.md §5.1)
  *
  * Opaque bytes until M2 defines the command payload (design_engine_core.md §7 step 1).
  */
-struct Command {
+export struct Command {
     std::uint64_t tick = 0; ///< the tick it acts on; unused on an unpaced endpoint
     std::array<std::byte, provisional_command_payload_bytes> payload{};
 
@@ -107,7 +109,7 @@ struct Command {
 
 /// Why submit() refused a command (design_engine_core.md §5.1). Invalid arrives with the
 /// payload schema (M2) and capabilities (M7), and HostError with process hosts (M7).
-enum class Rejection : std::uint32_t {
+export enum class Rejection : std::uint32_t {
     QueueFull,  ///< more than `capacity` commands for one tick; unpaced: waiting for the next drain
     TooLate,    ///< the named tick is past, or this producer has declared it ready
     OutOfOrder, ///< the named tick is earlier than one already named here
@@ -117,7 +119,7 @@ enum class Rejection : std::uint32_t {
 
 /// What a producer reads a command's outcome with: the endpoint's source and the command's
 /// position in its ring
-struct CommandHandle {
+export struct CommandHandle {
     std::uint32_t source   = 0;
     std::uint64_t position = 0; ///< the ring's `write` before the command's submit
 
@@ -125,7 +127,7 @@ struct CommandHandle {
 };
 
 /// What happened to a command (design_engine_core.md §5.1)
-enum class CommandOutcomeType : std::uint32_t {
+export enum class CommandOutcomeType : std::uint32_t {
     Pending, ///< the tick that runs it has not run yet
     Applied, ///< it ran
     Dropped, ///< the drain refused it: its tick was past (S3)
@@ -133,7 +135,7 @@ enum class CommandOutcomeType : std::uint32_t {
 };
 
 /// A command's outcome, and the tick it concerns
-struct CommandOutcome {
+export struct CommandOutcome {
     CommandOutcomeType type = CommandOutcomeType::Pending;
     /// The tick that ran or dropped it. Pending: the tick it names, or once drained the tick
     /// that drained it; 0 for an unpaced command not drained yet. Expired: 0.

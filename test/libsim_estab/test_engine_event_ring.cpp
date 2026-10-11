@@ -6,7 +6,7 @@
  * list's place in that order, and the sink (design_engine_core.md §5.2). They run on one
  * thread; test_event_ring_tsan.cpp runs the ring across threads.
  *
- * sim_estab:engine.event_ring is not exported, so this file is a unit of the module
+ * The mechanism of sim_estab:engine.event_ring is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
  */
 

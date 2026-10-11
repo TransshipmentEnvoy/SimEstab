@@ -1,6 +1,6 @@
 /**
  * @file sim_estab--engine.event_ring.cppm
- * @brief Non-exported module partition for the event ring
+ * @brief Module partition for the event ring; only its value types are exported
  *
  * The event ring carries events from the executor to the session's event drain
  * (design_engine_core.md §5.2). Only the engine raises events, about itself: the session, the
@@ -21,8 +21,9 @@
  * - Failure: none. The gate stops the executor at `high_water`, so the ring cannot overflow.
  *   An enqueue into a full ring is a programming error, and aborts.
  *
- * This partition is internal: an importer of sim_estab cannot see it. Its tests are units
- * of the module (design_patterns.md §10).
+ * This partition exports only the value types a drain's reader handles: an event, its
+ * type and the drain. The mechanism itself is not exported: an importer of sim_estab
+ * cannot name the ring. Its tests are units of the module (design_patterns.md §1, §10).
  */
 
 // Global module fragment - minimal headers only
@@ -37,7 +38,7 @@ module;
 #include <vector>
 
 // Module declaration
-module sim_estab:engine.event_ring;
+export module sim_estab:engine.event_ring;
 
 /**
  * @namespace sim_estab::core::engine::event_ring
@@ -46,7 +47,7 @@ module sim_estab:engine.event_ring;
 namespace sim_estab::core::engine::event_ring {
 
 /// What an event reports (design_python_api.md §7.3). The comment gives each one's topic.
-enum class EngineEventType : std::uint32_t {
+export enum class EngineEventType : std::uint32_t {
     SessionStopped,     ///< session.stopped: the executor met the stop at the gate; no tick runs again
     SimBacklogPaused,   ///< sim.backlog_paused: the gate stopped at high_water
     SimBacklogResumed,  ///< sim.backlog_resumed: a tick passed the gate again below high_water
@@ -61,7 +62,7 @@ enum class EngineEventType : std::uint32_t {
  *
  * A fixed record until M2 defines the event payload (design_engine_core.md §7 step 1).
  */
-struct EngineEvent {
+export struct EngineEvent {
     std::uint64_t tick    = 0; ///< the tick running when it was raised; between ticks, the next one to run
     EngineEventType type  = EngineEventType::SessionStopped;
     std::uint32_t subject = 0; ///< what it is about: a participant index, a source id or an engine view index
@@ -71,7 +72,7 @@ struct EngineEvent {
 };
 
 /// Who empties the event ring: `EngineConfig.event_drain` (design_python_api.md §3)
-enum class EventDrain : std::uint32_t {
+export enum class EventDrain : std::uint32_t {
     Owner, ///< the owner thread, with drain_events(), between ticks
     Sink,  ///< the executor, after every tick and when a step ends; it counts and keeps nothing
 };

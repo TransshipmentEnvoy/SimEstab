@@ -10,7 +10,7 @@
  *
  * Every wait here has an `until` no test reaches, so a lost wake-up hangs.
  *
- * sim_estab:engine.endpoint is not exported, so this file is a unit of the module
+ * The mechanism of sim_estab:engine.endpoint is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
  */
 

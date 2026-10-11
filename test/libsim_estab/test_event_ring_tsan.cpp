@@ -10,7 +10,7 @@
  * They cover the forward edge (a drained event is whole), the reverse edge (the executor
  * writes a slot again only after the drain has read it), and the side list's lock.
  *
- * sim_estab:engine.event_ring is not exported, so this file is a unit of the module
+ * The mechanism of sim_estab:engine.event_ring is not exported, so this file is a unit of the module
  * (design_patterns.md §10).
  */
 

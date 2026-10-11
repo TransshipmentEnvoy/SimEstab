@@ -15,13 +15,18 @@
 
 export module sim_estab;
 
-// Re-export all submodules
+// Re-export all submodules. The engine's mechanism partitions export only the value types
+// a caller handles; the mechanisms themselves stay unexported (design_patterns.md §1).
 export import :error;
 export import :limits;
 export import :log;
 export import :gpu;
 export import :util;
 export import :types;
+export import :engine.view;
+export import :engine.event_ring;
+export import :engine.gate;
+export import :engine.endpoint;
 export import :engine;
 
 /**
@@ -42,6 +47,7 @@ export import :engine;
  * - sim_estab::core::gpu - Headless GPU compute context
  * - sim_estab::core::util - General-purpose utilities (thread_util, ...)
  * - sim_estab::core::types - Strong types of function signatures (Tick)
- * - sim_estab::core::engine - The engine: the tick loop
+ * - sim_estab::core::engine - The engine: the tick loop, and the value types of its
+ *   mechanisms (engine::view, engine::event_ring, engine::gate, engine::endpoint)
  * - (Additional subsystems to be added as modules are migrated)
  */
