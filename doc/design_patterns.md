@@ -765,7 +765,7 @@ the exception, and the existing name stays.
 
 - A **protocol value** is ALL_CAPS. It is an internal state of a
   cross-thread mechanism, and the design docs write it the same way:
-  `OPEN`, `REVOKING`, `EVENT_BACKLOG`. So code and pseudo-code match letter
+  `OPEN`, `CLOSING`, `EVENT_BACKLOG`. So code and pseudo-code match letter
   for letter. A protocol value is not bound to Python.
 - An **API value** is PascalCase. It is a value a caller sees:
   `GPUBackend::Vulkan`, `BufferUsage::TransferSrc`.

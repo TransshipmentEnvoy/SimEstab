@@ -17,6 +17,7 @@ module sim_estab;
 import :engine.endpoint;
 import :engine.event_ring;
 import :engine.gate;
+import :engine.lease;
 
 using namespace sim_estab::core::log;
 using sim_estab::core::engine::event_ring::EngineEventType;
@@ -65,93 +66,54 @@ CommandOutcome outcome_at(const Endpoint& endpoint, std::uint64_t position) noex
     return endpoint.outcome_slot[slot]; // its type was written before (G5)
 }
 
-/// Leaves the endpoint lease on every way out of a submit that entered it
-class LeaseGuard {
-public:
-    explicit LeaseGuard(Endpoint& leased) : endpoint(leased) {}
-    LeaseGuard(const LeaseGuard&)            = delete;
-    LeaseGuard& operator=(const LeaseGuard&) = delete;
-    ~LeaseGuard() { endpoint.leave(); }
-
-private:
-    Endpoint& endpoint;
-};
-
 } // namespace
 
 Endpoint::Endpoint(gate::TickGate& session_gate, std::uint32_t source_id, std::uint32_t per_tick_capacity)
     : ring(depth_for(per_tick_capacity, 0)), outcome_slot(std::make_unique<CommandOutcome[]>(ring.depth)),
       tick_gate(session_gate), source(source_id), capacity(per_tick_capacity), margin(0), unpaced(true), participant(0),
-      lease_state(LeaseState::REVOKED), active_submit(0) {}
+      lease(LeaseState::CLOSED) {}
 
 Endpoint::Endpoint(gate::TickGate& session_gate, std::uint32_t source_id, std::uint32_t per_tick_capacity,
                    std::uint32_t participant_index, std::uint32_t stamp_margin)
     : ring(depth_for(per_tick_capacity, stamp_margin)), outcome_slot(std::make_unique<CommandOutcome[]>(ring.depth)),
       tick_gate(session_gate), source(source_id), capacity(per_tick_capacity), margin(stamp_margin), unpaced(false),
-      participant(checked_participant(session_gate, participant_index)), lease_state(LeaseState::REVOKED),
-      active_submit(0) {}
+      participant(checked_participant(session_gate, participant_index)), lease(LeaseState::CLOSED) {}
 
 void Endpoint::open() {
-    if (lease_state.load(std::memory_order_acquire) != LeaseState::REVOKED) {
-        abort_with("open() on an endpoint that is not REVOKED; revoke() must return true first");
+    if (lease.state.load(std::memory_order_acquire) != LeaseState::CLOSED) {
+        abort_with("open() on an endpoint that is not CLOSED; revoke() must return true first");
     }
-    if (active_submit.load(std::memory_order_acquire) != 0) {
+    if (lease.active.load(std::memory_order_acquire) != 0) {
         abort_with("open() while submits are still running; revoke() must finish first");
     }
-    lease_state.store(LeaseState::OPEN, std::memory_order_release); // the ring keeps its entries
+    lease.state.store(LeaseState::OPEN, std::memory_order_release); // the ring keeps its entries
 }
 
 bool Endpoint::revoke(Clock::time_point until) {
     {
-        // Both parks read lease_state, so the change that can wake them happens under both
-        // mutexes (design_engine_core.md §3.3). REVOKED and OPEN, stored later, wake nobody.
+        // Both parks read the lease's state, so the change that can wake them happens under
+        // both mutexes (design_engine_core.md §3.3). CLOSED and OPEN, stored later, wake nobody.
         std::lock_guard gate_lk(tick_gate.gate.m);
-        std::lock_guard lk(m);
-        lease_state.exchange(LeaseState::REVOKING, std::memory_order_acq_rel); // LINEARIZATION POINT
-        space_cv.notify_all();                                                 // a producer in the admission wait
-        tick_gate.gate.progress_cv.notify_all();                               // a producer waiting for an outcome
+        std::lock_guard lk(lease.m);
+        lease.state.exchange(LeaseState::CLOSING, std::memory_order_acq_rel); // LINEARIZATION POINT
+        space_cv.notify_all();                                                // a producer in the admission wait
+        tick_gate.gate.progress_cv.notify_all();                              // a producer waiting for an outcome
     }
-    // A read-modify-write, not a load. It reads the latest count, so a submit whose lease saw
-    // OPEN is counted here, or has itself seen REVOKING (design_engine_core.md §5.1).
-    // test/litmus/ checks this with herd7; x86 and ThreadSanitizer cannot.
-    std::unique_lock lk(m);
-    if (!revoke_cv.wait_until(lk, until, [&] { return active_submit.fetch_add(0, std::memory_order_acq_rel) == 0; })) {
+    if (!lease.wait_for_holders(until)) { // the lease's read-modify-write (design_engine_core.md §5.1)
         return false;
     }
-    lease_state.store(LeaseState::REVOKED, std::memory_order_release);
+    lease.state.store(LeaseState::CLOSED, std::memory_order_release);
     return true;
-}
-
-bool Endpoint::try_enter() noexcept {
-    if (lease_state.load(std::memory_order_acquire) != LeaseState::OPEN) {
-        return false;
-    }
-    active_submit.fetch_add(1, std::memory_order_acq_rel);
-    if (lease_state.load(std::memory_order_acquire) != LeaseState::OPEN) {
-        leave();
-        return false;
-    }
-    return true; // LINEARIZATION POINT: the second load saw OPEN
-}
-
-void Endpoint::leave() noexcept {
-    if (active_submit.fetch_sub(1, std::memory_order_acq_rel) == 1 &&
-        lease_state.load(std::memory_order_acquire) != LeaseState::OPEN) {
-        // The revoker checks the count under m, so this notify cannot fall between its check
-        // and its sleep.
-        std::lock_guard lk(m);
-        revoke_cv.notify_all();
-    }
 }
 
 std::expected<CommandHandle, Rejection> Endpoint::submit(const Command& command) {
     if (!unpaced) {
         abort_with("submit(command) on a paced endpoint; a paced command names its tick");
     }
-    if (!try_enter()) { // (H0)
+    if (!lease.try_enter()) { // (H0)
         return std::unexpected(Rejection::Revoked);
     }
-    const LeaseGuard lease{*this};
+    const engine::lease::LeaseGuard guard{lease};
 
     const std::uint64_t index = ring.write.load(std::memory_order_relaxed); // our own word
     if (index - ring.read.load(std::memory_order_acquire) == ring.depth) {  // (H1) never waits
@@ -166,10 +128,10 @@ std::expected<CommandHandle, Rejection> Endpoint::submit(const Command& command,
     if (unpaced) {
         abort_with("submit(command, tick) on an unpaced endpoint; its commands name no tick");
     }
-    if (!try_enter()) { // (C0)
+    if (!lease.try_enter()) { // (C0)
         return std::unexpected(Rejection::Revoked);
     }
-    const LeaseGuard lease{*this};
+    const engine::lease::LeaseGuard guard{lease};
 
     const std::uint64_t next_to_run = tick_gate.first_unexecuted.load(std::memory_order_acquire);
     const std::uint64_t released    = // our own declaration
@@ -193,15 +155,15 @@ std::expected<CommandHandle, Rejection> Endpoint::submit(const Command& command,
 
     const std::uint64_t index = ring.write.load(std::memory_order_relaxed); // (C2) our own word
     if (index - ring.read.load(std::memory_order_acquire) == ring.depth) {  // (C3) THE ADMISSION WAIT
-        std::unique_lock lk(m); // re-check under m: the drain stores read under it (S4)
+        std::unique_lock lk(lease.m); // re-check under lease.m: the drain stores read under it (S4)
         ++space_waiters;
         space_cv.wait(lk, [&] {
             return index - ring.read.load(std::memory_order_relaxed) < ring.depth ||
-                   lease_state.load(std::memory_order_relaxed) != LeaseState::OPEN;
+                   lease.state.load(std::memory_order_relaxed) != LeaseState::OPEN;
         });
         --space_waiters;
-        if (lease_state.load(std::memory_order_relaxed) != LeaseState::OPEN) {
-            return std::unexpected(Rejection::Revoked); // m is released before the lease is left
+        if (lease.state.load(std::memory_order_relaxed) != LeaseState::OPEN) {
+            return std::unexpected(Rejection::Revoked); // lease.m is released before the lease is left
         }
     }
     Command& slot = ring.slot[index % ring.depth]; // (C4) plain: the slot is ours
@@ -239,7 +201,8 @@ std::expected<CommandOutcome, OutcomeWaitRefusal> Endpoint::wait_outcome(const C
     }
 
     // The tick-progress wait (design_engine_core.md §3.3). Its outcome turns final only at
-    // (G5), and revocation changes lease_state, both under gate.m and followed by a notify.
+    // (G5), and revocation changes the lease's state, both under gate.m and followed by a
+    // notify.
     gate::Gate& progress = tick_gate.gate;
     CommandOutcome then;
     bool revoked = false;
@@ -248,7 +211,7 @@ std::expected<CommandOutcome, OutcomeWaitRefusal> Endpoint::wait_outcome(const C
         ++progress.progress_waiters;
         progress.progress_cv.wait_until(lk, until, [&] {
             then    = outcome_at(*this, handle.position);
-            revoked = lease_state.load(std::memory_order_relaxed) != LeaseState::OPEN;
+            revoked = lease.state.load(std::memory_order_relaxed) != LeaseState::OPEN;
             return then.type != CommandOutcomeType::Pending || revoked;
         });
         --progress.progress_waiters;
@@ -304,7 +267,7 @@ void drain_commands(std::span<Endpoint *const> endpoints, Tick tick,
         if (endpoint->unpaced) {
             ring.read.store(index, std::memory_order_release); // (S4) nothing parks on an unpaced ring
         } else {
-            std::lock_guard lk(endpoint->m);                   // freed space: §3.3's rule
+            std::lock_guard lk(endpoint->lease.m);             // freed space: §3.3's rule
             ring.read.store(index, std::memory_order_release); // (S4)
             if (endpoint->space_waiters != 0) {
                 endpoint->space_cv.notify_all(); // (S5) only a parked producer

@@ -30,8 +30,12 @@ add_executable(libsim_estab_test
     test_endpoint_tsan.cpp
     test_admission_wait_stress.cpp
     test_revoke_wait_stress.cpp
+    test_engine_lease.cpp
+    test_lease_tsan.cpp
+    test_close_wait_stress.cpp
     test_engine.cpp
     test_engine--session.cpp
+    test_engine--close.cpp
 )
 
 # Enable C++20 modules if supported by compiler
@@ -72,11 +76,13 @@ set_tests_properties(libsim_estab_test PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
 )
 
-# The failed path poisons the process: no Engine can be constructed again in it
-# (design_python_api.md §2). Its case runs alone, under its own entry, labelled `poison`.
+# The failed paths poison the process: no Engine can be constructed again in it
+# (design_python_api.md §2). Each case runs alone, under its own entry, labelled `poison`.
 add_test(NAME engine_failed_path
     COMMAND libsim_estab_test --run_test=engine_session_tests/test_the_failed_path_poisons_the_process)
-set_tests_properties(engine_failed_path PROPERTIES
+add_test(NAME engine_close_timeout
+    COMMAND libsim_estab_test --run_test=engine_close_tests/test_a_close_that_times_out_fails_and_poisons)
+set_tests_properties(engine_failed_path engine_close_timeout PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     LABELS "poison"
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp;TSAN_OPTIONS=ignore_noninstrumented_modules=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp"
@@ -85,7 +91,7 @@ set_tests_properties(engine_failed_path PROPERTIES
 # Race tests: one CTest entry per suite, labelled `tsan`. A suite proves something only in a
 # ThreadSanitizer build (design_patterns.md §10); in any other build it runs as a smoke
 # test. The libsim_estab_test entry above runs these suites too.
-foreach(race_suite engine_view_tsan_tests event_ring_tsan_tests endpoint_tsan_tests)
+foreach(race_suite engine_view_tsan_tests event_ring_tsan_tests endpoint_tsan_tests lease_tsan_tests)
     add_test(NAME ${race_suite} COMMAND libsim_estab_test --run_test=${race_suite})
     set_tests_properties(${race_suite} PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
@@ -98,7 +104,7 @@ endforeach()
 # lost wake-up is a hang, so the timeout is the failure (design_patterns.md §10). The
 # libsim_estab_test entry above runs these suites too, under CTest's default timeout.
 foreach(stress_suite gate_stress_tests tick_progress_stress_tests admission_wait_stress_tests
-                     revoke_wait_stress_tests)
+                     revoke_wait_stress_tests close_wait_stress_tests)
     add_test(NAME ${stress_suite} COMMAND libsim_estab_test --run_test=${stress_suite})
     set_tests_properties(${stress_suite} PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}

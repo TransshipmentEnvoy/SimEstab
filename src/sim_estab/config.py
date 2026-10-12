@@ -4,8 +4,8 @@ Every value here is decided in ``design_limits.md``, which carries the reasoning
 and the revisit trigger for each one; the shapes are ``design_python_api.md`` §3. The
 C++ mirror of the command-policy defaults, the tick rate, the warn threshold and the
 entity capacities is the ``sim_estab:limits`` module partition, and the two must not
-drift. ``HostPolicy`` values
-have no C++ mirror.
+drift. Of the ``HostPolicy`` values only ``shutdown_deadline`` has a C++ mirror; the
+rest have none.
 
 Validation happens here, in Python, before anything touches native code
 (``design_patterns.md`` §6: validate arguments up front). ``ValueError`` carries a

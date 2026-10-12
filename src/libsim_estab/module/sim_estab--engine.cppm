@@ -23,6 +23,12 @@
  * freeze; it is never held together with another engine mutex (design_engine_core.md
  * §1.1).
  *
+ * Every call but close(), state() and config() holds the operation lease while it runs
+ * (design_python_api.md §6). close() closes it, waits for the running calls under the
+ * shutdown deadline, and only then releases the session. The lease is the control block
+ * the Engine shares with its handles: a handle used after close(), or after the engine is
+ * gone, throws instead of touching freed memory.
+ *
  * It exports the Engine, its config, errors and handle, the tick type as engine::Tick, and
  * the value types of the mechanisms under the engine's name. The tick loop is internal, and
  * its tests are units of the module (design_patterns.md §10).
@@ -38,6 +44,7 @@ module;
 #include <expected>
 #include <flat_map>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -49,6 +56,7 @@ export module sim_estab:engine;
 import :error;
 import :limits;
 import :engine.tick;
+import :engine.lease;
 import :engine.view;
 import :engine.event_ring;
 import :engine.gate;
@@ -93,6 +101,13 @@ public:
 export class engine_state_error : public engine_error {
 public:
     explicit engine_state_error(const std::string& what) : engine_error(what) {}
+};
+
+/// A call that began once close() had started, or on a closed engine or handle
+/// (design_python_api.md §2). Terminal for that engine.
+export class engine_closed_error : public engine_error {
+public:
+    explicit engine_closed_error(const std::string& what) : engine_error(what) {}
 };
 
 /// A step under an owner drain reached the event backlog mark. The caller drains and steps
@@ -154,6 +169,9 @@ export struct EngineConfig {
     std::uint32_t endpoint_capacity      = limits::default_endpoint_capacity;      ///< a mod endpoint's, by default
     std::uint32_t host_endpoint_capacity = limits::default_host_endpoint_capacity; ///< source 0's
     std::uint32_t peer_endpoint_capacity = limits::default_peer_endpoint_capacity; ///< a peer endpoint's
+    /// Seconds each blocking shutdown stage may wait (design_limits.md §1.1): the mirror of
+    /// the Python HostPolicy.shutdown_deadline
+    std::chrono::duration<double> shutdown_deadline{limits::default_shutdown_deadline_seconds};
 };
 
 /// What an engine view declares at registration (design_engine_core.md §3.1). The freeze
@@ -251,8 +269,9 @@ export class Engine;
  * The reader's handle on an engine view (design_engine_core.md §3.1), from Engine::view()
  *
  * It belongs to the engine view's one reader thread, whichever thread that is. Two threads
- * taking from one engine view is a usage error (design_python_api.md §6). It refers into
- * the session, so it is used only while the engine lives.
+ * taking from one engine view is a usage error (design_python_api.md §6). It shares the
+ * engine's control block, so after close(), or once the engine is gone, its calls throw
+ * engine_closed_error instead of touching freed memory (design_python_api.md §2).
  */
 export class EngineViewHandle {
 public:
@@ -266,11 +285,16 @@ public:
      *
      * @return true if a newer block was taken. false if nothing new was published: the
      *         reader keeps the block it holds, and declares nothing.
+     * @throws engine_closed_error once the engine is closing or closed; engine_failed_error
+     *         once it has failed
      */
     [[nodiscard]] bool take();
 
     /// Reader: the block it holds. It shows a snapshot once the first take() has succeeded.
-    [[nodiscard]] const Block& held() const noexcept;
+    /// The reference is valid until the next take(), or until the engine closes.
+    /// @throws engine_closed_error once the engine is closing or closed; engine_failed_error
+    ///         once it has failed
+    [[nodiscard]] const Block& held() const;
 
     [[nodiscard]] std::string_view name() const noexcept;
     [[nodiscard]] std::uint32_t cadence() const noexcept;
@@ -278,12 +302,15 @@ public:
 
 private:
     friend class Engine;
-    EngineViewHandle(view::EngineView& engine_view, gate::TickGate& tick_gate, const EngineViewSpec& spec,
-                     std::uint32_t participant) noexcept;
+    EngineViewHandle(std::shared_ptr<lease::Lease> control, view::EngineView& engine_view, gate::TickGate& tick_gate,
+                     const EngineViewSpec& spec, std::uint32_t participant) noexcept;
 
+    std::shared_ptr<lease::Lease> control_; ///< the control block it shares with the engine
     view::EngineView *engine_view_;
     gate::TickGate *tick_gate_;
-    const EngineViewSpec *spec_;
+    std::string name_;          ///< its own copy: readable after the session is gone
+    std::uint32_t cadence_;     ///< its own copy
+    bool paced_;                ///< its own copy
     std::uint32_t participant_; ///< paced: the reader's participant at the gate
 };
 
@@ -298,8 +325,13 @@ private:
  * Construction acquires and leaves the engine Configuring. Engine views are registered,
  * then start_session() runs the freeze (design_engine_core.md §2.4) and the session is
  * Running: step() runs ticks, the host endpoint admits commands, engine views publish. A
- * stop makes it Stopped; reads still work. Destruction releases the session, except in the
- * Failed state, where it disarms: the session is leaked and the process stays poisoned.
+ * stop makes it Stopped; reads still work. close() waits for the running calls, releases
+ * the session and leaves the engine Closed; the destructor closes if the caller did not.
+ * In the Failed state nothing is released: the session is leaked and the process stays
+ * poisoned.
+ *
+ * Every call but close(), state() and config() throws engine_closed_error once close() has
+ * begun, and engine_failed_error once the engine is Failed.
  */
 export class Engine {
 public:
@@ -410,6 +442,19 @@ public:
     /// but Failed, which throws.
     void stop_sim_async();
 
+    /**
+     * Owner thread: shut down (design_python_api.md §2 step 3). Never throws, and a second
+     * call does nothing.
+     *
+     * It ends ticking if the caller has not (stop_sim_async()), closes the operation lease
+     * (Closing), waits for the running calls under the shutdown deadline, revokes the host
+     * endpoint under a budget of its own, releases the session and is Closed. A deadline
+     * that passes leaves the engine Failed, its session kept rather than freed under a
+     * running call. In Failed it does nothing. The destructor calls it if the caller did
+     * not.
+     */
+    void close() noexcept;
+
 private:
     struct Impl;
     static constexpr std::size_t impl_size  = 512; // headroom, not exact
@@ -421,10 +466,15 @@ private:
     void check_impl() const noexcept; // aborts on null, even in release
 
     friend event_ring::EventRing& session_events(Engine& engine);
+    friend lease::Lease& engine_control(Engine& engine);
 };
 
 /// Units of the module only (the tests): the session's event ring, to raise the events an
 /// M1 session never raises by itself. Not exported.
 [[nodiscard]] event_ring::EventRing& session_events(Engine& engine);
+
+/// Units of the module only (the tests): the control block, to hold the operation lease
+/// as a call that never returns would. Not exported.
+[[nodiscard]] lease::Lease& engine_control(Engine& engine);
 
 } // namespace sim_estab::core::engine

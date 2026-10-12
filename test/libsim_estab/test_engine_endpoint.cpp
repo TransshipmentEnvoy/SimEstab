@@ -26,6 +26,7 @@ module sim_estab;
 import :engine.endpoint;
 import :engine.event_ring;
 import :engine.gate;
+import :engine.lease;
 
 using namespace sim_estab::core::engine::endpoint;
 using sim_estab::core::engine::event_ring::EngineEvent;
@@ -33,6 +34,7 @@ using sim_estab::core::engine::event_ring::EngineEventType;
 using sim_estab::core::engine::event_ring::EventDrain;
 using sim_estab::core::engine::event_ring::EventRing;
 using sim_estab::core::engine::gate::TickGate;
+using sim_estab::core::engine::lease::LeaseState;
 using sim_estab::core::engine::tick::Tick;
 
 namespace {
@@ -144,7 +146,7 @@ BOOST_AUTO_TEST_CASE(test_a_new_endpoint_is_revoked) {
     Session session;
     Endpoint host{session.tick_gate, 0, 4};
 
-    BOOST_TEST((host.lease_state.load() == LeaseState::REVOKED));
+    BOOST_TEST((host.lease.state.load() == LeaseState::CLOSED));
     BOOST_TEST((host.submit(marked(1)) == std::unexpected(Rejection::Revoked)));
     BOOST_TEST(host.ring.write.load() == 0u);
 }
@@ -345,7 +347,7 @@ BOOST_AUTO_TEST_CASE(test_a_revoked_endpoint_keeps_its_admitted_commands) {
 
     (void)host.submit(marked(1));
     BOOST_TEST(host.revoke(far()));
-    BOOST_TEST((host.lease_state.load() == LeaseState::REVOKED));
+    BOOST_TEST((host.lease.state.load() == LeaseState::CLOSED));
     BOOST_TEST((host.submit(marked(2)) == std::unexpected(Rejection::Revoked)));
 
     host.open();

@@ -82,6 +82,18 @@ export inline constexpr std::uint32_t default_host_endpoint_capacity = 256;
 export inline constexpr std::uint32_t default_peer_endpoint_capacity = 256;
 
 // ---------------------------------------------------------------------------
+// Shutdown (policy default - EngineConfig.host_policy.shutdown_deadline)
+// design_limits.md §1.1, design_python_api.md §2
+// ---------------------------------------------------------------------------
+
+/// Seconds each blocking shutdown stage may wait: running submits on a revoked endpoint, a
+/// mod host's inbox drain and on_unload, the mod host and sim thread joins, confirming a
+/// killed process is dead, and running engine calls in close(). One budget per stage, not
+/// one total. On expiry the engine enters Failed and disarms rather than reclaiming memory
+/// that may still be in use.
+export inline constexpr double default_shutdown_deadline_seconds = 5.0;
+
+// ---------------------------------------------------------------------------
 // Freeze-time bounds (design_engine_core.md §2.4 step 3a)
 //
 // Deliberately NOT constants here: C, ring DEPTH, and the event ring's E x (D + 1), with
@@ -198,6 +210,7 @@ static_assert(default_host_endpoint_capacity <= max_endpoint_capacity,
 static_assert(default_peer_endpoint_capacity <= max_endpoint_capacity,
               "a peer endpoint requests its capacity through the same ceiling as any other");
 static_assert(default_drain_interval_ticks > 0, "D is a count of ticks the engine buffers, never zero");
+static_assert(default_shutdown_deadline_seconds > 0, "a shutdown stage must be allowed some time to finish");
 
 static_assert(max_sources > max_players, "a full lobby allocates one source per peer, so the source ceiling must leave "
                                          "room for the host and for mods beside the players it was sized for");

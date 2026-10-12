@@ -9,9 +9,9 @@ That covers the root of the exception family, SDL3 compute and viz contexts, log
 main-thread init guard, and the decided limits (M0). The toolchain the designs assume is in
 place: GCC 16, C++26 with `-freflection`, and `-march=x86-64-v3`. M1 is under way: the engine
 view protocol, the gate, the tick loop, the event ring, the command endpoints and the
-`Engine` (the session lifecycle, the freeze and `step(n)`) are written and tested; the
-operation lease, the Python surface and the logging remainder are left, and nothing reaches
-the engine from Python yet. Everything after M1 is designed but not written.
+`Engine` (the session lifecycle, the freeze, `step(n)`, the operation lease and `close()`)
+are written and tested; the Python surface and the logging remainder are left, and nothing
+reaches the engine from Python yet. Everything after M1 is designed but not written.
 
 + [x] basic setup
 + [x] graphics basics
@@ -92,20 +92,20 @@ the engine from Python yet. Everything after M1 is designed but not written.
         `command.protocol_error`. Left: `participant.suspended`, `participant.resumed` and
         `participant.left`, which arrive with mod hosts, and `engine_view.bandwidth_over`,
         which arrives with projection
-  + [ ] operation leases around every native call that can overlap `close()`:
+  + [x] operation leases around every native call that can overlap `close()`:
         `OPEN → CLOSING` rejects new calls, running calls drain under the shutdown
         deadline, and a timeout enters `Failed` and disarms rather than freeing native
         resources under a caller. It uses the endpoint lease's protocol, and the two share
-        one building block, whose name is chosen when it is built. `on_failed_stop` covers
-        every `Failed` path; a lost GPU device or a failed page commit exits the process
-        (`doc/design_python_api.md` §2, §6)
+        one building block, `Lease` in `sim_estab:engine.lease`. Left for the Python
+        surface: `on_failed_stop` covers every `Failed` path; a lost GPU device or a failed
+        page commit exits the process (`doc/design_python_api.md` §2, §6)
   + [ ] the Python surface: `engine.py`, `command.py`, `event.py`, `loop.py`, with the
         headless loop of `doc/design_python_api.md` §4.2. `WindowConfig`, `LogConfig` and
         `event_drain` join `config.py` (`doc/design_python_api.md` §1, §3)
   + [ ] logging management, the remaining parts: the refcounted Python wrapper under a
         module-level lock, and the per-session file sink in `LogConfig.session_dir`
         (`doc/design_logging.md` §2, §3)
-  + [ ] sanitizer tests for both protocols: the engine view's permutation invariant,
+  + [x] sanitizer tests for both protocols: the engine view's permutation invariant,
         including the reverse edge from reader to publisher, and a return header written
         before a take arriving intact at the publisher that receives the block, never while
         the reader is still writing it; endpoint revoke racing submit; `close()` racing each

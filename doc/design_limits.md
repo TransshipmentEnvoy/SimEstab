@@ -500,7 +500,8 @@ This section names the one place each value lives. The C++ side is the partition
 | source cap | — | `max_sources` | enforced at the freeze |
 | participant cap | — | `max_paced_participants` | enforced at the freeze |
 | Engine view cap | — | `max_engine_views` | enforced at the freeze |
-| host policy: shutdown deadline, retry limit, inbox cap | `HostPolicy.shutdown_deadline`, `HostPolicy.mod_retry_limit`, `HostPolicy.max_inbox_size` | — | policy defaults, Python only |
+| host policy: shutdown deadline | `HostPolicy.shutdown_deadline` | `default_shutdown_deadline_seconds` | policy default; the C++ `EngineConfig.shutdown_deadline` mirrors it |
+| host policy: retry limit, inbox cap | `HostPolicy.mod_retry_limit`, `HostPolicy.max_inbox_size` | — | policy defaults, Python only |
 | cache line | — | `cache_line_bytes` | build constant, 64 bytes (§3) |
 | chunk quantum | — | `chunk_elements` | build constant. Its one definition is the CMake cache variable `LIBSIM_ESTAB__CHUNK_ELEMENTS` in `src/libsim_estab/CMakeLists.txt`. The partition falls back to 1024 only for a build outside this CMake |
 | projection warning bandwidth | `EngineConfig.projection_warn_bytes_per_second` | `default_projection_warn_bytes_per_second` | policy default. Checked per engine view, not against the session total (§5) |

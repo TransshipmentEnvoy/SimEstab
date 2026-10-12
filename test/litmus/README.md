@@ -11,9 +11,9 @@ Two leases share one protocol: the endpoint lease (`design_engine_core.md` §5.1
 operation lease (`design_python_api.md` §6). A holder adds to a count, then loads the
 state. The waiter changes the state, then reads the count with a read-modify-write.
 
-In every test, `x` is the count (`active_submit`, `active_operations`) and `y` is the
-state: 0 for `OPEN`, 1 for closing (`REVOKING`, `CLOSING`). `P0` is a holder, a submit or
-a native call. The last thread is the waiter, `revoke` or `close()`.
+In every test, `x` is the count (the lease's `active`) and `y` is the state: 0 for
+`OPEN`, 1 for `CLOSING`. `P0` is a holder, a submit or a native call. The last thread is
+the waiter, `revoke` or `close()`.
 
 ## Expected verdicts
 
@@ -46,5 +46,6 @@ Each test prints a line `Observation <test> Never|Sometimes ...`. Compare it wit
 ## Keeping them current
 
 A test models the code; it is not the code. A change to a memory order in `try_enter`,
-`leave` or `revoke` (`engine.endpoint.cpp`), or in the operation lease, changes the
-matching test in the same commit.
+`leave` or `wait_for_holders` (`sim_estab--engine.lease.cppm`, the one building block of
+both leases), or in the state change of `revoke` or `close()`, changes the matching test
+in the same commit.

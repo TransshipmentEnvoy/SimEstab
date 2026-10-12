@@ -28,18 +28,18 @@
  *   The drain is wait-free, plus a short lock per paced endpoint it frees space in.
  * - Failure: every rejection is returned at once, and enqueues nothing.
  *
- * The endpoint lease
- * - Atomic objects: `lease_state` and `active_submit`, 4 bytes each, always lock-free on
+ * The endpoint lease: a Lease, the building block it shares with the operation lease
+ * (sim_estab:engine.lease, design_python_api.md §6)
+ * - Atomic objects: the lease's `state` and `active`, 4 bytes each, always lock-free on
  *   x86-64.
- * - Memory orders: a submit loads `lease_state` with acquire, adds to `active_submit` with
- *   acq_rel, and loads `lease_state` again with acquire. revoke() exchanges `lease_state`
- *   with acq_rel under `gate.m` and the endpoint's `m`, and reads `active_submit` only with
- *   a read-modify-write, so it cannot miss a lease that saw OPEN.
- * - Linearization point: a lease, at the second load of `lease_state`; revocation, at the
- *   exchange to REVOKING.
- * - Progress: the submit side is wait-free. The revoker parks on the endpoint's mutex until
+ * - Memory orders: the lease's. revoke() exchanges the state with acq_rel under `gate.m`
+ *   and the lease's `m`, and reads the count only with a read-modify-write, so it cannot
+ *   miss a submit that saw OPEN.
+ * - Linearization point: a lease, at the second load of the state; revocation, at the
+ *   exchange to CLOSING.
+ * - Progress: the submit side is wait-free. The revoker parks on the lease's mutex until
  *   the running submits leave, bounded by its deadline.
- * - Failure: a deadline that passes leaves the endpoint REVOKING. The caller takes the
+ * - Failure: a deadline that passes leaves the endpoint CLOSING. The caller takes the
  *   failed path, and reclaims nothing.
  *
  * The command outcome
@@ -54,8 +54,8 @@
  *
  * Every park here follows the wake-up rule of design_engine_core.md §3.3, except the
  * revoker's wait for running submits. That is a lease's wait for its running holders, the
- * rule's one stated exception, and it rests on the read-modify-write above. The lock order
- * is `gate.m`, then the endpoint's `m`, and only revoke() holds both.
+ * rule's one stated exception, and it rests on the lease's read-modify-write. The lock
+ * order is `gate.m`, then the endpoint's lease mutex, and only revoke() holds both.
  *
  * This partition exports only the value types a producer handles: a command, its handle,
  * its outcome and a rejection. The mechanism itself is not exported: an importer of
@@ -84,6 +84,7 @@ export module sim_estab:engine.endpoint;
 import :engine.tick;
 import :limits;
 import :engine.gate;
+import :engine.lease;
 
 /**
  * @namespace sim_estab::core::engine::endpoint
@@ -152,8 +153,9 @@ enum class OutcomeWaitRefusal : std::uint32_t {
     Revoked,    ///< the endpoint was revoked while the command was pending
 };
 
-/// The endpoint lease's state (design_engine_core.md §5.1)
-enum class LeaseState : std::uint32_t { OPEN, REVOKING, REVOKED };
+/// The endpoint lease's state is the lease's: OPEN, CLOSING, CLOSED (design_engine_core.md
+/// §5.1). An endpoint never stores FAILED; a timed-out revoke leaves it CLOSING.
+using engine::lease::LeaseState;
 
 /**
  * The command ring: one endpoint's slots and its two indices (design_engine_core.md §5.1)
@@ -181,7 +183,7 @@ struct CommandRing {
  * builds it owns it and keeps the gate alive for as long. A field marked private to a role
  * is touched by that role only.
  *
- * It starts REVOKED: an endpoint is allocated at the freeze and opened when the session
+ * It starts CLOSED: an endpoint is allocated at the freeze and opened when the session
  * starts.
  */
 struct Endpoint {
@@ -196,12 +198,9 @@ struct Endpoint {
     bool unpaced;                                   ///< its commands name no tick
     std::uint32_t participant;                      ///< paced: its participant at the gate; 0 if unpaced
 
-    std::atomic<LeaseState> lease_state; ///< the endpoint lease
-    std::atomic<std::uint32_t> active_submit;
-    std::mutex m;                       ///< held for loads, stores and notifies only
-    std::condition_variable space_cv;   ///< a paced producer waiting for ring space parks here
-    std::condition_variable revoke_cv;  ///< revoke() waiting for running submits parks here
-    std::uint32_t space_waiters    = 0; ///< guarded by m
+    engine::lease::Lease lease;         ///< the endpoint lease; its mutex is the admission wait's park too
+    std::condition_variable space_cv;   ///< a paced producer waiting for ring space parks here, on lease.m
+    std::uint32_t space_waiters    = 0; ///< guarded by lease.m
     std::uint64_t last_stamped     = 0; ///< producer-private: the latest tick named here
     std::uint32_t stamped_for_tick = 0; ///< producer-private: commands named for last_stamped
 
@@ -216,7 +215,7 @@ struct Endpoint {
     Endpoint(const Endpoint&)            = delete;
     Endpoint& operator=(const Endpoint&) = delete;
 
-    /// Lifecycle: start admitting. The endpoint must be REVOKED: new, or revoked by a
+    /// Lifecycle: start admitting. The endpoint must be CLOSED: new, or revoked by a
     /// revoke() that returned true. The old producer must have been joined. The ring keeps
     /// what it holds, so a reopened endpoint drains its admitted commands before new ones.
     void open();
@@ -224,8 +223,8 @@ struct Endpoint {
     /**
      * Lifecycle: stop admitting, wake every parked producer, and wait for running submits
      *
-     * @return true if every running submit has left, and the endpoint is REVOKED. false if
-     *         `until` passed first: the endpoint stays REVOKING, and the caller takes the
+     * @return true if every running submit has left, and the endpoint is CLOSED. false if
+     *         `until` passed first: the endpoint stays CLOSING, and the caller takes the
      *         failed path without reclaiming it.
      *
      * After true, no submit writes the ring again. The last submit out may still notify,
@@ -253,12 +252,6 @@ struct Endpoint {
      */
     [[nodiscard]] std::expected<CommandOutcome, OutcomeWaitRefusal> wait_outcome(const CommandHandle& handle,
                                                                                  Clock::time_point until);
-
-    /// Producer: enter the lease. false: the endpoint is not admitting.
-    [[nodiscard]] bool try_enter() noexcept;
-
-    /// Producer: leave the lease. The last to leave a closing endpoint wakes the revoker.
-    void leave() noexcept;
 };
 
 /**

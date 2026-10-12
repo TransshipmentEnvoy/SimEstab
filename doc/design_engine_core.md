@@ -117,10 +117,12 @@ Progress classes, used in exactly this sense throughout:
   at most one notify. Nobody waits, logs or calls out while holding it, so the wait is
   bounded by those instructions, not by another party. A gate declaration and the drain's
   side of the admission wait are short locks.
-  - **Lock order.** Every engine mutex is a short lock: `gate.m` (§3.3), each endpoint's `m`
-    (§5.1), the event side list's (§5.2) and the control block's (`design_python_api.md`
-    §2). One nesting exists: `gate.m`, then one endpoint's `m`, in `revoke` (§5.1). No other
-    two engine mutexes are held together, and nothing logs under one.
+  - **Lock order.** Every engine mutex is a short lock: `gate.m` (§3.3), each endpoint's
+    lease mutex (§5.1), the event side list's (§5.2), the control block's lease mutex and the
+    engine's control mutex, which guards the state transitions and the control calls made
+    before the freeze (`design_python_api.md` §2). One nesting exists: `gate.m`, then one
+    endpoint's lease mutex, in `revoke` (§5.1). No other two engine mutexes are held
+    together, and nothing logs under one.
 - **Bounded wait**: a thread may block on another party, and only in a declared wait. An
   undeclared wait is forbidden. A wait of the engine core follows three rules. It is the gate
   (§3.3) or one of the shutdown and revocation drains below. It is bounded by a declared
@@ -159,12 +161,12 @@ specified:
 | **Engine view** | sim → one reader; the reader's return header travels back on the same edge | publish: the release exchange of the engine view's control word (§3.2 (P2)); take: the release exchange at (T2), which also publishes the return header | publisher wait-free (1 exchange); reader wait-free (1 exchange), and a paced take adds a short lock to declare | §3.2, §3.5 |
 | **Command ring** | one producer → sim | submit: the release store of the ring's write index; drain: the acquire load of it. A full ring parks the producer on the endpoint's mutex and condition variable, and the drain stores `read` under that mutex | drain wait-free (1 load), plus a short lock on each endpoint it frees space in; submit wait-free unless the ring is full, where a paced producer makes a **bounded wait** until the oldest tick in its ring has run and the host gets `QueueFull` | §5.1 |
 | **Command outcome** | sim → producer | the drain writes the outcome's tick into the endpoint's outcome slot before (S4), and its type before (G5) of that tick; an outcome is final once that (G5) is visible | a paced reader **blocks, bounded** by the named tick running, on the tick-progress wait, and is refused outright if it still holds that tick; the host polls and never blocks | §5.1 |
-| **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of `lease_state`; revocation: the `OPEN → REVOKING` exchange | submit side wait-free; the revoker parks on the endpoint's mutex until the last running submit leaves, under the shutdown deadline | §5.1 |
+| **Endpoint lease** | producer ↔ revoker | successful lease: the second acquire load of the lease's state; revocation: the `OPEN → CLOSING` exchange | submit side wait-free; the revoker parks on the lease's mutex until the last running submit leaves, under the shutdown deadline | §5.1 |
 | **Event ring** | executor → the session's event drain | enqueue: the release store of the ring's write index | wait-free | §5.2 |
 | **Event drain wake** | owner thread → sim | the drain's store of `read` under `gate.m`, with a notify only if the sim is parked on `EVENT_BACKLOG` | the drain takes one short lock per call; the sim's wait is the gate's | §5.2 |
 | **The gate** | participants and host controls → sim | a participant's `ready_through` store, or a host-control store, each under `gate.m` (G3). The sim re-checks under the same mutex before it waits, and a writer notifies only a parked sim | **the sim blocks, bounded** by each blocker's declared policy; a writer takes a short lock | §3.3 |
 | **Tick progress** | sim → threads waiting for a tick to run | the sim's store of `first_unexecuted` under `gate.m` after each tick's publish (G5) | the sim takes a short lock per tick; a waiter blocks until the tick runs, the owner thread in interruptible slices | §3.3 |
-| **Operation lease** | any-thread API caller ↔ owner's `close()` | successful lease: the second acquire load of the access state; close: the `OPEN → CLOSING` CAS | call side wait-free; close parks on the control block's mutex until the last running call leaves, under the shutdown deadline. The endpoint lease's protocol (§5.1) | `design_python_api.md` §2, §6 |
+| **Operation lease** | any-thread API caller ↔ owner's `close()` | successful lease: the second acquire load of the lease's state; close: the `OPEN → CLOSING` compare-exchange | call side wait-free; close parks on the lease's mutex until the last running call leaves, under the shutdown deadline. One building block with the endpoint lease, `Lease` (§5.1) | `design_python_api.md` §2, §6 |
 | **Async error handoff** | sim → owner thread | `error_state.store(READY, release)` after the winning producer fills the slot | wait-free; read at the next rendezvous | `design_python_api.md` §8 |
 | **Staged join** | owner thread → sim | `stop_requested` stored under `gate.m`, with a notify if the sim is parked (§3.3); `std::thread::join` | owner blocks under a deadline | `design_python_api.md` §4.3 |
 
@@ -1769,9 +1771,10 @@ The further ahead it runs, the less often the gate has to wait for it.
 
 **State.** An endpoint holds its command ring and the cold parts around it. The ring is two
 hot 8-byte atomics on separate cache lines and a plain slot array. Around it: a plain
-outcome array parallel to the slots, two cold 4-byte lease atomics, a cold mutex with two
-condition variables (the admission wait's and the revoker's), and two words touched only by
-the producer thread.
+outcome array parallel to the slots, the lease (two cold 4-byte atomics, a cold mutex and
+the revoker's condition variable: one building block with the operation lease,
+`design_python_api.md` §6), the admission wait's condition variable on the lease's mutex,
+and two words touched only by the producer thread.
 
 ```
 struct Command { u64 tick; payload…; };      // the tick this command acts on; unused on
@@ -1787,13 +1790,14 @@ struct CommandRing {                         // the hot part: the producer and t
 struct Endpoint {                            // one per producer, fixed at the freeze
     CommandRing       ring;
     CommandOutcome    outcome_slot[DEPTH];   // parallel to the slots: sim-written, producer-read
-    std::atomic<u32>  lease_state;           // OPEN | REVOKING | REVOKED
-    std::atomic<u32>  active_submit;         // successful/validating calls in flight
-    std::mutex        m;                     // the admission wait's and the revoker's park
-                                             //   (§3.3's rule)
-    std::condition_variable space_cv;        // a producer waiting for ring space parks here
-    std::condition_variable revoke_cv;       // revoke waiting for running submits parks here
-    u32               space_waiters;         // producers parked on space_cv; guarded by m
+    Lease             lease;                 // the endpoint lease: state OPEN | CLOSING | CLOSED,
+                                             //   active (submits in flight), m (the revoker's
+                                             //   park, §3.3's rule) and cv; one building block
+                                             //   with the operation lease
+                                             //   (design_python_api.md §6)
+    std::condition_variable space_cv;        // a producer waiting for ring space parks here,
+                                             //   on lease.m
+    u32               space_waiters;         // producers parked on space_cv; guarded by lease.m
     u32               capacity;              // commands this endpoint may hold for ONE tick
     u32               margin;                // 0 for engine sources; the input delay for a peer
     bool              unpaced;               // the host's, or a logic mod's, in single-player
@@ -1808,8 +1812,8 @@ std::atomic<u64> first_unexecuted;           // written only by the sim thread
 The endpoint object is allocated at the freeze and stays at the same address for the whole
 session. Starting a Tier 2 mod host opens its already-assigned endpoint. Quarantine and
 retry never swap a new ring into the drain array. Reopening is allowed only after the
-revocation has finished (`REVOKED`), the old producer has stopped and `active_submit == 0`.
-`open` aborts as a programming error on an endpoint that is not `REVOKED`. Admitted entries
+revocation has finished (`CLOSED`), the old producer has stopped and `lease.active == 0`.
+`open` aborts as a programming error on an endpoint that is not `CLOSED`. Admitted entries
 already in the ring stay there and drain before new ones, so the source's FIFO order holds
 across a retry.
 
@@ -1817,58 +1821,58 @@ across a retry.
 
 ```
 try_enter:
-    if lease_state.load(acquire) != OPEN: return Revoked
-    active_submit.fetch_add(1, acq_rel)
-    if lease_state.load(acquire) != OPEN:
+    if lease.state.load(acquire) != OPEN: return Revoked
+    lease.active.fetch_add(1, acq_rel)
+    if lease.state.load(acquire) != OPEN:
         leave(); return Revoked
     return LEASED                                      # LINEARIZATION POINT
 
 leave:
-    if active_submit.fetch_sub(1, acq_rel) == 1 && lease_state.load(acquire) != OPEN:
-        { std::lock_guard lk(m); revoke_cv.notify_all(); }   # last out of a closing endpoint
+    if lease.active.fetch_sub(1, acq_rel) == 1 && lease.state.load(acquire) != OPEN:
+        { std::lock_guard lk(lease.m); lease.cv.notify_all(); }   # last out of a closing endpoint
 
 revoke:
-    { std::lock_guard g(gate.m); std::lock_guard lk(m);    # both parks read lease_state
-      lease_state.exchange(REVOKING, acq_rel);         # closes new leases
+    { std::lock_guard g(gate.m); std::lock_guard lk(lease.m);    # both parks read lease.state
+      lease.state.exchange(CLOSING, acq_rel);         # closes new leases
       space_cv.notify_all();                           # an admission wait is not a lease leak,
       gate.progress_cv.notify_all(); }                 #   nor is an outcome wait (§3.3)
-    { std::unique_lock lk(m);                          # under the shutdown deadline
-      if !revoke_cv.wait_until(lk, deadline,
-              [&] { return active_submit.fetch_add(0, acq_rel) == 0; }):  # an RMW
-          return false                                 # stays REVOKING: the failed path
-      lease_state.store(REVOKED, release) }            # revocation complete
+    { std::unique_lock lk(lease.m);                          # under the shutdown deadline
+      if !lease.cv.wait_until(lk, deadline,
+              [&] { return lease.active.fetch_add(0, acq_rel) == 0; }):  # an RMW
+          return false                                 # stays CLOSING: the failed path
+      lease.state.store(CLOSED, release) }            # revocation complete
     return true
 
 open_or_reopen:
-    require lease_state.load(acquire) == REVOKED        # new, or revoke returned true
-    require old producer stopped && active_submit.load(acquire) == 0
-    lease_state.store(OPEN, release)                    # do not reset ring indices/slots
+    require lease.state.load(acquire) == CLOSED        # new, or revoke returned true
+    require old producer stopped && lease.active.load(acquire) == 0
+    lease.state.store(OPEN, release)                    # do not reset ring indices/slots
 ```
 
-A lease that linearized before `REVOKING` completes normally, including publishing its entry
+A lease that linearized before `CLOSING` completes normally, including publishing its entry
 after revocation began; revocation waits for it. A later call returns `Revoked` before
 touching an index or slot. Revocation also **wakes every parked producer**: one asleep on
 the admission wait, and one waiting for an outcome. A producer asleep on the admission wait
 holds a lease, and would otherwise be waited on for the whole shutdown deadline; it wakes
 with `Revoked` and leaves. An outcome waiter wakes with `Revoked` too. Revocation is the
-only thing that wakes either wait early. The change to `REVOKING` happens under both
+only thing that wakes either wait early. The change to `CLOSING` happens under both
 mutexes, as §3.3's wake-up rule requires of a change that can wake a parked thread. The
-later stores need no lock: `REVOKED`, under `m` alone, and `OPEN`, under neither, never make
-a waiter's predicate true. The lock order is always `gate.m` before an endpoint's `m`.
+later stores need no lock: `CLOSED`, under `lease.m` alone, and `OPEN`, under neither, never make
+a waiter's predicate true. The lock order is always `gate.m` before an endpoint's `lease.m`.
 
-**The revoker reads `active_submit` with a read-modify-write, never a load.** A submit adds
-to `active_submit` and then loads `lease_state`. The revoker exchanges `lease_state` and
-then reads `active_submit`. With a plain acquire load on each side, C++ allows both reads to
+**The revoker reads `lease.active` with a read-modify-write, never a load.** A submit adds
+to `lease.active` and then loads `lease.state`. The revoker exchanges `lease.state` and
+then reads `lease.active`. With a plain acquire load on each side, C++ allows both reads to
 see the old value: the submit leases, and the revoker sees no submit running. x86 forbids
 that outcome, so no test run on it can show the hole. A read-modify-write reads the latest
 value. Either it counts the submit, or the submit's add comes after it in that atomic's
-order and synchronizes with it, and then the submit sees `REVOKING`. The same holds for
-`leave`. The last submit out either is counted by the revoker's check, or sees `REVOKING`
-and notifies under `m`. The revoker checks under `m` before it sleeps, so that notify
+order and synchronizes with it, and then the submit sees `CLOSING`. The same holds for
+`leave`. The last submit out either is counted by the revoker's check, or sees `CLOSING`
+and notifies under `lease.m`. The revoker checks under `lease.m` before it sleeps, so that notify
 cannot fall between its check and its sleep, and no wake-up is lost. A normal submit
 leaves an `OPEN` endpoint and takes no lock. This park is a lease's wait for its running
 holders, the one stated exception to the wake-up rule of §3.3. The operation lease uses the
-same protocol (`design_python_api.md` §6).
+same protocol, and the two share one building block, `Lease` (`design_python_api.md` §6).
 
 **A finished revocation does not leave the endpoint untouched.** When `revoke` returns
 `true`, no lease is held and none will be granted, so no submit writes the ring's indices
@@ -1908,11 +1912,11 @@ submit(cmd, t):
     if stamped_for_tick == capacity: leave(); return QueueFull         # (C1d)
     w = write.load(relaxed)                                            # (C2) our own word
     if w - read.load(acquire) == DEPTH:                                # (C3) THE ADMISSION WAIT
-        std::unique_lock lk(m); ++space_waiters                        #      re-check under m
+        std::unique_lock lk(lease.m); ++space_waiters                        #      re-check under m
         space_cv.wait(lk, [&] { return w - read.load(relaxed) < DEPTH
-                                     || lease_state.load(relaxed) != OPEN; })
+                                     || lease.state.load(relaxed) != OPEN; })
         --space_waiters
-        if lease_state.load(relaxed) != OPEN: leave(); return Revoked
+        if lease.state.load(relaxed) != OPEN: leave(); return Revoked
     slot[w % DEPTH] = cmd; slot[w % DEPTH].tick = t                    # (C4) plain; the slot is ours
     ++stamped_for_tick
     write.store(w + 1, release)                                        # (C5) LINEARIZATION POINT
@@ -2176,7 +2180,7 @@ on it either, because no command's answer travels on the event ring (§5.2).
   `first_unexecuted` makes it visible. The producer reads each field only after the
   matching load.
 - The lease's adds and loads are `acq_rel` and `acquire`, and so is the revoker's exchange.
-  The revoker reads `active_submit` with a read-modify-write (above). That, not `seq_cst`,
+  The revoker reads `lease.active` with a read-modify-write (above). That, not `seq_cst`,
   is what keeps the revoker from missing a running lease.
 
 **Progress.** An uncontended submit is wait-free: three lease loads, two active-count
@@ -2205,7 +2209,7 @@ that returned `admitted` appears exactly once in the drained stream, in submissi
 within its endpoint, and at the tick it named: never earlier, never later. A producer
 reading its outcomes while the drain runs reads each one whole. Three races must be tested:
 
-- **Revoke**: calls whose lease came before `REVOKING` may be accepted exactly once. Every
+- **Revoke**: calls whose lease came before `CLOSING` may be accepted exactly once. Every
   later call returns `Revoked` and touches no ring memory. A producer parked on the
   admission wait is woken rather than waited out. Once `revoke` has returned `true`, no
   submit writes the ring; a reclaim still waits for the producer's join (above).

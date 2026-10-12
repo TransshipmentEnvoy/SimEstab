@@ -1043,11 +1043,11 @@ def load_mods(engine, policy) -> ModBus:          # engine is `Configuring`
   simulating. Each stopped mod that is a participant leaves the gate as its mod host stops,
   with a reliable `participant.left` event, so the session never waits for a mod that is
   gone (`design_engine_core.md` §3.3).
-  1. Set `ctx.stopping`, and change the mod's endpoint lease from `OPEN` to `REVOKING`. Stop
+  1. Set `ctx.stopping`, and change the mod's endpoint lease from `OPEN` to `CLOSING`. Stop
      feeding its inbox and stop serving it snapshots. From then on a new endpoint lease
      returns `Revoked`; a call that entered its lease before the change may finish. Wait for
-     those running calls under `HostPolicy.shutdown_deadline`, and store `REVOKED` once they
-     have left. If the deadline passes first, the endpoint stays `REVOKING` and the engine
+     those running calls under `HostPolicy.shutdown_deadline`, and store `CLOSED` once they
+     have left. If the deadline passes first, the endpoint stays `CLOSING` and the engine
      takes the `Failed` path (`design_engine_core.md` §5.1). `stopping` is advisory, so
      `False` followed by a revoked submit is legal (§4.1).
   2. Drain the inbox, then run `on_unload`, under `HostPolicy.shutdown_deadline`. **The mod
@@ -1087,7 +1087,7 @@ def load_mods(engine, policy) -> ModBus:          # engine is `Configuring`
   A timeout in the wait for running submits on an endpoint lease follows the same split.
   Either kill and confirm the process host's supervisor, or abandon the in-process thread
   and put the engine in `Failed`. In neither case is the ring reclaimed while its
-  `active_submit` count may be nonzero. But the supervisor is an engine-side thread (§4.3)
+  `lease.active` count may be nonzero. But the supervisor is an engine-side thread (§4.3)
   and cannot be killed, and `design_engine_core.md` §5.1 sends every endpoint-lease timeout
   to `Failed`. Which rule applies is open
   ([Q46](open_question.md#q46-process-host-drain-timeout)).

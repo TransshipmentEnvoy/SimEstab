@@ -61,7 +61,7 @@ void wait_if_late_round(std::uint64_t round) {
 
 /// True while a producer is parked on `endpoint`'s admission wait
 bool parked_for_space(Endpoint& endpoint) {
-    std::lock_guard lk(endpoint.m);
+    std::lock_guard lk(endpoint.lease.m);
     return endpoint.space_waiters != 0;
 }
 

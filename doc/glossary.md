@@ -109,7 +109,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | `TooLate` | The named tick is past, or its producer has already declared it ready. | engine_core §5.1 |
 | command handle | What an admitted submit returns: the endpoint's source id and the command's position in its ring. Its producer reads the outcome with it until it has submitted a ring depth of commands more. | engine_core §5.1 |
 | admission wait | A paced submit that finds its ring full waits, on the endpoint's mutex and condition variable, until the oldest tick in the ring has run. Only a ring with a margin can fill. A pause leaves it parked; only revocation wakes it early. | engine_core §5.1 |
-| endpoint lease | An endpoint's lifecycle state, which every submit enters and which `revoke` closes. | engine_core §5.1 |
+| endpoint lease | An endpoint's lifecycle state, which every submit enters and which `revoke` closes: `OPEN`, `CLOSING`, `CLOSED`. A lease. | engine_core §5.1 |
+| lease | The building block of the endpoint lease and the operation lease: a state (`OPEN`, `CLOSING`, `CLOSED`, `FAILED`), a count of running holders, and the closer's park. `Lease` in `sim_estab:engine.lease`. | engine_core §5.1, python_api §6 |
 | outcome | The second answer to a command, read from its command handle on the producer's thread: `Pending` until the tick that runs it has run, then `Applied` with that tick, or `Dropped` if the drain refused it because its tick had passed. `Expired` once its producer has submitted a ring depth of commands after it. | engine_core §5.1 |
 | deadlock rule | A paced producer may wait only for outcomes of ticks it has already declared ready. Breaking it raises `CommandOrderError`. | engine_core §5.1 |
 | command drain | At the start of tick `t`, the sim takes every command stamped for `t` from every endpoint, in ascending source id. | engine_core §5.1 |
@@ -205,8 +206,8 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | shutdown sequence | `mods.stop()`, then `stop_sim_async()`, then `close()`. `close()` does any step not done, never raises because shutdown failed, and can be called twice. | python_api §2 |
 | shutdown step | One of the three calls of the shutdown sequence. | python_api §2 |
 | shutdown stage | One of the five blocking waits during shutdown, each bounded by `shutdown_deadline`: running submits on a revoked endpoint, a mod host's inbox drain and `on_unload`, mod host and sim thread joins, confirming a killed process is dead, and running engine calls in `close()`. | limits §1.1 |
-| operation lease | Every native call except `close()` registers itself; `close()` refuses new calls and waits for running ones. It uses the endpoint lease's protocol (engine_core §5.1). | python_api §2, §6 |
-| control block | The small object behind the operation lease. It outlives every native resource it guards, so a stale handle can still see that the engine is closed. | python_api §2 |
+| operation lease | Every native call except `close()` registers itself; `close()` refuses new calls and waits for running ones. A lease, the same building block as the endpoint lease (engine_core §5.1). | python_api §2, §6 |
+| control block | The engine's operation lease, a `Lease` the `Engine` shares with its handles. It outlives every native resource it guards, so a stale handle can still see that the engine is closed or failed. | python_api §2 |
 | registered dependant | Anything that can outlive a tick and still touch engine memory (mod hosts, engine view blocks held by array views). `close()` unwinds them before releasing anything native. | python_api §2 |
 | staged join | How `stop_sim_async()` stops the sim thread: request stop, wake the gate, wait, then log and retry once before `Failed`. | python_api §4.3 |
 | `shutdown_deadline` | How long each blocking shutdown step may wait. 5 seconds. | limits §1.1 |

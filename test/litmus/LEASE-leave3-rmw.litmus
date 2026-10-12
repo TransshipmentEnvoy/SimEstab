@@ -2,8 +2,8 @@ C LEASE-leave3-rmw
 (* Two holders inside: P0 leaves first, P1 leaves last. The waiter (P2) reaches P1 through
    P0's subtraction, a release sequence of read-modify-writes. It holds only while every
    write to the count is a read-modify-write (design_engine_core.md §5.1).
-   x = the count of running holders (active_submit, active_operations).
-   y = the lease state: 0 = OPEN, 1 = closing (REVOKING, CLOSING).
+   x = the count of running holders (the lease's active).
+   y = the lease state: 0 = OPEN, 1 = CLOSING.
    P0 is a holder (a submit, a native call); P1 is the waiter (revoke, close).
    Bad outcome: the waiter counts both (r2=2) and sleeps, while P1, last out, sees OPEN.
    Expected: Never. *)

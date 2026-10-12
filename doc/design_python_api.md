@@ -228,12 +228,13 @@ Rules:
   also never blocks indefinitely. Every wait inside it has a deadline, and an expiry leads
   to the `Failed` path below, not to a hang. It performs steps 1 and 2 itself if the caller
   has not, so a bare `close()` is always a complete shutdown.
-- **Step 3 closes the operation lease.** The Python `Engine` wrapper owns a small control
-  block `{ atomic access_state, atomic active_operations, mutex, condition_variable }`. It
-  outlives every native resource it guards. Every native call except `close()` takes the
+- **Step 3 closes the operation lease.** The `Engine` owns a small control block, a
+  `Lease` `{ atomic state, atomic active, mutex, condition_variable }`: the building block
+  it shares with the endpoint lease (`design_engine_core.md` §5.1). It outlives every native
+  resource it guards. Every native call except `close()` takes the
   operation lease of §6. `close()` changes `OPEN -> CLOSING` with a compare-exchange. That
   transition is the linearization point: after it, no new call may enter. `close()` then
-  waits, under the shutdown deadline, for `active_operations == 0`, which it reads with a
+  waits, under the shutdown deadline, for `active == 0`, which it reads with a
   read-modify-write (§6). Only a zero count allows detach and native release. A timeout
   enters the terminal `Failed` state and disarms the native contexts. The resources are then
   kept, not freed under a running call. The wait releases the GIL; Python mod host teardown
@@ -1091,27 +1092,27 @@ Rules:
 
   ```text
   enter:
-      if access_state.load(acquire) != OPEN: raise EngineClosedError/EngineFailedError
-      active_operations.fetch_add(1, acq_rel)
-      if access_state.load(acquire) != OPEN:
+      if state.load(acquire) != OPEN: raise EngineClosedError/EngineFailedError
+      active.fetch_add(1, acq_rel)
+      if state.load(acquire) != OPEN:
           leave(); raise EngineClosedError/EngineFailedError
       # the second OPEN observation is the call's admission linearization point
 
   leave:
-      if active_operations.fetch_sub(1, acq_rel) == 1 && access_state.load(acquire) != OPEN:
+      if active.fetch_sub(1, acq_rel) == 1 && state.load(acquire) != OPEN:
           { std::lock_guard lk(m); cv.notify_all(); }       # last out of a closing engine
 
   close:
-      compare_exchange access_state OPEN -> CLOSING (acq_rel)  # close LP
+      compare_exchange state OPEN -> CLOSING (acq_rel)  # close LP
       { std::unique_lock lk(m);                                # under the shutdown deadline
         if !cv.wait_until(lk, deadline,
-                [&] { return active_operations.fetch_add(0, acq_rel) == 0; }):  # an RMW
+                [&] { return active.fetch_add(0, acq_rel) == 0; }):  # an RMW
             store FAILED, disarm, keep the native resources; return }
-      release native resources; access_state.store(CLOSED, release)
+      release native resources; state.store(CLOSED, release)
   ```
 
-  This is the endpoint lease's protocol (`design_engine_core.md` §5.1), and its argument
-  holds here unchanged. The increment followed by a recheck closes the gap between check
+  This is the endpoint lease's protocol, and the two share one building block, `Lease`
+  (`design_engine_core.md` §5.1); its argument holds here unchanged. The increment followed by a recheck closes the gap between check
   and use. Either the call is counted before `close()` waits, or it sees `CLOSING` and never
   dereferences native state. **`close()` reads the count with a read-modify-write, never a
   load, and both count changes are `acq_rel`.** With a plain load, C++ allows a call to be
@@ -1360,9 +1361,9 @@ Rules:
 
 - **Revocation closes the endpoint before reclaiming the ring.** Every submit takes the
   endpoint lease of `design_engine_core.md` §5.1, then touches the ring. Revocation changes
-  `OPEN -> REVOKING` and refuses new leases. It wakes any producer parked in the admission
+  `OPEN -> CLOSING` and refuses new leases. It wakes any producer parked in the admission
   wait or an outcome wait with `Revoked`; nothing else wakes either wait early. It then
-  waits, under the shutdown deadline, for calls already admitted, and stores `REVOKED`. A
+  waits, under the shutdown deadline, for calls already admitted, and stores `CLOSED`. A
   timeout of that wait is a `Failed` path (§2). Reclaiming the ring, or reopening the
   endpoint, also waits for the producer's join: outcome reads take no lease, and the last
   submit out may still notify after the wait has returned.

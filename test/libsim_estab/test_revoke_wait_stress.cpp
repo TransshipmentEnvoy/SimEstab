@@ -28,11 +28,13 @@ module sim_estab;
 import :engine.endpoint;
 import :engine.event_ring;
 import :engine.gate;
+import :engine.lease;
 
 using namespace sim_estab::core::engine::endpoint;
 using sim_estab::core::engine::event_ring::EventDrain;
 using sim_estab::core::engine::event_ring::EventRing;
 using sim_estab::core::engine::gate::TickGate;
+using sim_estab::core::engine::lease::LeaseState;
 using sim_estab::core::engine::tick::Tick;
 
 namespace {
@@ -74,12 +76,12 @@ BOOST_AUTO_TEST_CASE(test_the_last_submit_wakes_the_revoker) {
             while (round_opened.load(std::memory_order_acquire) < round) {
                 std::this_thread::yield();
             }
-            if (host.try_enter()) {
+            if (host.lease.try_enter()) {
                 round_leased.store(round, std::memory_order_release);
                 for (std::uint64_t spin = 0; spin < round % 32; ++spin) {
                     std::this_thread::yield();
                 }
-                host.leave();
+                host.lease.leave();
             } else {
                 round_leased.store(round, std::memory_order_release);
             }
@@ -106,8 +108,8 @@ BOOST_AUTO_TEST_CASE(test_the_last_submit_wakes_the_revoker) {
     }
     producer.join();
 
-    BOOST_TEST((host.lease_state.load() == LeaseState::REVOKED));
-    BOOST_TEST(host.active_submit.load() == 0u);
+    BOOST_TEST((host.lease.state.load() == LeaseState::CLOSED));
+    BOOST_TEST(host.lease.active.load() == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

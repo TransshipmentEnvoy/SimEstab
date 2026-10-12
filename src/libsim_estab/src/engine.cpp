@@ -24,6 +24,7 @@ module;
 
 module sim_estab;
 import :engine.tick;
+import :engine.lease;
 import :engine.view;
 import :engine.event_ring;
 import :engine.gate;
@@ -81,6 +82,14 @@ const char *name_of(EngineState state) noexcept {
 
 const char *name_of(EventDrain drain) noexcept { return drain == EventDrain::Owner ? "Owner" : "Sink"; }
 
+/// A call that found the operation lease closed (design_python_api.md §6)
+[[noreturn]] void refuse_closed(const lease::Lease& control, const char *call) {
+    if (control.state.load(std::memory_order_acquire) == lease::LeaseState::FAILED) {
+        fail<engine_failed_error>(std::string(call) + ": the engine is Failed");
+    }
+    fail<engine_closed_error>(std::string(call) + ": the engine is closing or closed");
+}
+
 /// A seed for a session that configured none (design_engine_core.md §2.4 step 4)
 std::uint64_t generate_seed() {
     std::random_device device;
@@ -103,6 +112,10 @@ void validate(const EngineConfig& config) {
     }
     if (config.drain_interval_ticks == 0) {
         fail<engine_error>("Engine: drain_interval_ticks (D) must be at least 1, got 0");
+    }
+    if (!(config.shutdown_deadline.count() > 0.0)) {
+        fail<engine_error>("Engine: shutdown_deadline must be positive, got " +
+                           std::to_string(config.shutdown_deadline.count()) + " s");
     }
     using Capacity = std::pair<const char *, std::uint32_t>;
     for (const auto& [name, capacity] :
@@ -268,11 +281,18 @@ StepResult run_step(gate::TickGate& tick_gate, std::uint64_t tick_count, std::fu
 // The engine view handle
 // ---------------------------------------------------------------------------
 
-EngineViewHandle::EngineViewHandle(view::EngineView& engine_view, gate::TickGate& tick_gate, const EngineViewSpec& spec,
+EngineViewHandle::EngineViewHandle(std::shared_ptr<lease::Lease> control, view::EngineView& engine_view,
+                                   gate::TickGate& tick_gate, const EngineViewSpec& spec,
                                    std::uint32_t participant) noexcept
-    : engine_view_(&engine_view), tick_gate_(&tick_gate), spec_(&spec), participant_(participant) {}
+    : control_(std::move(control)), engine_view_(&engine_view), tick_gate_(&tick_gate), name_(spec.name),
+      cadence_(spec.cadence), paced_(spec.paced), participant_(participant) {}
 
 bool EngineViewHandle::take() {
+    if (!control_->try_enter()) {
+        refuse_closed(*control_, "take()");
+    }
+    const lease::LeaseGuard guard{*control_};
+
     view::EngineView& engine_view = *engine_view_;
     // The block handed back is the one this reader consumed (design_engine_core.md §3.5).
     // The cadence hint and the predicate parameters arrive with projection (M5).
@@ -280,28 +300,37 @@ bool EngineViewHandle::take() {
     if (!engine_view.take()) { // (T1), (T2)
         return false;
     }
-    if (spec_->paced) {
+    if (paced_) {
         // The take is the declaration: ready through the next publish (design_engine_core.md §3.1)
-        tick_gate_->declare_ready(participant_, Tick{engine_view.held_block().tick + spec_->cadence});
+        tick_gate_->declare_ready(participant_, Tick{engine_view.held_block().tick + cadence_});
     }
     return true;
 }
 
-const Block& EngineViewHandle::held() const noexcept { return engine_view_->held_block(); }
+const Block& EngineViewHandle::held() const {
+    if (!control_->try_enter()) {
+        refuse_closed(*control_, "held()");
+    }
+    const lease::LeaseGuard guard{*control_};
+    return engine_view_->held_block();
+}
 
-std::string_view EngineViewHandle::name() const noexcept { return spec_->name; }
+std::string_view EngineViewHandle::name() const noexcept { return name_; }
 
-std::uint32_t EngineViewHandle::cadence() const noexcept { return spec_->cadence; }
+std::uint32_t EngineViewHandle::cadence() const noexcept { return cadence_; }
 
-bool EngineViewHandle::is_paced() const noexcept { return spec_->paced; }
+bool EngineViewHandle::is_paced() const noexcept { return paced_; }
 
 // ---------------------------------------------------------------------------
 // The engine
 // ---------------------------------------------------------------------------
 
 struct Engine::Impl {
+    using Clock = lease::Lease::Clock;
+
     EngineConfig config;
     StepCallbacks step_callbacks;
+    std::shared_ptr<lease::Lease> control; ///< the control block: the operation lease, shared with the handles
     std::atomic<EngineState> state{EngineState::Configuring};
     std::mutex control_m;       ///< the control mutex: state transitions, and the control calls before the freeze
     bool pending_pause = false; ///< guarded by control_m: a pause() made while Configuring
@@ -310,14 +339,20 @@ struct Engine::Impl {
     std::unique_ptr<Session> session;  ///< from the freeze on; its address never changes
 
     Impl(const EngineConfig& engine_config, StepCallbacks callbacks)
-        : config(engine_config), step_callbacks(std::move(callbacks)) {}
+        : config(engine_config), step_callbacks(std::move(callbacks)),
+          control(std::make_shared<lease::Lease>(lease::LeaseState::OPEN)) {}
 
     Impl(const Impl&)            = delete;
     Impl& operator=(const Impl&) = delete;
     ~Impl() { cleanup(); }
 
-    /// Release the session, or disarm (design_patterns.md §4)
+    /// Close if the caller did not, then release the session, or disarm (design_patterns.md
+    /// §4)
     void cleanup() noexcept {
+        if (control->state.load(std::memory_order_acquire) == lease::LeaseState::OPEN) {
+            sim_estab_log(channel, severity_level::warning, "engine destroyed without close(); closing it now");
+            close();
+        }
         const EngineState last = state.load(std::memory_order_acquire);
         if (last == EngineState::Failed) {
             // A thread may still reach the session, so nothing of it is freed, and the
@@ -333,6 +368,58 @@ struct Engine::Impl {
         session.reset();
         sim_estab_log(channel, severity_level::info, "engine destroyed, from ", name_of(last));
         engine_exists.store(false, std::memory_order_release);
+    }
+
+    /// Owner thread: close() (design_python_api.md §2 step 3)
+    void close() noexcept {
+        // Step 2 of the shutdown sequence, if the caller skipped it. Step 1, the mod hosts,
+        // arrives with M7.
+        if (state.load(std::memory_order_acquire) == EngineState::Running) {
+            session->tick_gate.request_stop();
+            set_state(EngineState::Stopped);
+        }
+        // Step 3. The compare-exchange is the linearization point: after it no call enters.
+        lease::LeaseState expected = lease::LeaseState::OPEN;
+        if (!control->state.compare_exchange_strong(expected, lease::LeaseState::CLOSING, std::memory_order_acq_rel)) {
+            return; // already closing, closed or failed: nothing to do, and nothing to raise
+        }
+        set_state(EngineState::Closing);
+        const Clock::duration budget = std::chrono::duration_cast<Clock::duration>(config.shutdown_deadline);
+        if (!control->wait_for_holders(Clock::now() + budget)) { // the lease's read-modify-write
+            control->state.store(lease::LeaseState::FAILED, std::memory_order_release);
+            set_state(EngineState::Failed);
+            sim_estab_log(channel, severity_level::critical,
+                          "close(): ", control->active.load(std::memory_order_acquire),
+                          " calls were still running after the shutdown deadline of ", config.shutdown_deadline.count(),
+                          " s; the engine is Failed, and its session is kept rather than freed under a running call");
+            return;
+        }
+        if (session) {
+            // The host endpoint is revoked after its running submits finish
+            // (design_python_api.md §7.1), under a budget of its own (design_limits.md §1.1).
+            if (!session->host.revoke(Clock::now() + budget)) {
+                control->state.store(lease::LeaseState::FAILED, std::memory_order_release);
+                set_state(EngineState::Failed);
+                sim_estab_log(
+                    channel, severity_level::critical, "close(): the host endpoint's revocation timed out after ",
+                    config.shutdown_deadline.count(),
+                    " s; the engine is Failed, and its session is kept rather than freed under a running submit");
+                return;
+            }
+            session.reset(); // the native release: the engine views, the endpoint, the gate, the ring
+        }
+        control->state.store(lease::LeaseState::CLOSED, std::memory_order_release);
+        set_state(EngineState::Closed);
+        sim_estab_log(channel, severity_level::info, "engine closed");
+    }
+
+    /// Every call but close(): enter the operation lease, or throw for one that is not OPEN
+    /// (design_python_api.md §6)
+    lease::LeaseGuard enter(const char *call) {
+        if (!control->try_enter()) {
+            refuse_closed(*control, call);
+        }
+        return lease::LeaseGuard{*control};
     }
 
     /// Owner thread: move to `next`
@@ -361,7 +448,7 @@ struct Engine::Impl {
             fail<engine_failed_error>(std::string(call) + ": the engine is Failed");
         case EngineState::Closing:
         case EngineState::Closed:
-            fail<engine_state_error>(std::string(call) + ": the engine is " + name_of(now));
+            fail<engine_closed_error>(std::string(call) + ": the engine is " + name_of(now));
         }
         abort_with("an EngineState outside its enumeration");
     }
@@ -374,7 +461,7 @@ struct Engine::Impl {
 
     /// Any thread, a control call. While Configuring, `pend` records the call for the
     /// freeze, under the control mutex, so the freeze cannot miss it.
-    Control control(std::function_ref<void()> pend) {
+    Control control_call(std::function_ref<void()> pend) {
         std::lock_guard lk(control_m);
         const EngineState now = state.load(std::memory_order_relaxed);
         if (now == EngineState::Configuring) {
@@ -398,10 +485,10 @@ Session *session_to_control(EngineState state, Session *session, const char *cal
     case EngineState::Failed:
         fail<engine_failed_error>(std::string(call) + ": the engine is Failed");
     case EngineState::LoadFailed:
+        fail<engine_state_error>(std::string(call) + ": the engine is LoadFailed, and has no session to control");
     case EngineState::Closing:
     case EngineState::Closed:
-        fail<engine_state_error>(std::string(call) + ": the engine is " + name_of(state) +
-                                 ", and has no session to control");
+        fail<engine_closed_error>(std::string(call) + ": the engine is " + name_of(state));
     }
     abort_with("an EngineState outside its enumeration");
 }
@@ -462,13 +549,15 @@ EngineConfig Engine::config() const noexcept {
 
 std::uint64_t Engine::seed() const {
     check_impl();
+    const lease::LeaseGuard guard = impl_->enter("seed()");
     return impl_->session_for("seed()", true).seed;
 }
 
 void Engine::register_engine_view(const EngineViewSpec& spec) {
     check_impl();
-    Impl& impl            = *impl_;
-    const EngineState now = impl.state.load(std::memory_order_acquire);
+    Impl& impl                    = *impl_;
+    const lease::LeaseGuard guard = impl.enter("register_engine_view()");
+    const EngineState now         = impl.state.load(std::memory_order_acquire);
     if (now != EngineState::Configuring) {
         fail<engine_state_error>(std::string("register_engine_view(): the engine is ") + name_of(now) +
                                  "; an engine view is registered while Configuring, before start_session()");
@@ -501,8 +590,9 @@ void Engine::register_engine_view(const EngineViewSpec& spec) {
 
 void Engine::start_session() {
     check_impl();
-    Impl& impl            = *impl_;
-    const EngineState now = impl.state.load(std::memory_order_acquire);
+    Impl& impl                    = *impl_;
+    const lease::LeaseGuard guard = impl.enter("start_session()");
+    const EngineState now         = impl.state.load(std::memory_order_acquire);
     if (now != EngineState::Configuring) {
         fail<engine_state_error>(std::string("start_session(): the engine is ") + name_of(now) +
                                  "; the freeze runs once, from Configuring");
@@ -558,8 +648,9 @@ void Engine::start_session() {
 
 StepResult Engine::step(std::uint64_t tick_count) {
     check_impl();
-    Impl& impl       = *impl_;
-    Session& session = impl.session_for("step()", false);
+    Impl& impl                    = *impl_;
+    const lease::LeaseGuard guard = impl.enter("step()");
+    Session& session              = impl.session_for("step()", false);
 
     std::string interrupted_by;
     const auto run_tick       = [&](Tick tick) { session.run_tick(tick); };
@@ -592,6 +683,8 @@ StepResult Engine::step(std::uint64_t tick_count) {
         throw event_backlog_error(what, result.tick_reached);
     }
     case StepEnd::Failed:
+        // Every later call fails, the handles' included: the lease says so too.
+        impl.control->state.store(lease::LeaseState::FAILED, std::memory_order_release);
         impl.set_state(EngineState::Failed);
         fail<engine_failed_error>("step(): participant " + std::to_string(result.participant) + " (engine view '" +
                                   std::string(session.participant_name(result.participant)) +
@@ -607,12 +700,14 @@ StepResult Engine::step(std::uint64_t tick_count) {
 
 std::expected<CommandHandle, Rejection> Engine::submit(const Command& command) {
     check_impl();
+    const lease::LeaseGuard guard = impl_->enter("submit()");
     return impl_->session_for("submit()", true).host.submit(command);
 }
 
 CommandOutcome Engine::outcome(const CommandHandle& handle) const {
     check_impl();
-    Session& session = impl_->session_for("outcome()", true);
+    const lease::LeaseGuard guard = impl_->enter("outcome()");
+    Session& session              = impl_->session_for("outcome()", true);
     if (handle.source != host_source) {
         fail<engine_error>("outcome(): the handle names source " + std::to_string(handle.source) +
                            ", and this session has only the host endpoint, source 0");
@@ -626,10 +721,11 @@ CommandOutcome Engine::outcome(const CommandHandle& handle) const {
 
 EngineViewHandle Engine::view(std::string_view name) {
     check_impl();
-    Session& session = impl_->session_for("view()", true);
+    const lease::LeaseGuard guard = impl_->enter("view()");
+    Session& session              = impl_->session_for("view()", true);
     for (std::size_t i = 0; i < session.specs.size(); ++i) {
         if (session.specs[i].name == name) {
-            return EngineViewHandle{*session.engine_views[i], session.tick_gate, session.specs[i],
+            return EngineViewHandle{impl_->control, *session.engine_views[i], session.tick_gate, session.specs[i],
                                     session.participant_of[i]};
         }
     }
@@ -638,7 +734,8 @@ EngineViewHandle Engine::view(std::string_view name) {
 
 void Engine::drain_events(std::vector<EngineEvent>& out) {
     check_impl();
-    Session& session = impl_->session_for("drain_events()", true);
+    const lease::LeaseGuard guard = impl_->enter("drain_events()");
+    Session& session              = impl_->session_for("drain_events()", true);
     if (session.events.event_drain != EventDrain::Owner) {
         fail<engine_state_error>("drain_events(): the session declared a sink drain, and the engine empties the "
                                  "ring itself; sink_digest() reports what it consumed");
@@ -648,7 +745,8 @@ void Engine::drain_events(std::vector<EngineEvent>& out) {
 
 SinkDigest Engine::sink_digest() const {
     check_impl();
-    Session& session = impl_->session_for("sink_digest()", true);
+    const lease::LeaseGuard guard = impl_->enter("sink_digest()");
+    Session& session              = impl_->session_for("sink_digest()", true);
     if (session.events.event_drain != EventDrain::Sink) {
         fail<engine_state_error>("sink_digest(): the session declared an owner drain, and has no sink; "
                                  "drain_events() empties the ring");
@@ -658,8 +756,9 @@ SinkDigest Engine::sink_digest() const {
 
 Tick Engine::snapshot() {
     check_impl();
-    Session& session = impl_->session_for("snapshot()", true);
-    bool in_flight   = false;
+    const lease::LeaseGuard guard = impl_->enter("snapshot()");
+    Session& session              = impl_->session_for("snapshot()", true);
+    bool in_flight                = false;
     {
         std::lock_guard lk(session.tick_gate.gate.m);
         in_flight = session.tick_gate.host.step_in_flight;
@@ -673,8 +772,9 @@ Tick Engine::snapshot() {
 
 void Engine::pause() {
     check_impl();
-    Impl& impl                  = *impl_;
-    const Impl::Control control = impl.control([&] { impl.pending_pause = true; });
+    Impl& impl                    = *impl_;
+    const lease::LeaseGuard guard = impl.enter("pause()");
+    const Impl::Control control   = impl.control_call([&] { impl.pending_pause = true; });
     if (Session *session = session_to_control(control.state, control.session, "pause()")) {
         session->tick_gate.pause();
     }
@@ -682,8 +782,9 @@ void Engine::pause() {
 
 void Engine::resume() {
     check_impl();
-    Impl& impl                  = *impl_;
-    const Impl::Control control = impl.control([&] { impl.pending_pause = false; });
+    Impl& impl                    = *impl_;
+    const lease::LeaseGuard guard = impl.enter("resume()");
+    const Impl::Control control   = impl.control_call([&] { impl.pending_pause = false; });
     if (Session *session = session_to_control(control.state, control.session, "resume()")) {
         if (!session->tick_gate.resume()) {
             fail<engine_state_error>("resume(): a step is in flight; it holds the run grant until it returns");
@@ -693,8 +794,9 @@ void Engine::resume() {
 
 void Engine::request_stop() {
     check_impl();
-    Impl& impl                  = *impl_;
-    const Impl::Control control = impl.control([&] { impl.pending_stop = true; });
+    Impl& impl                    = *impl_;
+    const lease::LeaseGuard guard = impl.enter("request_stop()");
+    const Impl::Control control   = impl.control_call([&] { impl.pending_stop = true; });
     if (Session *session = session_to_control(control.state, control.session, "request_stop()")) {
         session->tick_gate.request_stop();
     }
@@ -705,6 +807,10 @@ bool Engine::stop_requested() const noexcept {
         return false;
     }
     Impl& impl = *impl_;
+    if (!impl.control->try_enter()) {
+        return false; // a query degrades: a closed engine has nothing left to stop
+    }
+    const lease::LeaseGuard guard{*impl.control};
     std::lock_guard lk(impl.control_m);
     if (impl.session) {
         return impl.session->tick_gate.host.stop_requested.load(std::memory_order_acquire) != 0;
@@ -714,8 +820,9 @@ bool Engine::stop_requested() const noexcept {
 
 void Engine::stop_sim_async() {
     check_impl();
-    Impl& impl            = *impl_;
-    const EngineState now = impl.state.load(std::memory_order_acquire);
+    Impl& impl                    = *impl_;
+    const lease::LeaseGuard guard = impl.enter("stop_sim_async()");
+    const EngineState now         = impl.state.load(std::memory_order_acquire);
     switch (now) {
     case EngineState::Running:
         impl.session->tick_gate.request_stop();
@@ -730,13 +837,25 @@ void Engine::stop_sim_async() {
         fail<engine_failed_error>("stop_sim_async(): the engine is Failed");
     case EngineState::Closing:
     case EngineState::Closed:
-        fail<engine_state_error>(std::string("stop_sim_async(): the engine is ") + name_of(now));
+        fail<engine_closed_error>(std::string("stop_sim_async(): the engine is ") + name_of(now));
     }
+}
+
+void Engine::close() noexcept {
+    if (impl_ == nullptr) {
+        return; // destroyed already: nothing left to close
+    }
+    impl_->close();
 }
 
 event_ring::EventRing& session_events(Engine& engine) {
     engine.check_impl();
     return engine.impl_->session_for("session_events()", true).events;
+}
+
+lease::Lease& engine_control(Engine& engine) {
+    engine.check_impl();
+    return *engine.impl_->control;
 }
 
 } // namespace sim_estab::core::engine

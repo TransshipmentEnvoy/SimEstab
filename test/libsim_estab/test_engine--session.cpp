@@ -602,6 +602,8 @@ BOOST_AUTO_TEST_CASE(test_the_failed_path_poisons_the_process, *boost::unit_test
         BOOST_CHECK_THROW(engine.pause(), engine_failed_error);
         BOOST_CHECK_THROW(engine.request_stop(), engine_failed_error);
         BOOST_CHECK_THROW(engine.stop_sim_async(), engine_failed_error);
+        engine.close(); // a no-op in Failed, and it does not raise
+        BOOST_TEST((engine.state() == EngineState::Failed));
     }
     BOOST_CHECK_THROW(Engine{owner_config()}, engine_exists_error); // the process is poisoned
 }

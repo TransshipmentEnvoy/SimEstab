@@ -140,6 +140,7 @@ target_sources(sim_estab PUBLIC
     module/sim_estab--gpu.cppm
     module/sim_estab--util.cppm
     module/sim_estab--engine.tick.cppm
+    module/sim_estab--engine.lease.cppm
     module/sim_estab--engine.view.cppm
     module/sim_estab--engine.event_ring.cppm
     module/sim_estab--engine.gate.cppm

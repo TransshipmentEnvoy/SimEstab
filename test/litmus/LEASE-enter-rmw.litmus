@@ -1,7 +1,7 @@
 C LEASE-enter-rmw
 (* Entering against the waiter, as written (design_engine_core.md §5.1).
-   x = the count of running holders (active_submit, active_operations).
-   y = the lease state: 0 = OPEN, 1 = closing (REVOKING, CLOSING).
+   x = the count of running holders (the lease's active).
+   y = the lease state: 0 = OPEN, 1 = CLOSING.
    P0 is a holder (a submit, a native call); P1 is the waiter (revoke, close).
    Bad outcome: the holder sees OPEN, and the waiter sees nobody inside. Expected: Never. *)
 {}
