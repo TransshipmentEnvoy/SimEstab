@@ -696,8 +696,17 @@ Rules:
   `enable_console`, `disable_console`).
 - Template/variadic APIs get a concrete lambda wrapper, e.g.
   `log(channel, level, message)`. Give it `nb::arg` names and a docstring.
-- Top-level `init` / `deinit` / `run` are placeholders. The engine lifecycle (the `Engine`
-  object, pump primitives and a main loop in Python) is specified in `design_python_api.md`.
+- The engine lifecycle (the `Engine` object, the pump primitives and the loops in Python)
+  is specified in `design_python_api.md`; `_if.engine` is its binding. `_if.limits` exposes
+  the decided limits, so the Python defaults are checked against the C++ ones.
+- A call that can run long carries `nb::call_guard<nb::gil_scoped_release>()`
+  (`design_python_api.md` §5 rule 2). The one step callback the binding registers, the
+  signal check, takes the GIL back for `PyErr_CheckSignals()` and throws
+  `nb::python_error`, so a `KeyboardInterrupt` ends the step at a tick boundary.
+- `bind.cpp` never instantiates a defaulted comparison operator of a module-attached
+  type: GCC 16 crashes mangling one from an importing unit. The Python comparisons are
+  bound field-wise, with `nb::is_operator()` so a mismatched operand returns
+  `NotImplemented`.
 
 ## 9. Checklist for a new subsystem
 

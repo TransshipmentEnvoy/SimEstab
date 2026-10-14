@@ -100,7 +100,7 @@ Rules:
 
 **TL;DR**
 
-- There is one `Engine` object per process. Construction acquires resources and `close()`
+- There is one live `Engine` per process. Construction acquires resources and `close()`
   releases them. This is the Python face of the RAII context pattern (`design_patterns.md`
   §4).
 - Options are frozen at construction (§3). The **session** is frozen later, by
@@ -250,8 +250,12 @@ Rules:
   stop-time error is logged instead of raised, so the body's exception is never masked. Code
   that does not use `with` calls the steps explicitly. Relying on GC finalization is
   unsupported; finalization warns if the engine was never closed.
-- **One live `Engine` per process.** The wrapped resources (the SDL context, the GPU device)
-  are per-process singletons. A second construction raises `EngineExistsError` (§8).
+- **One live `Engine` per process.** An `Engine` is live from construction until `close()`
+  reaches `Closed`; a `Failed` one stays live for good. The wrapped resources (the SDL
+  context, the GPU device) are per-process singletons, and `close()` has released them by
+  then. A second construction while one is live raises `EngineExistsError` (§8). A closed
+  `Engine` object may still exist, as the variable of a finished `with` does; it does not
+  block the next.
 - `Engine` cannot be copied or pickled.
 - **Lifecycle calls are owner-thread-only.** Construction, `close()` and every `run_*_async`
   or `stop_*_async` call (§4.3) run on the **owner thread**: the thread that constructed the
@@ -415,14 +419,14 @@ class CommandPolicy:                     # doc/design_limits.md §2
                                          #   ring_capacity_ticks
 
 @dataclass(frozen=True, slots=True)
-class WindowConfig:                      # not in config.py yet; ignored when headless
+class WindowConfig:                      # ignored when headless
     width: int = 1280
     height: int = 720
     title: str = "SimEstab"
     resizable: bool = True
 
 @dataclass(frozen=True, slots=True)
-class LogConfig:                         # not in config.py yet; design_logging.md §2
+class LogConfig:                         # design_logging.md §2
     console: bool = True                 # the console sink
     level: str = "info"                  # starting severity filter
     session_dir: Path | None = None      # where the freeze opens the per-session file
@@ -450,8 +454,7 @@ class EngineConfig:
     seed: int | None = None              # None -> generated, then recorded
     event_drain: str | None = None       # "owner" | "sink": who empties the event ring
                                          #   (§7.3). No default: start_session() raises
-                                         #   ValueError while it is None. Not in
-                                         #   config.py yet
+                                         #   ValueError while it is None
     on_failed_stop: str = "raise"        # "raise" | "terminate" (§2, below)
     projection_warn_bytes_per_second: int = 4_000_000_000
                                          # publish bandwidth above which the engine warns,
@@ -465,9 +468,8 @@ class EngineConfig:
 engine = Engine(config)                  # the only place config crosses the boundary
 ```
 
-The sketch matches `src/sim_estab/config.py`, which is the implementation. `WindowConfig`,
-`LogConfig`, `event_drain` and `HostPolicy`'s two mod-deadline fields are the only parts not
-in `config.py` yet. The mod-deadline values are open
+The sketch matches `src/sim_estab/config.py`, which is the implementation. `HostPolicy`'s
+two mod-deadline fields are the only part not in `config.py`; their values are open
 ([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
 
 `WindowConfig` holds only what the window needs at creation; anything a running window can
@@ -1077,10 +1079,9 @@ Rules:
 
 - `nanobind_add_module(... FREE_THREADED ...)` stays; it is already set in
   `src/sim_estab_ext/CMakeLists.txt`. Without it, a free-threaded interpreter silently
-  re-enables the GIL at import. A test guards it:
+  re-enables the GIL at import. `test/test_freethreading.py` guards it:
 
   ```python
-  # pseudo-code — test_freethreading.py
   if sysconfig.get_config_var("Py_GIL_DISABLED"):
       assert not sys._is_gil_enabled()      # would fail if FREE_THREADED regressed
   ```

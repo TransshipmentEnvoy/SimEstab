@@ -9,11 +9,19 @@ exactly what they exist to catch. If a value legitimately moves, the document an
 """
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 
+import sim_estab._if as if_module
 import sim_estab.config as engine_config
-from sim_estab.config import CommandPolicy, EngineConfig, HostPolicy
+from sim_estab.config import (
+    CommandPolicy,
+    EngineConfig,
+    HostPolicy,
+    LogConfig,
+    WindowConfig,
+)
 
 # --------------------------------------------------------------------------
 # decided values (design_limits.md §1, §2, §4)
@@ -30,6 +38,37 @@ def test_decided_defaults():
     assert policy.endpoint_capacity == 64
     assert policy.host_endpoint_capacity == 256
     assert policy.peer_endpoint_capacity == 256
+
+
+def test_defaults_agree_with_limits():
+    """The Python defaults and ``sim_estab:limits`` must not drift: each decided value
+    has one C++ mirror, read through ``_if.limits``."""
+    limits = if_module.limits
+    config = EngineConfig()
+    assert config.tick_rate == limits.default_tick_rate
+    assert (
+        config.command_policy.drain_interval_ticks
+        == limits.default_drain_interval_ticks
+    )
+    assert config.command_policy.endpoint_capacity == limits.default_endpoint_capacity
+    assert (
+        config.command_policy.host_endpoint_capacity
+        == limits.default_host_endpoint_capacity
+    )
+    assert (
+        config.command_policy.peer_endpoint_capacity
+        == limits.default_peer_endpoint_capacity
+    )
+    assert engine_config.MAX_ENDPOINT_CAPACITY == limits.max_endpoint_capacity
+    assert (
+        config.host_policy.shutdown_deadline == limits.default_shutdown_deadline_seconds
+    )
+    assert engine_config.DEFAULT_ENTITY_CAPACITY == limits.default_entity_capacity
+    assert engine_config.MAX_ENTITY_CAPACITY == limits.max_entity_capacity
+    assert (
+        config.projection_warn_bytes_per_second
+        == limits.default_projection_warn_bytes_per_second
+    )
 
 
 def test_entity_capacity_decided_values():
@@ -184,6 +223,51 @@ def test_host_policy_validation():
         HostPolicy(mod_retry_limit=-1)
     with pytest.raises(ValueError, match="ipc_deadline must be positive"):
         HostPolicy(ipc_deadline=0.0)
+
+
+# --------------------------------------------------------------------------
+# the window, the log and the event drain (design_python_api.md §3)
+# --------------------------------------------------------------------------
+
+
+def test_window_config_defaults_and_validation():
+    window = WindowConfig()
+    assert (window.width, window.height) == (1280, 720)
+    assert window.title == "SimEstab"
+    assert window.resizable
+    with pytest.raises(ValueError, match="width must be positive"):
+        WindowConfig(width=0)
+    with pytest.raises(ValueError, match="height must be positive"):
+        WindowConfig(height=-1)
+
+
+def test_log_config_defaults_and_validation(tmp_path):
+    log = LogConfig()
+    assert log.console
+    assert log.level == "info"
+    assert log.session_dir is None
+    assert LogConfig(session_dir=str(tmp_path)).session_dir == Path(tmp_path)
+    with pytest.raises(ValueError, match="level must be one of"):
+        LogConfig(level="verbose")
+    with pytest.raises(ValueError, match="session_dir must be a path"):
+        LogConfig(session_dir=42)  # type: ignore[arg-type]
+
+
+def test_event_drain_is_a_closed_set_with_no_default():
+    """No default: a session declares who empties its ring, and ``start_session()``
+    refuses one that did not (``design_python_api.md`` §3)."""
+    assert EngineConfig().event_drain is None
+    assert EngineConfig(event_drain="owner").event_drain == "owner"
+    assert EngineConfig(event_drain="sink").event_drain == "sink"
+    with pytest.raises(ValueError, match="event_drain must be one of"):
+        EngineConfig(event_drain="both")
+
+
+def test_engine_config_carries_the_window_and_the_log():
+    config = EngineConfig()
+    assert config.window == WindowConfig()
+    assert config.log == LogConfig()
+    assert not config.headless
 
 
 # --------------------------------------------------------------------------

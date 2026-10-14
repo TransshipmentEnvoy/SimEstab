@@ -115,7 +115,8 @@ reaches the engine from Python yet. Everything after M1 is designed but not writ
         declarations and control calls, tick progress against the executor, and the
         admission wait against the drain. Lost wake-ups are hangs, not data races
         (`doc/design_engine_core.md` §3.3)
-  + [ ] a test that the defaults in `config.py` and `sim_estab:limits` agree
+  + [x] a test that the defaults in `config.py` and `sim_estab:limits` agree:
+        `test/test_config.py` reads the C++ values through `_if.limits`
 + [ ] **M2: fixed-point, PRNG, checksum, replay** (`doc/design_engine_core.md` §2, §7 step 2)
   + [ ] the `fixed<>` type ([Q25](doc/open_question.md#q25-the-fixed-specification))
   + [ ] the PRNG and per-system streams ([Q26](doc/open_question.md#q26-the-prng))

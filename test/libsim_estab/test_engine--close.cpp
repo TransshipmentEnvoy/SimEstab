@@ -131,6 +131,25 @@ BOOST_AUTO_TEST_CASE(test_close_from_stopped) {
 }
 
 /**
+ * @brief A closed engine is not live: the next Engine may be constructed while the closed
+ *        one still exists (design_python_api.md §2)
+ */
+BOOST_AUTO_TEST_CASE(test_a_closed_engine_releases_the_singleton) {
+    Engine first{owner_config()};
+    first.start_session();
+    BOOST_CHECK_THROW(Engine{owner_config()}, engine_exists_error);
+    first.close();
+    BOOST_TEST((first.state() == EngineState::Closed));
+
+    Engine second{owner_config()}; // `first` still exists
+    second.start_session();
+    BOOST_TEST((second.step(1).tick_reached == Tick{1}));
+    check_every_call_is_refused_as_closed(first, nullptr); // and stays closed
+    second.close();
+    BOOST_TEST((second.state() == EngineState::Closed));
+}
+
+/**
  * @brief A handle that outlives its engine sees the engine closed instead of freed memory;
  *        the destructor closes when the caller did not
  */

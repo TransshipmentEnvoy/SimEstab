@@ -4,21 +4,23 @@ Every value here is decided in ``design_limits.md``, which carries the reasoning
 and the revisit trigger for each one; the shapes are ``design_python_api.md`` §3. The
 C++ mirror of the command-policy defaults, the tick rate, the warn threshold and the
 entity capacities is the ``sim_estab:limits`` module partition, and the two must not
-drift. Of the ``HostPolicy`` values only ``shutdown_deadline`` has a C++ mirror; the
-rest have none.
+drift: ``test/test_config.py`` checks the defaults against ``sim_estab._if.limits``.
+Of the ``HostPolicy`` values only ``shutdown_deadline`` has a C++ mirror; the rest
+have none.
 
 Validation happens here, in Python, before anything touches native code
 (``design_patterns.md`` §6: validate arguments up front). ``ValueError`` carries a
 specific message naming the field and the constraint it broke.
 
-Not yet present, and deliberately: ``EngineConfig.window`` and ``EngineConfig.log``.
-Both are M1 surface and neither carries a number M0 owns, so inventing them here would
-pre-decide shapes that belong with the session lifecycle.
+``WindowConfig`` holds only what the window needs at creation; anything a running
+window can change is a control call. ``LogConfig`` is described in
+``design_logging.md`` §2.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Mapping
 
@@ -26,6 +28,8 @@ __all__ = [
     "CommandPolicy",
     "EngineConfig",
     "HostPolicy",
+    "LogConfig",
+    "WindowConfig",
 ]
 
 
@@ -39,6 +43,20 @@ DEFAULT_ENTITY_CAPACITY: Final[int] = 1 << 24
 #: The largest cap a type may declare or a session may configure. A slot is a ``u32``
 #: and the high half of a ``u64`` id, so a larger cap has no slot to put an entity in.
 MAX_ENTITY_CAPACITY: Final[int] = (1 << 32) - 1
+
+#: Who may empty the event ring: the owner thread with ``drain_events()``, or the
+#: engine's own sink (``design_python_api.md`` §3, §7.3).
+EVENT_DRAINS: Final[tuple[str, ...]] = ("owner", "sink")
+
+#: The severity levels of ``sim_estab:log``, lowest first (``design_logging.md`` §1).
+LOG_LEVELS: Final[tuple[str, ...]] = (
+    "trace",
+    "debug",
+    "info",
+    "warning",
+    "error",
+    "critical",
+)
 
 
 def _require_positive(value: int | float, name: str) -> None:
@@ -154,6 +172,53 @@ class HostPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class WindowConfig:
+    """What the window needs at creation (``design_python_api.md`` §3). Ignored when
+    headless. Anything a running window can change is a control call, not a field."""
+
+    width: int = 1280
+    height: int = 720
+    title: str = "SimEstab"
+    resizable: bool = True
+
+    def __post_init__(self) -> None:
+        _require_positive(self.width, "width")
+        _require_positive(self.height, "height")
+
+
+@dataclass(frozen=True, slots=True)
+class LogConfig:
+    """How logging starts (``design_logging.md`` §2).
+
+    Logging is reference-counted and the application may already hold it, so the first
+    holder's ``LogConfig`` wins: a later, different one is warned about and ignored
+    (``design_python_api.md`` §3).
+    """
+
+    #: The console sink.
+    console: bool = True
+
+    #: The starting severity filter, one of ``LOG_LEVELS``.
+    level: str = "info"
+
+    #: Where the freeze opens the per-session file sink; ``None`` opens no per-session
+    #: file. A ``str`` is accepted and stored as a ``Path``.
+    session_dir: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.level not in LOG_LEVELS:
+            raise ValueError(
+                f"level must be one of {', '.join(LOG_LEVELS)}, got {self.level!r}"
+            )
+        if self.session_dir is not None:
+            if not isinstance(self.session_dir, (str, Path)):
+                raise ValueError(
+                    f"session_dir must be a path or None, got {self.session_dir!r}"
+                )
+            object.__setattr__(self, "session_dir", Path(self.session_dir))
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     """The one config object, immutable after construction.
 
@@ -168,6 +233,9 @@ class EngineConfig:
     #: ``set_time_scale``, a control call, outside determinism.
     tick_rate: int = 30
 
+    window: WindowConfig = field(default_factory=WindowConfig)
+    log: LogConfig = field(default_factory=LogConfig)
+
     host_policy: HostPolicy = field(default_factory=HostPolicy)
     command_policy: CommandPolicy = field(default_factory=CommandPolicy)
 
@@ -180,6 +248,12 @@ class EngineConfig:
 
     #: ``None`` generates one, which is then recorded.
     seed: int | None = None
+
+    #: Who empties the event ring: ``"owner"`` or ``"sink"`` (``design_python_api.md``
+    #: §3, §7.3). No default: ``start_session()`` raises ``ValueError`` while it is
+    #: ``None``, because a default would let a headless run that never drains pause
+    #: itself at the backlog mark, or let a windowed app lose its events into a sink.
+    event_drain: str | None = None
 
     #: Join-timeout policy: ``"raise"`` or ``"terminate"``.
     on_failed_stop: str = "raise"
@@ -206,6 +280,11 @@ class EngineConfig:
             raise ValueError(
                 f"on_failed_stop must be 'raise' or 'terminate', got "
                 f"{self.on_failed_stop!r}"
+            )
+        if self.event_drain is not None and self.event_drain not in EVENT_DRAINS:
+            raise ValueError(
+                f"event_drain must be one of {', '.join(EVENT_DRAINS)} or None, got "
+                f"{self.event_drain!r}"
             )
         if self.seed is not None and self.seed < 0:
             raise ValueError(f"seed must not be negative, got {self.seed}")

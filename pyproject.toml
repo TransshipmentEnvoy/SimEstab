@@ -22,3 +22,6 @@ dynamic = [
     "license",
     "urls",
 ]
+
+[tool.isort]
+profile = "black"

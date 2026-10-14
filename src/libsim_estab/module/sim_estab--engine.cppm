@@ -341,7 +341,8 @@ public:
      * @param config validated here: a tick rate and a drain interval of at least 1, and
      *        capacities in 1..max_endpoint_capacity. Throws engine_error otherwise.
      * @param step_callbacks the step callbacks, fixed for the engine's life
-     * @throws engine_exists_error if an Engine already exists in this process
+     * @throws engine_exists_error if a live Engine exists in this process: one not yet
+     *         closed, or one that failed
      */
     explicit Engine(const EngineConfig& config, StepCallbacks step_callbacks = {});
     ~Engine() noexcept;

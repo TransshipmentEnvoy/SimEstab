@@ -367,7 +367,7 @@ struct Engine::Impl {
         }
         session.reset();
         sim_estab_log(channel, severity_level::info, "engine destroyed, from ", name_of(last));
-        engine_exists.store(false, std::memory_order_release);
+        // The singleton was released by close(): a new Engine may live by now
     }
 
     /// Owner thread: close() (design_python_api.md §2 step 3)
@@ -411,6 +411,10 @@ struct Engine::Impl {
         control->state.store(lease::LeaseState::CLOSED, std::memory_order_release);
         set_state(EngineState::Closed);
         sim_estab_log(channel, severity_level::info, "engine closed");
+        // One live Engine per process (design_python_api.md §2): a closed one is not live,
+        // so the next may be constructed while this object still exists. Only Failed keeps
+        // the singleton, and poisons the process.
+        engine_exists.store(false, std::memory_order_release);
     }
 
     /// Every call but close(): enter the operation lease, or throw for one that is not OPEN
@@ -511,7 +515,7 @@ Engine::Engine(const EngineConfig& config, StepCallbacks step_callbacks) {
                       impl_->step_callbacks.size(), " step callbacks");
     } catch (...) {
         if (impl_ != nullptr) {
-            impl_->~Impl(); // cleanup() releases the singleton
+            impl_->~Impl(); // cleanup() closes, and close() releases the singleton
             impl_ = nullptr;
         } else {
             engine_exists.store(false, std::memory_order_release);
