@@ -3,12 +3,14 @@
 This document designs the Python side of `sim_estab`. It covers how the engine starts and
 stops, how options are set, and how the main loop runs.
 
-Status: designed, not implemented, except for the option objects of §3.
-`src/sim_estab/config.py` holds `EngineConfig`, `HostPolicy` and `CommandPolicy` with their
-decided M0 values. `bind.cpp` still exposes the placeholder top-level `init`, `deinit` and
-`run` bindings, which this design replaces. The built C++ modules are `log`, `gpu`, `viz`,
-`util` and `limits`. This design feeds the TODO items "design the basic engine structure"
-and "session management".
+Status: the M1 surface is built. `src/sim_estab/config.py` holds the option objects of §3;
+`engine.py` holds the `Engine` of §2 with the headless `step(n)` of §4.2 and §4.3, the host
+endpoint's commands (§7.1), the engine view handle, the event drains (§7.3) and the error
+family (§8); `loop.py` holds the headless loop; `upkeep/log.py` holds the refcounted
+logging holder of §2. They stand over the `_if.engine` and `_if.limits` bindings. Not built:
+the windowed loop and the sim thread (§4.1, §4.3), snapshots with columns and zero-copy
+engine views (§7.2), replay (§4.2), mods, and the per-session file sink and severity filter
+behind `LogConfig` (`design_logging.md` §3).
 
 Scope of v1: every engine view is `PRIVATE`. The multi-reader `SHARED` mode is deferred to
 `design_engine_core.md` Appendix A, together with process-host engine views. So
@@ -74,10 +76,11 @@ src/sim_estab/
   _if...so        # nanobind extension: 1:1 mirror of the C++ API (§8 of design_patterns.md)
   engine.py       # Engine: lifecycle + pump primitives (§2, §4)
   config.py       # EngineConfig frozen dataclass + validation (§3)
-  command.py      # typed command builders, batch submit (§7.1)
-  snapshot.py     # zero-copy snapshot views (§7.2)
+  command.py      # typed command builders, batch submit (§7.1); M1 has the one no-op
+  snapshot.py     # zero-copy snapshot views (§7.2); arrives with projection (M5)
   event.py        # event types, drain/dispatch bus (§7.3)
-  loop.py         # reference loops: windowed (sim thread) / headless / replay (§4)
+  loop.py         # reference loops: windowed (sim thread) / headless / replay (§4);
+                  #   M1 has the headless one
   gpu.py          # Python layer over the gpu bindings, once any exist
   viz.py          # Python layer over the viz bindings, once any exist
   mod/            # mod manager — see design_modding.md

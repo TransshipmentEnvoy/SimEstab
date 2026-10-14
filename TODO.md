@@ -8,10 +8,11 @@ the design each item implements is in `doc/`. Unresolved design questions are in
 That covers the root of the exception family, SDL3 compute and viz contexts, logging, the SDL
 main-thread init guard, and the decided limits (M0). The toolchain the designs assume is in
 place: GCC 16, C++26 with `-freflection`, and `-march=x86-64-v3`. M1 is under way: the engine
-view protocol, the gate, the tick loop, the event ring, the command endpoints and the
-`Engine` (the session lifecycle, the freeze, `step(n)`, the operation lease and `close()`)
-are written and tested; the Python surface and the logging remainder are left, and nothing
-reaches the engine from Python yet. Everything after M1 is designed but not written.
+view protocol, the gate, the tick loop, the event ring, the command endpoints, the `Engine`
+(the session lifecycle, the freeze, `step(n)`, the operation lease and `close()`) and the
+Python surface over them are written and tested; the logging remainder (the file sinks, the
+severity API and the per-session file sink) is left. Everything after M1 is designed but
+not written.
 
 + [x] basic setup
 + [x] graphics basics
@@ -96,15 +97,22 @@ reaches the engine from Python yet. Everything after M1 is designed but not writ
         `OPEN → CLOSING` rejects new calls, running calls drain under the shutdown
         deadline, and a timeout enters `Failed` and disarms rather than freeing native
         resources under a caller. It uses the endpoint lease's protocol, and the two share
-        one building block, `Lease` in `sim_estab:engine.lease`. Left for the Python
-        surface: `on_failed_stop` covers every `Failed` path; a lost GPU device or a failed
-        page commit exits the process (`doc/design_python_api.md` §2, §6)
-  + [ ] the Python surface: `engine.py`, `command.py`, `event.py`, `loop.py`, with the
+        one building block, `Lease` in `sim_estab:engine.lease`. `on_failed_stop` covers
+        every `Failed` path from Python. Left: a lost GPU device or a failed page commit
+        exits the process, which arrives with the device and the world container
+        (`doc/design_python_api.md` §2, §6)
+  + [x] the Python surface: `engine.py`, `command.py`, `event.py`, `loop.py`, with the
         headless loop of `doc/design_python_api.md` §4.2. `WindowConfig`, `LogConfig` and
-        `event_drain` join `config.py` (`doc/design_python_api.md` §1, §3)
-  + [ ] logging management, the remaining parts: the refcounted Python wrapper under a
-        module-level lock, and the per-session file sink in `LogConfig.session_dir`
-        (`doc/design_logging.md` §2, §3)
+        `event_drain` are in `config.py` (`doc/design_python_api.md` §1, §3). `_if.engine`
+        and `_if.limits` mirror the C++ API 1:1, with the signal check as the one step
+        callback and the GIL released around `step()` and the shutdown calls (§4.3, §5)
+  + [x] the refcounted logging holder: `upkeep.log.acquire()` / `release()` under a
+        module-level lock, bracketing the engine's native life
+        (`doc/design_logging.md` §2)
+  + [ ] logging management, the remaining parts: the file sinks, the runtime severity API,
+        and the per-session file sink in `LogConfig.session_dir`. Until then `acquire`
+        accepts `LogConfig.level` and `session_dir`, warns and applies neither
+        (`doc/design_logging.md` §3)
   + [x] sanitizer tests for both protocols: the engine view's permutation invariant,
         including the reverse edge from reader to publisher, and a return header written
         before a take arriving intact at the publisher that receives the block, never while

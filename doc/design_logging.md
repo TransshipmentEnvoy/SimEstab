@@ -4,8 +4,8 @@ This document describes the `sim_estab:log` subsystem: how it is built, and the 
 starting, stopping and controlling it. Unlike the other design docs, most of it is
 **implemented**. Parts marked *planned* are not.
 
-Status: the C++ subsystem (§1) is built. The Python refcounted wrapper, file sinks, a
-runtime severity API and the per-session file sink (§2, §3) are planned.
+Status: the C++ subsystem (§1) and the Python refcounted holder (§2) are built. File sinks,
+a runtime severity API and the per-session file sink (§3) are planned.
 
 Terms are defined in [glossary.md](glossary.md).
 
@@ -78,9 +78,8 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
 ## 2. Lifetime and runtime control (rules)
 
 This section sets who starts and stops logging, and how it is controlled at run time. The
-C++ triad does not change; the ordering lives above it. The Python parts are *planned*.
-Today `sim_estab/upkeep/log.py` calls `log_init` and `log_deinit` directly, with no
-refcount.
+C++ triad does not change; the ordering lives above it, in `sim_estab/upkeep/log.py`:
+`acquire(config)` and `release()`. Its 1:1 functions over the triad stay beside them.
 
 **Who starts logging, and when.**
 
@@ -143,10 +142,10 @@ hierarchy, not an import path, and the two never resolve against each other.
   `enable_file(...)` / `disable_file()` following the console toggle's shape. They are a
   general rotating file sink, an error-and-above sink, and an opt-in debug sink.
 - **Runtime severity filter API**: `set_severity(level)`, global at first and later per
-  channel prefix. The filter is currently fixed at `info` inside `log_init`; `LogConfig.level`
-  sets the starting value once the wrapper exists.
+  channel prefix. The filter is fixed at `info` inside `log_init`; `LogConfig.level` sets
+  the starting value once the API exists. Until then `acquire` accepts a `level` other
+  than `info`, warns and leaves the filter alone.
 - **Session integration**: the per-session file sink of §2, named from the session identity
   plus a run-unique part, opened at the freeze in `LogConfig.session_dir`
-  (`design_engine_core.md` §2.4) and closed by `Engine.close()`.
-- **Refcounted Python wrapper**: `acquire()` / `release()` in `sim_estab.upkeep.log`, with
-  the count under a module-level `threading.Lock` (§2). The C++ triad needs no change.
+  (`design_engine_core.md` §2.4) and closed by `Engine.close()`. Until then `acquire`
+  accepts a `session_dir`, warns and opens nothing.
