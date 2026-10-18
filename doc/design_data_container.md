@@ -954,19 +954,19 @@ Logic mods live outside the determinism boundary and use exactly two artifacts
 ### 7.3 Tier 3 DLL engine core mods: C-ABI column table + registered dynamic columns
 
 Engine core mods run inside the tick and need direct column access. But the plugin boundary is a
-versioned C ABI (`design_modding.md` §5.1). The reflection-generated container is a C++
+C ABI (`design_modding.md` §5.1). The reflection-generated container is a C++
 type, and worse, one built with modules and `-freflection`, so it must never cross that
 boundary. Compiler and flag drift across the boundary is what the handshake's
 build-fingerprint check catches.
 
-- **Access.** The `sim_estab_host_v1` services table exposes columns as raw memory.
+- **Access.** The `sim_estab_host` services table exposes columns as raw memory.
   `resolve_column(object_name, property_name) → column_id` runs at session start, never at
   registration (see the rule below). The two accessors scoped to one `tick_fn` invocation
   are:
 
   ```c
   /* per object type, once per invocation */
-  sim_estab_row_set_v1 get_row_set(uint32_t object_id);
+  sim_estab_row_set get_row_set(uint32_t object_id);
   /*  uint64_t extent;        rows [0, extent); a row is live where its bit is set
    *  uint64_t begin, end;    this invocation's task range
    *  const uint64_t *live;   live bitmap, one bit per row (§2.2); NULL for an
@@ -977,7 +977,7 @@ build-fingerprint check catches.
    *                          mod may retain or put in a command                      */
 
   /* per column */
-  sim_estab_column_view_v1 get_column(uint32_t column_id);
+  sim_estab_column_view get_column(uint32_t column_id);
   /*  void    *data;          row 0; writable only if WRITABLE is set
    *  uint32_t elem_size, flags;              flags: WRITABLE
    *  uint64_t read_begin,  read_end;         set from the declared access type
@@ -1025,7 +1025,7 @@ build-fingerprint check catches.
 
   | When | `register_column` | `resolve_column` |
   |---|---|---|
-  | registration (`sim_estab_mod_register_v1`) | legal | **error**: the set is open |
+  | registration (`sim_estab_mod_register`) | legal | **error**: the set is open |
   | session start (`on_session_start`, at the freeze) | error: the set is closed | legal, and the column id is stable for the session |
 
   Registration, session start and the callback are defined in `design_modding.md` §5.1. The

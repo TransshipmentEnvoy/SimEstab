@@ -27,10 +27,11 @@ real rule depends on the payload schema (`engine_core` §2.3), which M2 specifie
 ### Q23. What does "engine build" mean in session identity?
 
 `engine_core` §2.3 puts the engine build in the replay header, and a mismatch rejects a
-replay (§2.4, `python_api` §4.2). But the same section requires identical checksums between
-Debug and Release builds, certification runs both (`modding` §5.3), and golden replays are
-meant to work across revisions. A build hash would reject all of these; a determinism
-version number would not.
+replay (§2.4, `python_api` §4.2). The engine build holds the engine release version
+(`patterns` §11). Open: whether it needs more, such as a build hash. The same section
+requires identical checksums between Debug and Release builds, certification runs both
+(`modding` §5.3), and golden replays are meant to work across revisions. A build hash would
+reject all of these. The release version rejects only a replay from another release.
 
 ### Q25. The `fixed<>` specification
 
@@ -334,6 +335,14 @@ open. First, whether the host endpoint itself is closed in a networked session, 
 playback (`python_api` §4.2). Second, the turn assembler's protocol: how it learns the next
 open turn, and how it reports `QueueFull` and outcomes back to the source. Only the server
 tier may decide that a late player has dropped (`multiplayer` §4.1).
+
+### Q86. How is the engine release version compared?
+
+The server version, the save version and the mod interface version are each the engine
+release version (`patterns` §11, `multiplayer` §2). Two things are open. First, whether each
+check needs an exact match or accepts a range of releases. Second, where a logic mod or a
+content mod names the engine release it was made for. Only a Tier 3 mod carries it, in its
+handshake (`modding` §3, §5.1).
 
 ## Not tied to a milestone
 

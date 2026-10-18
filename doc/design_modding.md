@@ -612,9 +612,8 @@ Rules:
   builds the thread host is fast enough, though isolation may still call for a process host.
 - **One encoding, two schemas.** The difference matters (`design_python_api.md` §7.1, §7.3).
   The **command** and **event** payload schemas use the same encoding rules: canonical
-  little-endian, fixed widths, fully validated (`design_engine_core.md` §2.3). Each is
-  versioned on its own, and a reader rejects a newer version instead of guessing. They
-  differ in where each is used:
+  little-endian, fixed widths, fully validated (`design_engine_core.md` §2.3). Neither has
+  a version of its own (`design_patterns.md` §11). They differ in where each is used:
 
   | Schema | Used by |
   |---|---|
@@ -714,23 +713,23 @@ inside the determinism boundary, so it is trusted code, and it is audited twice.
 
 ### 5.1 Pattern: ABI and registration
 
-An engine core mod exports one versioned C function, which the engine calls to register it. The
+An engine core mod exports one C function, which the engine calls to register it. The
 engine later calls an optional session-start callback, once the column set is closed.
 
 ```c
-/* pseudo-code — the only exported symbol; versioned C ABI, never C++ */
-sim_estab_mod_info_v1 *sim_estab_mod_register_v1(const sim_estab_host_v1 *host);
+/* pseudo-code — the only exported symbol; C ABI, never C++ */
+sim_estab_mod_info *sim_estab_mod_register(const sim_estab_host *host);
 
-/* sim_estab_host_v1: engine ABI version, struct sizes, and the host services —
+/* sim_estab_host: the engine release version, struct sizes, and the host services —
  *   register_column, resolve_column, get_row_set, get_column
  *     (design_data_container.md §7.3), engine core RNG stream derivation,
  *     checksum hook, log fn (buffered inside a phase — see below)
- * sim_estab_mod_info_v1: mod id/version, declared systems
+ * sim_estab_mod_info: mod id/version, declared systems
  *     { name, read_set, write_set, phase, tick_fn },
  *   plus one optional callback:
- *     int (*on_session_start)(const sim_estab_session_v1 *s);   -- may be NULL
+ *     int (*on_session_start)(const sim_estab_session *s);   -- may be NULL
  *
- * sim_estab_session_v1: struct size, the frozen session identity hash, the tick rate,
+ * sim_estab_session: struct size, the frozen session identity hash, the tick rate,
  *   and this mod's RNG stream root (derived from the session seed, §5.2). Everything
  *   else a mod needs is reached through the host table it was handed at registration;
  *   the struct exists so that what is *session*-scoped is passed at session scope
@@ -744,15 +743,17 @@ Rules:
   C++ ABI is fragile across compilers, and module mangling makes it worse. No exception may
   propagate out of `tick_fn`. Errors are returned as codes, and the engine decides what to
   do (quarantine or abort).
-- **A handshake comes before registration**: the engine ABI version, an echo of struct
-  sizes, and a build-flags fingerprint (the subset that affects determinism). A mismatch
-  refuses the load with a specific error.
+- **A handshake comes before registration**: the engine release version, an echo of struct
+  sizes, and a build-flags fingerprint (the subset that affects determinism). The release
+  version is the mod interface version (`design_patterns.md` §11). A mismatch refuses the
+  load with a specific error. How the release version is compared is open
+  ([Q86](open_question.md#q86-how-is-the-engine-release-version-compared)).
 - **Two stages, and they are not interchangeable.** Keeping them apart makes a column id
   mean the same thing to every mod (`design_data_container.md` §7.3):
 
   | Stage | Called | Allowed | Not allowed |
   |---|---|---|---|
-  | registration | `sim_estab_mod_register_v1`, at load, in load order | `register_column`, declare systems | `resolve_column`: the column set is still open |
+  | registration | `sim_estab_mod_register`, at load, in load order | `register_column`, declare systems | `resolve_column`: the column set is still open |
   | session start | `on_session_start`, at the freeze, in load order, on the **owner thread** (`design_engine_core.md` §2.4 step 7) | `resolve_column`, cache ids | `register_column`: the set is closed |
 
   A mod caches its ids in `on_session_start` and uses them for the rest of the session.
@@ -765,7 +766,7 @@ Rules:
   - `dlopen` runs static initializers and resolves `DT_NEEDED` *before* the handshake can
     reject anything. The handshake limits accidental ABI damage. It cannot limit what an
     initializer already did. That is a matter of trust (§5.4), not of mechanism.
-  - The returned `sim_estab_mod_info_v1*` is **owned by the mod** and must stay valid for
+  - The returned `sim_estab_mod_info*` is **owned by the mod** and must stay valid for
     the life of the process. The engine neither frees it nor copies and frees it.
   - The engine remembers registered library paths across `Engine` instances. A second engine
     in the same process that would re-register the same library refuses with `ModLoadError`
@@ -904,7 +905,7 @@ the gates and says plainly what they cannot do.
     So it survives into CI, can be reviewed in a diff, and cannot be clicked through;
   - capabilities in the manifest are *declarative documentation* for engine core mods, since they
     cannot be enforced at run time. They are still required and still inspectable;
-  - the version handshake (§5.1) prevents accidental ABI corruption, not malice.
+  - the handshake (§5.1) prevents accidental ABI corruption, not malice.
 - User-facing docs should say this plainly: installing an engine core mod means running a program.
 
 ## 6. Loading pipeline and main-loop integration
@@ -1148,15 +1149,16 @@ New **command type** (engine side; this is the mod security surface):
 3. Decide which capability string covers it. By default no mod has it.
 4. Validation must be total. Any byte pattern a mod can submit is either applied by the
    rules or rejected, never undefined behaviour. The same holds when a replay is loaded: an
-   unknown command type or a newer schema version rejects the file, and is never skipped
-   silently. Size limits are part of validation (`design_engine_core.md` §2.3).
+   unknown command type rejects the file, and is never skipped silently. Size limits are
+   part of validation (`design_engine_core.md` §2.3).
 5. It is automatically part of the canonical payload schema (the one-schema rule: replay and
-   IPC). Bump the schema version; readers reject newer versions instead of guessing.
+   IPC). The schema has no version to change: the engine release version covers it
+   (`design_patterns.md` §11).
 
 New **engine core mod** (author and engine):
 
 1. Manifest tier `core`; document the intended systems and component sets.
-2. Implement against the versioned C ABI (§5.1). No exceptions out, no C++ types across.
+2. Implement against the C ABI (§5.1). No exceptions out, no C++ types across.
 3. Sign the determinism contract (§5.2), then prove it: pass certification (§5.3) on the
    golden replay set.
 4. Ship signed. Otherwise every user has to add you to their `ModPolicy` allowlist by hand

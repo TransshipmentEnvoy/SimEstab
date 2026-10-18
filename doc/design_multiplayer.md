@@ -56,7 +56,7 @@ The determinism design already covers most of what lockstep needs:
 
 | Requirement | Provided by (`design_engine_core.md` unless noted) |
 |---|---|
-| Bit-identical arithmetic on every platform | §2.1: fixed-point, no libm, versioned rounding and overflow rules |
+| Bit-identical arithmetic on every platform | §2.1: fixed-point, no libm, exact rounding and overflow rules |
 | Commands as the only way to change the world | §1 |
 | One wire encoding | §2.3: little-endian, fixed widths, fully validated. Replay, IPC and the network all use this one schema |
 | Desync detection | §2.3, §4.2 and `design_limits.md` §6: one checksum algorithm at three levels. Peers compare the tick digest every tick and the rolling checksum, which covers the whole world every N ticks |
@@ -66,6 +66,7 @@ The determinism design already covers most of what lockstep needs:
 | A way to report what a command did | §5.1: the outcome channel. A peer's outcomes are identical on every machine. They help spot trouble early and give the transport a way to push back, but carry no new information about the world |
 | A record of what ran | §2.3 and §6: commands are recorded as they are consumed, already ordered and tick-stamped. That is exactly what a turn log must contain |
 | Session identity that covers mods | §2.3 records the mod manifest list and hashes |
+| One version for the server, saves and the mod interface | `design_patterns.md` §11: each is the engine release version. How a check compares it is open ([Q86](open_question.md#q86-how-is-the-engine-release-version-compared)) |
 
 ## 3. How lockstep maps onto the engine
 
@@ -408,6 +409,8 @@ These are tracked in [open_question.md](open_question.md). None of them blocks M
   it.
 - [Q55](open_question.md#q55-the-local-players-source-id) Whether the host endpoint is closed
   in a networked session, and the turn assembler's protocol (§3.2).
+- [Q86](open_question.md#q86-how-is-the-engine-release-version-compared) How a check compares
+  the engine release version: the server, save and mod interface versions (§2).
 
 ---
 

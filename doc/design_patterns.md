@@ -845,3 +845,59 @@ the exception, and the existing name stays.
   `<park>_stress_tests`, the CTest label `stress` and a CTest timeout. A
   lost wake-up is a hang, so the timeout is the failure
   (`design_engine_core.md` §3.3).
+
+---
+
+## 11. Versioning
+
+This section says when a protocol, a file format or a manifest has a
+version. The default is no version. Each version is one more number to keep
+in step with the code, so a version exists only where it is required.
+
+**A protocol, a file format or a manifest has no version unless one is
+required.** Something users do not see has no version by default.
+
+**When a version is required.** Both conditions must be true:
+
+1. The two sides are built or released separately, so one side can be older
+   than the other.
+2. No existing check finds the mismatch. One existing check is the session
+   identity in the replay header: the engine build, schema identity and
+   content hashes (`design_engine_core.md` §2.3). The other is the Tier 3
+   handshake: struct sizes and the build fingerprint (`design_modding.md`
+   §5.1).
+
+**The engine release version.** Where a version is required, it is the
+**engine release version**: the `version` in `setup.py` and the Conan
+recipes. It is one number, not a counter for each format. It has three uses:
+
+| Use | Carried by |
+|---|---|
+| server version | the server tier and every peer of a networked session (`design_multiplayer.md` §2) |
+| save version | a savegame, and a replay header in the same way (`design_engine_core.md` §2.3) |
+| mod interface version | the Tier 3 handshake (`design_modding.md` §5.1) |
+
+How a check compares the release version is open
+([Q86](open_question.md#q86-how-is-the-engine-release-version-compared)).
+Whether the replay header needs more than the release version, such as a
+build hash, is open
+([Q23](open_question.md#q23-what-does-engine-build-mean-in-session-identity)).
+
+**No version of its own.** These follow the engine release:
+
+- the command and event payload schemas, and with them the IPC wire and the
+  Python binding (`design_engine_core.md` §2.3, `design_python_api.md`
+  §7.3);
+- the `fixed<>` rules, the checksum and the PRNG. They are part of the
+  engine build identity (`design_engine_core.md` §2.1, §2.3);
+- the concurrency protocols (the engine view, the command ring, the lease)
+  and the shared-memory engine view layout (`design_modding.md` §4.3);
+- the manifest format (`design_modding.md` §3).
+
+**A name carries no version.** An identifier has no version suffix such as
+`_v1`. The handshake checks the mod interface version instead
+(`design_modding.md` §5.1).
+
+**A mod's own version is not a format version.** The `version` field in
+`mod.toml` is the mod's release version, set by its author. `requires`
+ranges use it, so it stays (`design_modding.md` §3).

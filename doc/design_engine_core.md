@@ -227,9 +227,11 @@ The choices:
   and libfixmath (C, Q16.16 only). We wrap one of them, or our own code, in a thin
   `fixed<Rep, Frac>` type, so that overflow, rounding and SIMD lowering are ours to define.
   **Those rules are a bit-level specification, not an implementation detail.** Rounding on
-  multiply and shift, division (including division by zero) and overflow are defined exactly
-  and versioned, so every build and platform computes the same bits. The library and the
-  exact rules are open ([Q25](open_question.md#q25-the-fixed-specification)).
+  multiply and shift, division (including division by zero) and overflow are defined
+  exactly, so every build and platform computes the same bits. They are part of the engine
+  build identity and have no version of their own (§2.3, `design_patterns.md` §11). The
+  library and the exact rules are open
+  ([Q25](open_question.md#q25-the-fixed-specification)).
 - **Overflow policy matters for parallelism.** Wrapping (two's-complement) addition is
   associative and commutative, so parallel sums give the same result in any order.
   Saturating addition is not associative, so parallel sums depend on order, which breaks
@@ -304,8 +306,9 @@ natural companion of the "session management" work in M1.
     or referenced as content-addressed artifacts (the header states which, for each
     artifact);
   - deterministic config, such as the tick rate;
-  - engine build identity. The checksum and PRNG algorithms are part of it and are not
-    versioned separately. What "engine build" should mean is open
+  - engine build identity. It holds the engine release version (`design_patterns.md` §11).
+    The checksum and PRNG algorithms are part of it and have no version of their own.
+    Whether it needs more than the release version, such as a build hash, is open
     ([Q23](open_question.md#q23-what-does-engine-build-mean-in-session-identity));
   - schema, content and mod identities (`design_data_container.md` §7.4, `design_modding.md`
     §3);
@@ -324,11 +327,13 @@ natural companion of the "session management" work in M1.
 - **Command payload encoding**: one canonical payload schema. It uses explicit little-endian
   byte order, fixed integer widths, decoding without alignment assumptions, and total
   validation: every byte pattern is either valid or rejected, on live submit and on replay
-  load. An unknown command type or a newer schema version rejects the file or frame; nothing
-  is skipped silently. Size limits are enforced. Transport envelopes differ by use: replay
-  chunks add indexes and checksums, and IPC frames add length framing and the
-  engine-assigned source endpoint (`design_modding.md` §3, §4.3). Native structs are never
-  copied raw across either boundary.
+  load. An unknown command type rejects the file or frame; nothing is skipped silently. The
+  schema has no version of its own (`design_patterns.md` §11). Both ends of an IPC frame are
+  one engine release, and the replay header carries the release version. Size limits are
+  enforced. Transport envelopes differ by use: replay chunks add indexes and checksums, and
+  IPC frames add length framing and the engine-assigned source endpoint
+  (`design_modding.md` §3, §4.3). Native structs are never copied raw across either
+  boundary.
 
 ### 2.4 Session lifecycle: configure → freeze → run
 

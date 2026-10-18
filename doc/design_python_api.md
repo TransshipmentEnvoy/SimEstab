@@ -1772,13 +1772,12 @@ Rules:
 
   Dropping and coalescing apply to the last two classes only.
 - **Event payload schema**: one canonical encoding, under the same rules as the command
-  schema (§7.1). It uses explicit little-endian, fixed widths and full validation, and it
-  has its own version. Readers reject a newer version instead of guessing. It has two uses,
-  not three: the process-host IPC wire and the Python binding. It is not in the replay
-  artifact, which carries commands only. A replayed tick re-derives its events by running
-  the commands (`design_engine_core.md` §2.3, `design_modding.md` §4.3). So a new event type
-  bumps the *event* schema version and leaves the replay format alone. The two version
-  numbers move independently, which is why there are two.
+  schema (§7.1). It uses explicit little-endian, fixed widths and full validation. It has
+  two uses, not three: the process-host IPC wire and the Python binding. Both ends of each
+  are one engine release, so the schema has no version (`design_patterns.md` §11). It is
+  not in the replay artifact, which carries commands only. A replayed tick re-derives its
+  events by running the commands (`design_engine_core.md` §2.3, `design_modding.md` §4.3).
+  So a new event type leaves the replay format alone.
 - **The M1 events.** These exist from the first build, except `sim.behind`, which comes
   with the sim thread and its catch-up clamp in M6. Each names its class and the thread that
   raises it:

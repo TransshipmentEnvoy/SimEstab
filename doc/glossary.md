@@ -24,6 +24,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | freeze | The single call (`start_session()`) that moves the engine from `Configuring` to `Running`. It closes every set that must not change during a session, computes session identity, and publishes tick 0. | engine_core §2.4 |
 | session identity | What makes two sessions "the same": engine build, schema, content, mod set, every object type's cap, source ids and seed. Computed at the freeze and written to the replay header. | engine_core §2.3 |
 | schema identity | The schema part of session identity: the descriptor hash, mod-added columns and content hashes. | data_container §7.4 |
+| engine release version | The engine's release number (`version` in `setup.py` and the Conan recipes). The server version, the save version and the mod interface version are all this number. No protocol or file format has a version of its own. | patterns §11 |
 | replay artifact | Everything needed to reproduce a session: the replay header plus every command recorded as it was consumed. A lockstep turn log is a replay artifact. | engine_core §2.3 |
 | replay header | The session-identity part of a replay artifact. Checked at the freeze; any mismatch raises `ReplayIdentityError`. | engine_core §2.3 |
 | golden replay | A replay artifact whose final checksum CI checks, used as a regression test. | engine_core §2.3 |
@@ -182,7 +183,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | inbox | A mod's event queue. Its size is capped by `max_inbox_size`. | modding §4.2 |
 | suspend | A mod whose inbox overflows stops being fed and stops being waited for, but keeps its endpoint. Reversible. | modding §4.2 |
 | quarantine | A mod that fails is stopped, and leaves the gate at once. `mod_retry_limit` sets how often it is restarted. | modding §4.2 |
-| host services table | The versioned C ABI the engine gives a Tier 3 mod. | modding §5.1 |
+| host services table | The C ABI the engine gives a Tier 3 mod. | modding §5.1 |
 | certification | Checking that a Tier 3 mod is deterministic by re-running golden replays at 1 and N threads, in Debug and Release. | modding §5.3 |
 
 ## Multiplayer
