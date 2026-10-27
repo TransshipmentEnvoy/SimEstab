@@ -238,6 +238,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | open mode | What `enable_file` does to a file that exists: `rotate`, `append` or `truncate`. `file_open` in C++. | logging §3 |
 | rotation | At open under `rotate`: the active file becomes backup `01`, each backup moves up by one, and the one past `max_log_files` is deleted. Never by size or by time. | logging §3 |
 | file header | The `info` records a file sink emits right after its open: the version, the open time, the band, the open mode and the line format. | logging §3 |
+| session file | The file sink `acquire` opens for the first holder at `LogConfig.session_dir / "session.log"`, with floor `LogConfig.level`, and the last `release` removes. The engine opens no log file. | logging §2, §3 |
 
 ## Words with a preferred meaning
 

@@ -7,11 +7,10 @@ Status: the M1 surface is built. `src/sim_estab/config.py` holds the option obje
 `engine.py` holds the `Engine` of §2 with the headless `step(n)` of §4.2 and §4.3, the host
 endpoint's commands (§7.1), the engine view handle, the event drains (§7.3) and the error
 family (§8); `loop.py` holds the headless loop; `upkeep/log.py` holds the refcounted
-logging holder of §2 with the severity filter behind `LogConfig`, and the file toggles
-(`design_logging.md` §3). They stand over the `_if.engine`, `_if.limits` and `_if.log`
-bindings. Not built: the windowed loop and the sim thread (§4.1, §4.3), snapshots with
-columns and zero-copy engine views (§7.2), replay (§4.2), mods, and the per-session file
-sink behind `LogConfig` (`design_logging.md` §4).
+logging holder of §2, and the file sinks, the session file and the severity filter behind
+`LogConfig` (`design_logging.md` §3). They stand over the `_if.engine`, `_if.limits` and
+`_if.log` bindings. Not built: the windowed loop and the sim thread (§4.1, §4.3), snapshots
+with columns and zero-copy engine views (§7.2), replay (§4.2) and mods.
 
 Scope of v1: every engine view is `PRIVATE`. The multi-reader `SHARED` mode is deferred to
 `design_engine_core.md` Appendix A, together with process-host engine views. So
@@ -430,11 +429,19 @@ class WindowConfig:                      # ignored when headless
     resizable: bool = True
 
 @dataclass(frozen=True, slots=True)
+class LogFile:                           # one file sink (design_logging.md §3)
+    path: Path
+    floor: str = "trace"                 # the band floor..ceiling, each one of LOG_LEVELS
+    ceiling: str = "critical"
+    on_open: str = "rotate"              # one of FILE_OPENS: "rotate" | "append" | "truncate"
+
+@dataclass(frozen=True, slots=True)
 class LogConfig:                         # design_logging.md §2
     console: bool = True                 # the console sink
     level: str = "info"                  # starting severity filter
-    session_dir: Path | None = None      # where the freeze opens the per-session file
-                                         #   sink; None = no per-session file
+    session_dir: Path | None = None      # acquire opens session.log here, floor = level;
+                                         #   None = no session file
+    file_list: tuple[LogFile, ...] = ()  # file sinks opened for the first holder
 
 @dataclass(frozen=True, slots=True)
 class EngineConfig:
@@ -472,9 +479,10 @@ class EngineConfig:
 engine = Engine(config)                  # the only place config crosses the boundary
 ```
 
-The sketch matches `src/sim_estab/config.py`, which is the implementation. `HostPolicy`'s
-two mod-deadline fields are the only part not in `config.py`; their values are open
-([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)).
+The sketch matches `src/sim_estab/config.py`, which is the implementation. One part is
+not in `config.py`: `HostPolicy`'s two mod-deadline fields, whose values are open
+([Q80](open_question.md#q80-the-mod-gate-deadline-default-and-cap)). `LOG_LEVELS` and
+`FILE_OPENS` come from `_if.log` (`design_logging.md` §3).
 
 `WindowConfig` holds only what the window needs at creation; anything a running window can
 change is a control call. `LogConfig` is described in `design_logging.md` §2. The catch-up
@@ -778,8 +786,8 @@ with Engine(replace(config, headless=True, event_drain="sink")) as engine:
   would diverge from `golden` for invisible reasons.
 - **`load_replay` is a `Configuring` call** (§2), and it must be. The header supplies the
   seed, which the freeze uses (`design_engine_core.md` §2.4 steps 4–6). Calling it while
-  `Running` raises `EngineStateError`: by then the seed is spent, and a log file already
-  carries a different session's name.
+  `Running` raises `EngineStateError`: by then the seed is spent, and the identity is
+  already logged (`design_engine_core.md` §2.4 step 8).
 
   **So `load_replay` comes before `start_session()`.** In practice it also comes before
   `load_mods`, since the policy can name the mods the header requires only after the header

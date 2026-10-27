@@ -26,6 +26,7 @@ from .config import (  # noqa: E402
     EngineConfig,
     HostPolicy,
     LogConfig,
+    LogFile,
     WindowConfig,
 )
 from .engine import (  # noqa: E402
@@ -72,6 +73,7 @@ __all__ = [
     "EventDrain",
     "HostPolicy",
     "LogConfig",
+    "LogFile",
     "Rejection",
     "SimEstabError",
     "SinkDigest",

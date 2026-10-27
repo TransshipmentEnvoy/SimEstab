@@ -20,6 +20,7 @@ from sim_estab.config import (
     EngineConfig,
     HostPolicy,
     LogConfig,
+    LogFile,
     WindowConfig,
 )
 
@@ -324,6 +325,38 @@ def test_the_level_lists_come_from_the_binding():
         assert getattr(if_module.log.severity_level, name).name == name
     for name in engine_config.FILE_OPENS:
         assert getattr(if_module.log.file_open, name).name == name
+
+
+def test_log_file_defaults_and_validation():
+    entry = LogFile("run.log")
+    assert entry.path == Path("run.log")
+    assert (entry.floor, entry.ceiling, entry.on_open) == (
+        "trace",
+        "critical",
+        "rotate",
+    )
+
+    with pytest.raises(ValueError, match="floor must be one of"):
+        LogFile("run.log", floor="bogus")
+    with pytest.raises(ValueError, match="ceiling must be one of"):
+        LogFile("run.log", ceiling="bogus")
+    with pytest.raises(ValueError, match="on_open must be one of"):
+        LogFile("run.log", on_open="bogus")
+    with pytest.raises(ValueError, match="floor must not be above ceiling"):
+        LogFile("run.log", floor="error", ceiling="debug")
+    with pytest.raises(ValueError, match="path must be a path"):
+        LogFile(3)  # type: ignore[arg-type]
+
+
+def test_log_config_file_list_and_session_dir():
+    config = LogConfig(
+        session_dir="runs", file_list=[LogFile("errors.log", floor="error")]
+    )
+    assert config.session_dir == Path("runs")
+    assert config.file_list == (LogFile("errors.log", floor="error"),)
+    assert LogConfig().file_list == ()
+    with pytest.raises(ValueError, match="file_list entries must be LogFile"):
+        LogConfig(file_list=("errors.log",))  # type: ignore[arg-type]
 
 
 def test_max_log_files_is_a_build_constant():

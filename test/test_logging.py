@@ -2,16 +2,18 @@
 
 """Tests for the refcounted holder in ``sim_estab.upkeep.log`` (``design_logging.md``
 §2, §3): the first holder initializes, the last tears down, the first holder's config
-wins, the count is one step from any thread, and the first holder's level is applied.
+wins, the count is one step from any thread, and the first holder's level, session file
+and ``file_list`` entries are applied.
 """
 
 import logging
+import sys
 import threading
 
 import pytest
 
 import sim_estab._if as if_module
-from sim_estab.config import LogConfig
+from sim_estab.config import LogConfig, LogFile
 from sim_estab.upkeep import log as sim_log
 
 
@@ -56,22 +58,94 @@ def test_a_same_config_does_not_warn(recwarn):
     assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
 
 
-def test_the_level_applies_to_the_console(capfd):
-    """``level`` is the user's level, the console's filter (``design_logging.md`` §3)."""
-    sim_log.acquire(LogConfig(level="warning"))
-    logging.getLogger("test.console").info("an info record")
-    logging.getLogger("test.console").warning("a warning record")
+def test_the_session_file_opens_for_the_first_holder(tmp_path):
+    """``session_dir`` opens ``session.log`` with the user's level as its floor, and the
+    file starts with the header (``design_logging.md`` §3 "The session file")."""
+    sim_log.acquire(LogConfig(console=False, session_dir=tmp_path))
+    session = tmp_path / "session.log"
+    assert session.exists()
+    logging.getLogger("test.file").info("an info record")
+    logging.getLogger("test.file").debug("a debug record")
     sim_log.release()
-    err = capfd.readouterr().err
-    assert "a warning record" in err
-    assert "an info record" not in err
+
+    text = session.read_text()
+    assert "file sink opened: " in text
+    assert "band info..critical, open mode rotate" in text
+    assert "[INFO][test.file] an info record" in text
+    assert "a debug record" not in text
 
 
-def test_session_dir_warns_until_the_session_file_exists(tmp_path):
-    """``session_dir`` is accepted ahead of the session file (``design_logging.md`` §4),
-    and says so."""
-    with pytest.warns(RuntimeWarning, match="session_dir=.* is not applied yet"):
-        sim_log.acquire(LogConfig(session_dir=tmp_path))
+def test_the_level_applies(tmp_path):
+    """``level`` is the user's level: the session file's floor follows it."""
+    sim_log.acquire(LogConfig(console=False, level="warning", session_dir=tmp_path))
+    logging.getLogger("test.file").info("an info record")
+    logging.getLogger("test.file").warning("a warning record")
+    sim_log.release()
+
+    text = (tmp_path / "session.log").read_text()
+    assert "a warning record" in text
+    assert "an info record" not in text
+
+
+def test_file_list_entries_open_with_their_bands(tmp_path):
+    """Each ``LogFile`` carries its own band, and the core filter follows the lowest
+    floor, so a file below the user's level receives those records."""
+    errors = tmp_path / "errors.log"
+    everything = tmp_path / "all.log"
+    sim_log.acquire(
+        LogConfig(
+            console=False,
+            file_list=[LogFile(errors, floor="error"), LogFile(everything)],
+        )
+    )
+    logging.getLogger("test.file").debug("a debug record")
+    logging.getLogger("test.file").info("an info record")
+    logging.getLogger("test.file").error("an error record")
+    sim_log.release()
+
+    error_text = errors.read_text()
+    assert "an error record" in error_text
+    assert "an info record" not in error_text
+    assert "file sink opened" not in error_text  # the header is info
+    all_text = everything.read_text()
+    assert "a debug record" in all_text
+    assert "an info record" in all_text
+    assert "an error record" in all_text
+
+
+def test_rotation_at_acquire(tmp_path):
+    """A re-used session path: the previous run becomes ``.01``."""
+    for run in ("first run", "second run"):
+        sim_log.acquire(LogConfig(console=False, session_dir=tmp_path))
+        logging.getLogger("test.file").info(run)
+        sim_log.release()
+    assert "second run" in (tmp_path / "session.log").read_text()
+    assert "first run" in (tmp_path / "session.01.log").read_text()
+
+
+def test_a_failed_open_shuts_logging_down_and_raises(tmp_path):
+    """A file that does not open: ``acquire`` shuts logging down again and raises
+    ``log_error`` (``design_logging.md`` §3 "Python surface")."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    with pytest.raises(if_module.log.log_error, match="cannot open"):
+        sim_log.acquire(LogConfig(console=False, session_dir=blocker))
+    assert sim_log.holder_count() == 0
+    assert not if_module.log.log_is_init()
+
+
+def test_set_severity_never_moves_a_band(tmp_path):
+    """A file's band is fixed at its open; ``set_severity`` changes the console and the
+    core filter only."""
+    sim_log.acquire(LogConfig(console=False, session_dir=tmp_path))
+    sim_log.set_severity("trace")
+    logging.getLogger("test.file").debug("a debug record")
+    logging.getLogger("test.file").info("an info record")
+    sim_log.release()
+
+    text = (tmp_path / "session.log").read_text()
+    assert "a debug record" not in text
+    assert "an info record" in text
 
 
 def test_the_file_functions_validate_their_strings(tmp_path):
@@ -154,3 +228,32 @@ def test_release_keeps_a_level_the_application_set(root_level, recwarn):
     recwarn.clear()
     sim_log.release()
     assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
+
+
+class _Terminal:
+    """A stdin that is a terminal; ``input`` is replaced, so it is never read."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def test_ask_for_confirm_confirms_when_nobody_can_answer(monkeypatch):
+    """No console held, or stdin not a terminal: it confirms without asking."""
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("asked"))
+    assert sim_log.ask_for_confirm() is True  # nothing held
+    sim_log.acquire(LogConfig(console=False))
+    monkeypatch.setattr(sys, "stdin", _Terminal())
+    assert sim_log.ask_for_confirm() is True  # the console is off
+    sim_log.release()
+    sim_log.acquire(LogConfig())
+    monkeypatch.setattr(sys, "stdin", None)
+    assert sim_log.ask_for_confirm() is True  # no stdin
+
+
+def test_ask_for_confirm_asks_on_a_terminal(monkeypatch):
+    answers = iter(["maybe", "n", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    monkeypatch.setattr(sys, "stdin", _Terminal())
+    sim_log.acquire(LogConfig())
+    assert sim_log.ask_for_confirm() is False  # "maybe" asks again, then "n"
+    assert sim_log.ask_for_confirm() is True

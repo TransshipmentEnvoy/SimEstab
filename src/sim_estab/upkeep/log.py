@@ -7,11 +7,16 @@ initializes it for the first holder and ``release()`` shuts it down for the last
 application that acquired logging first keeps its sinks. The count lives under a
 module-level lock, so both calls are one step from any thread, on the GIL build and the
 free-threaded build alike.
+
+Which files a run writes is this side's decision, and the C++ subsystem opens them:
+``acquire`` opens the session file and the ``file_list`` entries for the first holder,
+and the engine opens no log file (``design_logging.md`` §3 "The session file").
 """
 
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import warnings
 from logging import LogRecord
@@ -169,15 +174,24 @@ def disable_file(path: str | Path) -> None:
     _if.log.disable_file(Path(path))
 
 
+def _open_files(config: LogConfig) -> None:
+    """The first holder's files (``design_logging.md`` §3): the session file, with the
+    user's level as its floor, then each ``file_list`` entry."""
+    if config.session_dir is not None:
+        enable_file(config.session_dir / "session.log", floor=config.level)
+    for entry in config.file_list:
+        enable_file(entry.path, entry.floor, entry.ceiling, entry.on_open)
+
+
 def acquire(config: LogConfig | None = None) -> None:
     """Hold the logging subsystem: initialize it for the first holder, count for the
     rest.
 
-    The first holder's ``config`` is applied and kept: the level and the console, in that
-    order. A later holder with a different one is warned about and ignored
-    (``design_logging.md`` §2: first caller wins). ``session_dir`` is accepted but not
-    applied yet: the session file is planned (``design_logging.md`` §4), and a value is
-    warned about until it exists.
+    The first holder's ``config`` is applied and kept: the level, the console, the
+    session file and the ``file_list`` entries, in that order. A later holder with a
+    different one is warned about and ignored (``design_logging.md`` §2: first caller
+    wins). A file that does not open shuts logging down again and raises ``log_error``
+    (``design_logging.md`` §3).
     """
     global _holders, _held_config
 
@@ -192,17 +206,11 @@ def acquire(config: LogConfig | None = None) -> None:
                     enable_console()
                 else:
                     disable_console()
+                _open_files(config)
             except BaseException:
                 log_deinit()
                 raise
             _held_config = config
-            if config.session_dir is not None:
-                warnings.warn(
-                    f"LogConfig.session_dir={str(config.session_dir)!r} is not applied "
-                    f"yet: the session file is planned (design_logging.md §4)",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
         elif config != _held_config:
             warnings.warn(
                 f"logging is already held with {_held_config!r}; the different "
@@ -235,17 +243,19 @@ def holder_count() -> int:
 
 
 # interactive fn
-def ask_for_confirm():
-    global _console_handler
-    if _console_handler is not None:
-        _logger.warning("ask for confirmation!")
-        while True:
-            ret = input("confirm (y/n)?")
-            if ret.upper() == "Y":
-                _logger.info("-> confirm")
-                return True
-            elif ret.upper() == "N":
-                _logger.info("-> exit")
-                return False
-    else:
+def ask_for_confirm() -> bool:
+    """Ask for a yes or no on the terminal. With no console sink held, or with stdin
+    not a terminal, nobody can answer, so it confirms."""
+    with _lock:
+        console = _held_config is not None and _held_config.console
+    if not console or sys.stdin is None or not sys.stdin.isatty():
         return True
+    _logger.warning("ask for confirmation!")
+    while True:
+        ret = input("confirm (y/n)?")
+        if ret.upper() == "Y":
+            _logger.info("-> confirm")
+            return True
+        elif ret.upper() == "N":
+            _logger.info("-> exit")
+            return False

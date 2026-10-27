@@ -467,3 +467,14 @@ results may be alive at once, and who makes the copy when no executor runs.
 
 The milestone is not chosen: both calls open to other threads in the one they fit best.
 Logic mods (M7) are the first known caller.
+
+### Q87. The run directory: scenarios, saves, stats and logs
+
+Where a run's files live is not decided: the scenario it starts from, its saves, its
+stats, its replay artifact and its logs. No doc gives a layout, and nothing in the repo
+manages a directory. The one piece that exists is provisional: `logging` §3 opens the
+session file at `<session_dir>/session.log`, a current pattern, not a contract. Open: the
+layout, one directory per run or one shared directory, and who owns it, which `logging`
+§3 leaves to the Python side; whether the identity belongs in a file name or in the
+directory once the identity hash exists (M2); and whether `enable_file` should refuse a
+path that another process has open, since rotation protects sequential runs only.

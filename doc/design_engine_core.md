@@ -412,9 +412,10 @@ terminal state instead of a half-started session.
    `resolve_column` returns a stable id (`design_data_container.md` §7.3). It is the last
    step that may fail. It runs before any side effect because it is the one step that runs
    third-party code. A mod that cannot resolve what it registered must abort a session
-   nobody has seen yet, not one already publishing snapshots under a named log file.
-8. **Open the per-session log sink**, named from the identity that now exists
-   (`design_logging.md` §2).
+   nobody has seen yet, not one already publishing snapshots.
+8. **Log the session identity** as `info` records: the seed and the tick rate
+   (`design_logging.md` §3). The engine opens no log file. The session file, when there is
+   one, is already open, so the records reach it. This step cannot fail.
 9. **Publish tick 0 into every registered engine view** and emit `session.started`. This marks the
    start, before tick 1. The owner thread publishes it, because no sim thread exists yet
    (`run_sim_async` is not allowed in `Configuring`). It is the only publish not made by the
@@ -424,13 +425,13 @@ terminal state instead of a half-started session.
 
 Steps 1 to 7 compute and allocate over state that is already loaded, plus one call into code
 that is already loaded. They can fail, and a failure leaves nothing observable: no identity
-is published, no host is started, no log file carries the session's name. That makes a
+is published or logged, no host is started. That makes a
 failed load a clean terminal state (`design_modding.md` §6). It is also why the freeze, not
 the loader, writes the header. A header listing "every loaded mod" cannot describe a load
 that did not finish, because it is only written when one does.
 
 **"Observable" means observable through the engine**: a published identity, a started host,
-a named log file, a snapshot someone can take. Step 7 runs third-party code, which may do
+the identity in the log, a snapshot someone can take. Step 7 runs third-party code, which may do
 anything to the filesystem. It is still the last step that can fail rather than the first
 observable one, because nothing it does is reachable through an engine interface. A mod that
 writes a file during session start and then fails leaves a file behind, not a session. The

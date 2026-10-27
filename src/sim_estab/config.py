@@ -31,6 +31,7 @@ __all__ = [
     "EngineConfig",
     "HostPolicy",
     "LogConfig",
+    "LogFile",
     "WindowConfig",
 ]
 
@@ -188,6 +189,43 @@ class WindowConfig:
         _require_positive(self.height, "height")
 
 
+def _require_level(value: str, name: str) -> None:
+    if value not in LOG_LEVELS:
+        raise ValueError(
+            f"{name} must be one of {', '.join(LOG_LEVELS)}, got {value!r}"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LogFile:
+    """One file sink (``design_logging.md`` §3): the file receives a record when
+    ``floor <= severity <= ceiling``, each one of ``LOG_LEVELS``. ``on_open`` says what
+    happens to a file that exists, one of ``FILE_OPENS``. The path alone is every
+    severity, rotated at open. A ``str`` path is accepted and stored as a ``Path``.
+    """
+
+    path: Path
+    floor: str = "trace"
+    ceiling: str = "critical"
+    on_open: str = "rotate"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, (str, Path)):
+            raise ValueError(f"path must be a path, got {self.path!r}")
+        object.__setattr__(self, "path", Path(self.path))
+        _require_level(self.floor, "floor")
+        _require_level(self.ceiling, "ceiling")
+        if LOG_LEVELS.index(self.floor) > LOG_LEVELS.index(self.ceiling):
+            raise ValueError(
+                f"floor must not be above ceiling, got floor={self.floor!r} and "
+                f"ceiling={self.ceiling!r}: the band would be empty"
+            )
+        if self.on_open not in FILE_OPENS:
+            raise ValueError(
+                f"on_open must be one of {', '.join(FILE_OPENS)}, got {self.on_open!r}"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class LogConfig:
     """How logging starts (``design_logging.md`` §2).
@@ -204,21 +242,28 @@ class LogConfig:
     #: (``design_logging.md`` §3).
     level: str = "info"
 
-    #: Where the freeze opens the per-session file sink; ``None`` opens no per-session
-    #: file. A ``str`` is accepted and stored as a ``Path``.
+    #: Where ``acquire`` opens the session file, ``session.log``, for the first holder:
+    #: floor ``level``, every severity above, rotated at open (``design_logging.md``
+    #: §3). ``None`` opens no session file. A ``str`` is accepted and stored as a
+    #: ``Path``. The directory is provisional (``doc/open_question.md`` Q87).
     session_dir: Path | None = None
 
+    #: The file sinks opened for the first holder, after the session file, one
+    #: ``LogFile`` each. A list is accepted and stored as a tuple.
+    file_list: tuple[LogFile, ...] = ()
+
     def __post_init__(self) -> None:
-        if self.level not in LOG_LEVELS:
-            raise ValueError(
-                f"level must be one of {', '.join(LOG_LEVELS)}, got {self.level!r}"
-            )
+        _require_level(self.level, "level")
         if self.session_dir is not None:
             if not isinstance(self.session_dir, (str, Path)):
                 raise ValueError(
                     f"session_dir must be a path or None, got {self.session_dir!r}"
                 )
             object.__setattr__(self, "session_dir", Path(self.session_dir))
+        for entry in self.file_list:
+            if not isinstance(entry, LogFile):
+                raise ValueError(f"file_list entries must be LogFile, got {entry!r}")
+        object.__setattr__(self, "file_list", tuple(self.file_list))
 
 
 @dataclass(frozen=True, slots=True)

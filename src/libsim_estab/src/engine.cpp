@@ -619,7 +619,10 @@ void Engine::start_session() {
                       "start_session(): the freeze failed while building the session; the engine is LoadFailed");
         throw;
     }
-    // Step 8: the per-session log sink opens here once it exists (design_logging.md §4).
+    // Step 8: the session identity as info records (design_logging.md §3). The engine opens
+    // no log file: the session file, when there is one, is open since the holder's acquire.
+    sim_estab_log(channel, severity_level::info, "session identity: seed ", seed, ", tick rate ",
+                  impl.config.tick_rate);
     // Step 9: tick 0 into every engine view, session.started, and the host endpoint opens.
     // The session is still private, so nothing of this is seen before it is installed.
     session->publish(Tick{0});

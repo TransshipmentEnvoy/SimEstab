@@ -4,9 +4,9 @@ This document describes the `sim_estab:log` subsystem: how it is built, and the 
 starting, stopping and controlling it. Unlike the other design docs, most of it is
 **implemented**. Parts marked *planned* are not.
 
-Status: the C++ subsystem (§1), the Python refcounted holder (§2), and the file sinks and
-the severity filter (§3) are built. The per-session file sink, the per channel prefix
-filter and the per-worker buffer are planned (§4).
+Status: the C++ subsystem (§1), the Python refcounted holder (§2), and the file sinks, the
+severity filter and the session file (§3) are built. The per channel prefix filter and the
+per-worker buffer are planned (§4).
 
 Terms are defined in [glossary.md](glossary.md).
 
@@ -124,24 +124,22 @@ C++ triad does not change; the ordering lives above it, in `sim_estab/upkeep/log
   Python handler.
 - **The first caller's configuration wins**, with a warning. A later `acquire` with a
   different `LogConfig` does not reconfigure the sinks, following "immutable creation
-  options, first caller wins" (`design_patterns.md` §3). `LogConfig` has three fields
+  options, first caller wins" (`design_patterns.md` §3). `LogConfig` has four fields
   (`design_python_api.md` §3):
 
   | Field | Default | Meaning |
   |---|---|---|
   | `console` | `True` | the console sink of §1 |
   | `level` | `"info"` | the starting severity filter (§3) |
-  | `session_dir` | `None` | the directory for the per-session file sink (below). `None` opens no per-session file |
+  | `session_dir` | `None` | the directory of the session file, `session.log` (§3). `None` opens no session file |
+  | `file_list` | `()` | the file sinks opened for the first holder, one `LogFile` each (§3) |
 
-**Per-session file sink.** It opens at the **freeze**, in `LogConfig.session_dir`, not when
-the engine is constructed, because the freeze is the first moment a session identity exists
-to name it after (`design_engine_core.md` §2.4 step 8). With no `session_dir`, there is no
-per-session file. It is a sink toggle (§3), owned by the engine and
-removed at `close()`, so it is separate from the refcount above. Its name adds a
-**run-unique part** to the session identity. Every run of the same replay has the same
-identity, so without that part repeated replay runs would overwrite or interleave one file.
-This is safe because log naming is not part of the replay header (`design_engine_core.md`
-§2.3).
+**The session file.** It is one file sink of §3 that `acquire` opens for the first holder,
+at `LogConfig.session_dir / "session.log"`, before the native constructor. The engine opens
+no log file: which files a run writes is the Python side's decision, and the C++ subsystem
+opens them. So the acquisition chain, the freeze and a failed freeze all reach the file.
+The last `release` removes it with the other sinks. With no `session_dir`, there is no
+session file. Its band, its name and its rotation are in §3.
 
 **Runtime control.** Log level and sink toggles are **control calls**, never simulation
 commands. They change no engine core state and are never recorded in the replay's input stream
@@ -243,11 +241,34 @@ stream failed: the file keeps what it has, and later records are lost until the 
 enabled again. The subsystem never opens the file again on its own, so a write failure
 never empties a file.
 
+**The session file.** With `LogConfig.session_dir` set, `acquire` opens one file sink for
+the first holder at `session_dir / "session.log"`: floor `LogConfig.level`, ceiling
+`critical`, `rotate`. The engine opens no log file (§2). The floor is the user's level, so
+the file never costs more than the console. A lower floor would pull every record below
+the level through the core filter, for the whole run. The band is fixed at the open, so a
+later `set_severity` changes the console, not the file. The open comes with the
+`file_list` entries, before the native constructor, so the acquisition chain, the freeze
+and a failed freeze reach the file.
+
+The last `release` removes the session file. A path may be re-used: the previous run
+becomes `.01`, and `max_log_files` bounds the history. Two processes that open one path at
+the same time rotate and write under each other; rotation protects sequential runs only.
+
+At freeze step 8 the engine emits the session identity as `info` records
+(`design_engine_core.md` §2.4). They hold the seed and the tick rate now, and the caps,
+content and mod hashes once they exist. They are ordinary records and reach every sink
+that accepts `info`. The directory and the name are provisional, like every other run
+file ([Q87](open_question.md#q87-the-run-directory-scenarios-saves-stats-and-logs)).
+
 **Python surface.** `upkeep.log.enable_file(path, floor="trace", ceiling="critical",
 on_open="rotate")` and `disable_file(path)` are the 1:1 functions over `_if.log`, with
 the strings validated against `LOG_LEVELS` and `FILE_OPENS` in `config.py`. `_if.log`
-binds `file_open` as it binds `severity_level`. The last `release` removes every sink,
-toggled files included, with `log_deinit`.
+binds `file_open` as it binds `severity_level`. `LogConfig.file_list` is a tuple of
+`LogFile(path, floor, ceiling, on_open)`. `acquire` opens the session file and then each
+entry for the first holder, right after `log_init` and the console toggle. So the
+acquisition chain and a construction failure reach the files (`design_python_api.md` §2).
+If one open fails, `acquire` shuts logging down again and raises. The last `release`
+removes every sink, toggled files included, with `log_deinit`.
 
 **Names from the enums.** `sim_estab:log` lists the enumerators of `severity_level` and
 `file_open` with C++26 reflection (`std::meta::enumerators_of`). The name of a value, the
@@ -257,11 +278,6 @@ them. So each name is written once, in the enum. The other enums stay with
 [Q73](open_question.md#q73-magic_enum-or-reflection-for-enum-names).
 
 ## 4. Planned
-
-- **Session integration**: the per-session file sink of §2, named from the session identity
-  plus a run-unique part, opened at the freeze in `LogConfig.session_dir`
-  (`design_engine_core.md` §2.4) and closed by `Engine.close()`. Until then `acquire`
-  accepts a `session_dir`, warns and opens nothing.
 
 Not built: the per channel prefix filter of `set_severity`, which is global today (§3);
 and the per-worker buffer for emission inside a phase (§1, `design_modding.md` §5.2).

@@ -10,9 +10,9 @@ main-thread init guard, and the decided limits (M0). The toolchain the designs a
 place: GCC 16, C++26 with `-freflection`, and `-march=x86-64-v3`. M1 is under way: the engine
 view protocol, the gate, the tick loop, the event ring, the command endpoints, the `Engine`
 (the session lifecycle, the freeze, `step(n)`, the operation lease and `close()`) and the
-Python surface over them are written and tested, and so are the severity API and the file
-sinks; the logging remainder (the per-session file sink) is left. Everything after M1 is
-designed but not written.
+Python surface over them are written and tested, and so is the logging remainder (the file
+sinks, the severity API and the session file). Everything after M1 is designed but not
+written.
 
 + [x] basic setup
 + [x] graphics basics
@@ -109,11 +109,13 @@ designed but not written.
   + [x] the refcounted logging holder: `upkeep.log.acquire()` / `release()` under a
         module-level lock, bracketing the engine's native life
         (`doc/design_logging.md` §2)
-  + [ ] logging management, the remaining parts: the per-session file sink in
-        `LogConfig.session_dir`. The severity filter API (`set_severity`,
-        `Engine.set_log_level`) and the file sinks (`enable_file`) are done. Until then
-        `acquire` accepts `session_dir`, warns and opens nothing
-        (`doc/design_logging.md` §4)
+  + [x] logging management, the remaining parts: the file sinks (`enable_file`,
+        `LogConfig.file_list`), the severity filter API (`set_severity`,
+        `Engine.set_log_level`), the session file in `LogConfig.session_dir`, and the
+        enum names from reflection (`LOG_LEVELS` and `FILE_OPENS` from `_if.log`)
+        (`doc/design_logging.md` §3). The session directory is provisional: where a
+        run's files live, scenarios, saves, stats and logs, is not decided
+        (`doc/open_question.md` Q87)
   + [x] sanitizer tests for both protocols: the engine view's permutation invariant,
         including the reverse edge from reader to publisher, and a return header written
         before a take arriving intact at the publisher that receives the block, never while
