@@ -548,12 +548,18 @@ struct CapturedConsole {
 
 BOOST_FIXTURE_TEST_SUITE(file_sink_behaviour, FileSinkFixture)
 
-BOOST_AUTO_TEST_CASE(test_enable_file_writes_the_records) {
+BOOST_AUTO_TEST_CASE(test_enable_file_writes_the_header_and_the_records) {
     enable_file(file());
     sim_estab_log("test.file", severity_level::info, "hello file");
     disable_file(file());
 
-    BOOST_TEST(contains(read_file(file()), "[INFO][test.file] hello file"));
+    const std::string text = read_file(file());
+    BOOST_TEST(contains(text, "file sink opened: " + file().string()));
+    BOOST_TEST(contains(text, "opened at "));
+    BOOST_TEST(contains(text, " UTC"));
+    BOOST_TEST(contains(text, "band trace..critical, open mode rotate"));
+    BOOST_TEST(contains(text, "line format [%Y-%m-%d %H:%M:%S.%f][SEVERITY][channel] message"));
+    BOOST_TEST(contains(text, "[INFO][test.file] hello file"));
 }
 
 BOOST_AUTO_TEST_CASE(test_the_band_filters_a_file) {
@@ -567,6 +573,8 @@ BOOST_AUTO_TEST_CASE(test_the_band_filters_a_file) {
     BOOST_TEST(!contains(text, "below the floor"));
     BOOST_TEST(contains(text, "inside the band"));
     BOOST_TEST(!contains(text, "above the ceiling"));
+    // the header is info, and this file's floor is above info
+    BOOST_TEST(!contains(text, "file sink opened"));
 }
 
 BOOST_AUTO_TEST_CASE(test_a_floor_below_the_users_level_reaches_the_file_only) {
@@ -671,6 +679,14 @@ BOOST_AUTO_TEST_CASE(test_the_pair_is_idempotent) {
     BOOST_TEST(!fs::exists(file("test.01.log")));
 }
 
+BOOST_AUTO_TEST_CASE(test_an_error_record_flushes_every_sink) {
+    enable_file(file());
+    sim_estab_log("test.file", severity_level::error, "on disk now");
+    // the sink is still open: the record is on disk because error flushes
+    BOOST_TEST(contains(read_file(file()), "on disk now"));
+    disable_file(file());
+}
+
 BOOST_AUTO_TEST_CASE(test_log_deinit_removes_the_files) {
     enable_file(file());
     log_deinit();
@@ -709,6 +725,7 @@ BOOST_AUTO_TEST_CASE(test_two_spellings_name_one_sink) {
     BOOST_TEST(contains(text, "one sink"));
     BOOST_TEST(!contains(text, "after the disable"));
     BOOST_TEST(!fs::exists(file("test.01.log")));
+    BOOST_TEST(contains(text, "file sink opened: " + fs::absolute(plain).lexically_normal().string()));
 }
 
 BOOST_AUTO_TEST_CASE(test_the_slot_pair_underneath) {

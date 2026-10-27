@@ -170,6 +170,11 @@ target_include_directories(sim_estab PUBLIC
 # default inside the partition, but the two would then be free to diverge.
 target_compile_definitions(sim_estab PUBLIC
     LIBSIM_ESTAB__CHUNK_ELEMENTS=${LIBSIM_ESTAB__CHUNK_ELEMENTS})
+# The engine release version the log file header prints (design_logging.md §3). The
+# Conan recipe passes its package version; a bare CMake build has none.
+set(LIBSIM_ESTAB__VERSION "unknown" CACHE STRING "The engine release version, printed in the log file header")
+target_compile_definitions(sim_estab PRIVATE
+    LIBSIM_ESTAB__VERSION="${LIBSIM_ESTAB__VERSION}")
 set_target_properties(sim_estab PROPERTIES
     INSTALL_RPATH "\$ORIGIN")
 # TODO: change symbol visibility in the future

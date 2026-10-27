@@ -17,6 +17,7 @@ module;
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -43,6 +44,7 @@ module;
 #include <boost/core/null_deleter.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
 #include <boost/log/attributes.hpp>
+#include <boost/log/attributes/value_extraction.hpp>
 #include <boost/log/core.hpp>
 #include <boost/log/expressions.hpp>
 #include <boost/log/keywords/channel.hpp>
@@ -55,6 +57,12 @@ module;
 #include <boost/log/utility/setup.hpp>
 
 #include <rang.hpp>
+
+/// The engine release version, as the file header prints it (design_logging.md §3).
+/// src/libsim_estab/CMakeLists.txt defines it from the Conan package version.
+#ifndef LIBSIM_ESTAB__VERSION
+#define LIBSIM_ESTAB__VERSION "unknown"
+#endif
 
 // Module declaration - this is the sim_estab implementation unit for the log partition
 module sim_estab;
@@ -333,8 +341,14 @@ static std::atomic<bool> init_status{false};
 /// Protected by log_mutex; log_init resets it to info.
 static severity_level user_level = severity_level::info;
 
-/// The line every sink prints. The console adds its colours around it
-/// (colored_text_ostream_backend); the file prints it as it is.
+/// The channel of the subsystem's own records: the lifecycle and the file headers
+constexpr const char *lifecycle_channel = "sim_estab.log";
+
+/// The line every sink prints, as the file header states it. The console adds its
+/// colours around it (colored_text_ostream_backend); the file prints it as it is.
+constexpr const char *line_format_text = "[%Y-%m-%d %H:%M:%S.%f][SEVERITY][channel] message";
+
+/// The Boost formatter of line_format_text
 inline auto line_format() {
     return expr::format("[%1%][%2%][%3%] %4%") %
            expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f") %
@@ -405,7 +419,7 @@ void clear_slots() {
 }
 
 // ----------------------------------------------------------------------------
-// The file slot's open (design_logging.md §3 "Open", "Rotation")
+// The file slot's open (design_logging.md §3 "Open", "Rotation", "The file header")
 // ----------------------------------------------------------------------------
 
 [[noreturn]] void fail_open(const std::filesystem::path& path, const std::string& what) {
@@ -486,6 +500,49 @@ boost::shared_ptr<std::ofstream> open_stream(const std::filesystem::path& path, 
     return stream;
 }
 
+std::tm local_time_of(std::time_t t) noexcept {
+    std::tm out{};
+#ifdef _WIN32
+    localtime_s(&out, &t);
+#else
+    localtime_r(&t, &out);
+#endif
+    return out;
+}
+
+std::tm utc_time_of(std::time_t t) noexcept {
+    std::tm out{};
+#ifdef _WIN32
+    gmtime_s(&out, &t);
+#else
+    gmtime_r(&t, &out);
+#endif
+    return out;
+}
+
+/// The open time for the header: the machine's local time, and UTC alongside
+std::string open_time_text() {
+    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    const std::tm local   = local_time_of(now);
+    const std::tm utc     = utc_time_of(now);
+    std::ostringstream text;
+    text << std::put_time(&local, "%Y-%m-%d %H:%M:%S %Z") << " local, " << std::put_time(&utc, "%Y-%m-%d %H:%M:%S")
+         << " UTC";
+    return text.str();
+}
+
+/// The file header (design_logging.md §3 "The file header"): ordinary info records,
+/// emitted after the lock is released. Every enabled sink that accepts info receives
+/// them, so a backup read later is self-describing.
+void emit_file_header(const FileSlot::params& p) {
+    sim_estab_log(lifecycle_channel, severity_level::info, "file sink opened: ", p.path.string(), " (sim_estab ",
+                  LIBSIM_ESTAB__VERSION, ")");
+    sim_estab_log(lifecycle_channel, severity_level::info, "opened at ", open_time_text());
+    sim_estab_log(lifecycle_channel, severity_level::info, "band ", name_of(p.floor), "..", name_of(p.ceiling),
+                  ", open mode ", name_of(p.on_open));
+    sim_estab_log(lifecycle_channel, severity_level::info, "line format ", line_format_text);
+}
+
 // ----------------------------------------------------------------------------
 // slot_impl: what enable<Slot> and disable<Slot> need from each slot. The Boost
 // backend, the formatter and the filter of a slot live here and nowhere else.
@@ -521,6 +578,8 @@ template <> struct slot_impl<ConsoleSlot> {
     static boost::shared_ptr<sink_type> take(slot_state<ConsoleSlot>& state, const ConsoleSlot::key&) noexcept {
         return std::exchange(state.sink, nullptr);
     }
+
+    static void after_open(const ConsoleSlot::params&) noexcept {}
 };
 
 template <> struct slot_impl<FileSlot> {
@@ -572,6 +631,8 @@ template <> struct slot_impl<FileSlot> {
         state.sinks.erase(it);
         return sink;
     }
+
+    static void after_open(const FileSlot::params& p) { emit_file_header(p); }
 };
 
 } // namespace detail
@@ -583,24 +644,29 @@ template <> struct slot_impl<FileSlot> {
 template <SinkSlot Slot> void enable(const typename Slot::params& given) {
     using impl                         = detail::slot_impl<Slot>;
     const typename Slot::params params = impl::normalize(given);
-    std::lock_guard<std::mutex> lock(detail::log_mutex);
+    {
+        std::lock_guard<std::mutex> lock(detail::log_mutex);
 
-    // Toggle shape (design_patterns.md §2): a no-op when not initialized, a no-op on a
-    // sink that is already enabled
-    if (!detail::init_status.load(std::memory_order_acquire)) {
-        return;
-    }
-    auto& state = detail::state_of<Slot>();
-    if (impl::has(state, params)) {
-        return;
+        // Toggle shape (design_patterns.md §2): a no-op when not initialized, a no-op
+        // on a sink that is already enabled
+        if (!detail::init_status.load(std::memory_order_acquire)) {
+            return;
+        }
+        auto& state = detail::state_of<Slot>();
+        if (impl::has(state, params)) {
+            return;
+        }
+
+        // A failed open throws here, before anything is registered
+        auto sink = impl::open(params);
+        logging::core::get()->add_sink(sink);
+        impl::add(state, params, std::move(sink));
+        detail::apply_core_enabled();
+        detail::apply_core_filter();
     }
 
-    // A failed open throws here, before anything is registered
-    auto sink = impl::open(params);
-    logging::core::get()->add_sink(sink);
-    impl::add(state, params, std::move(sink));
-    detail::apply_core_enabled();
-    detail::apply_core_filter();
+    // The header, outside the lock for the same reason as log_init's lifecycle record
+    impl::after_open(params);
 }
 
 template <SinkSlot Slot> void disable(const typename Slot::key& key) noexcept {
@@ -681,7 +747,7 @@ void log_init() {
     // be re-entrant if log_is_init() ever took the mutex again.
     // design_patterns.md §7 requires the record; the lock hierarchy of §2 is
     // why the ordering, not an exemption, is what makes it possible.
-    sim_estab_log("sim_estab.log", severity_level::info, "Logging subsystem initialized");
+    sim_estab_log(detail::lifecycle_channel, severity_level::info, "Logging subsystem initialized");
 }
 
 /**
@@ -703,7 +769,7 @@ void log_deinit() noexcept {
 
     // Lifecycle record first: the guard is still true and the sinks are still
     // attached, so this is the last record the subsystem emits about itself.
-    sim_estab_log("sim_estab.log", severity_level::info, "Logging subsystem shutting down");
+    sim_estab_log(detail::lifecycle_channel, severity_level::info, "Logging subsystem shutting down");
 
     // Clear the flag FIRST so no new emission starts against state that is
     // about to be torn down (design_patterns.md §2). The guard is advisory:
@@ -1147,7 +1213,13 @@ record logger::open_record(severity_level level) {
 void logger::push_record(record&& rec) {
     auto *impl     = static_cast<detail::channel_logger *>(get_impl());
     auto *rec_impl = static_cast<boost::log::record *>(rec.get_impl());
+    // A record of error or above flushes every sink once it is pushed, so a critical
+    // record before an abort is on disk (design_logging.md §3 "Writes")
+    const auto severity = logging::extract<severity_level>("Severity", *rec_impl);
     impl->push_record(std::move(*rec_impl));
+    if (severity && severity.get() >= severity_level::error) {
+        logging::core::get()->flush();
+    }
 }
 
 void *logger::get_impl() noexcept { return static_cast<void *>(storage_); }
@@ -1225,7 +1297,13 @@ record logger_mt::open_record(severity_level level) {
 void logger_mt::push_record(record&& rec) {
     auto *impl     = static_cast<detail::channel_logger_mt *>(get_impl());
     auto *rec_impl = static_cast<boost::log::record *>(rec.get_impl());
+    // A record of error or above flushes every sink once it is pushed, so a critical
+    // record before an abort is on disk (design_logging.md §3 "Writes")
+    const auto severity = logging::extract<severity_level>("Severity", *rec_impl);
     impl->push_record(std::move(*rec_impl));
+    if (severity && severity.get() >= severity_level::error) {
+        logging::core::get()->flush();
+    }
 }
 
 void *logger_mt::get_impl() noexcept { return static_cast<void *>(storage_); }

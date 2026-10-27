@@ -54,6 +54,8 @@ class RepoRecipe(ConanFile):
     def generate(self):
         tc = CMakeToolchain(self, generator="Ninja")
         tc.user_presets_path = False
+        # the engine release version, as the log file header prints it (design_logging.md §3)
+        tc.cache_variables["LIBSIM_ESTAB__VERSION"] = str(self.version)
         if self.options.BUILD_TESTS:
             tc.cache_variables["BUILD_TESTS"] = True
         tc.generate()

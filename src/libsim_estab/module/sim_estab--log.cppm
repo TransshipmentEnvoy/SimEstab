@@ -274,7 +274,8 @@ export void disable_console() noexcept;
  * happens to a file that exists; under `rotate` the file becomes backup `.01`, each
  * backup moves up by one, and the one past limits::max_log_files is deleted (§3
  * "Rotation"). The file opens at once, and a failed open throws log_error naming the
- * path.
+ * path. Right after the open, the file header goes out as ordinary `info` records (§3
+ * "The file header").
  *
  * The sink is keyed by the absolute, lexically normal path, so two spellings of one path
  * name one sink; disable_file normalizes its path the same way. Symlinks are not resolved.
@@ -326,7 +327,7 @@ export struct ConsoleSlot {
 /// The file slot: one sink per path, plain lines, buffered
 export struct FileSlot {
     static constexpr std::string_view name = "file";
-    static constexpr bool auto_flush       = false; ///< buffered
+    static constexpr bool auto_flush       = false; ///< buffered; a record of error or above flushes every sink
 
     struct params {
         std::filesystem::path path;

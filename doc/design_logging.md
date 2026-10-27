@@ -222,8 +222,20 @@ and the backups, and the number width follows from it. Boost's file backend and 
 collector are not used: the collector tracks only the files it stored or scanned, and its
 scan can delete any file that matches its pattern.
 
-**Writes.** Writes are buffered. A file sink flushes when it is disabled and at
-`log_deinit`. Timestamps are the machine's local time, as in the console.
+**The file header.** Right after the open, `enable_file` emits `info` records with:
+
+- the engine release version;
+- the open time, in local time and in UTC;
+- the file's band and open mode;
+- the line format.
+
+They are ordinary records: every enabled sink that accepts `info` receives them, and a
+file whose floor is above `info` does not receive them. A backup read later is
+self-describing.
+
+**Writes.** Writes are buffered. A record of `error` or above flushes
+every sink (`core::flush()` on the emission path), so a `critical` record before an abort
+is on disk. Timestamps are the machine's local time, as in the console.
 
 **Errors after the open.** Each file sink has a nothrow exception handler. A failure
 inside the sink after the open is swallowed. It never reaches the emitter, so it cannot
