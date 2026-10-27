@@ -6,7 +6,8 @@ not here, add it here first.
 Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` is
 `design_python_api.md`, `data_container` is `design_data_container.md`, `modding` is
 `design_modding.md`, `limits` is `design_limits.md`, `multiplayer` is
-`design_multiplayer.md`, `patterns` is `design_patterns.md`.
+`design_multiplayer.md`, `patterns` is `design_patterns.md`, `logging` is
+`design_logging.md`.
 
 ## Time and session
 
@@ -226,6 +227,12 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | build constant | A limit fixed when the library compiles, such as the chunk size. Changing it needs a rebuild. | limits |
 | policy default | The shipped default of an `EngineConfig` field, which a session may override. | limits |
 | warn threshold | A bandwidth above which the engine logs a warning, never a rejection: projection, per engine view. | limits §5 |
+
+## Logging
+
+| Term | Meaning | Where |
+|---|---|---|
+| sink slot | A sink kind as a type, with its fixed policy as constexpr members: the console slot. `enable<Slot>` / `disable<Slot>` work on one. C++ interface only, not bound to Python. Not the pool slot of data_container §2.2. | logging §3 |
 
 ## Words with a preferred meaning
 

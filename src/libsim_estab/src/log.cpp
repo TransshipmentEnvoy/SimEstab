@@ -17,22 +17,22 @@ module;
 
 #include <atomic>
 #include <ctime>
+#include <functional>
 #include <iomanip>
 #include <ios>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <new>
-// #include <shared_mutex>
-#include <functional>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
+#include <vector>
 
-#include <boost/container/flat_map.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/weak_ptr.hpp>
 
@@ -304,40 +304,6 @@ private:
         m_auto_flush        = auto_flush;
     }
 };
-
-/**
- * Convenience function to create a colored console log sink
- *
- * This function creates a colored console sink that behaves identically to
- * boost::log::add_console_log() but with severity-based color coding.
- *
- * @param strm Output stream (typically std::cout or std::clog)
- * @return Shared pointer to the created sink
- */
-template <typename CharT>
-boost::shared_ptr<boost::log::sinks::synchronous_sink<colored_text_ostream_backend<CharT>>>
-add_colored_console_log(std::basic_ostream<CharT>& strm) {
-    using namespace boost::log;
-
-    // Create shared pointer to stream with null deleter (don't manage stream lifetime)
-    auto stream_ptr = boost::shared_ptr<std::basic_ostream<CharT>>(&strm, boost::null_deleter());
-
-    // Create the colored backend
-    auto backend = boost::make_shared<colored_text_ostream_backend<CharT>>();
-    backend->add_stream(stream_ptr);
-
-    // Create the sink with synchronous frontend
-    auto sink = boost::make_shared<sinks::synchronous_sink<colored_text_ostream_backend<CharT>>>(backend);
-
-    // Add sink to the logging core
-    boost::log::core::get()->add_sink(sink);
-
-    return sink;
-}
-
-// Convenience function for char streams (most common case)
-inline auto add_colored_console_log(std::ostream& strm) { return add_colored_console_log<char>(strm); }
-
 } // namespace detail
 
 // management related
@@ -358,35 +324,141 @@ static std::mutex log_mutex;
 /// a caller that observes `true` also observes the fully-built sink state.
 static std::atomic<bool> init_status{false};
 
-/// Enum for sink type
-enum class sink_type : int {
-    console    = 0,
-    file       = 1,
-    file_error = 2,
-    file_debug = 3,
-    custom     = 10000,
+/// The line the console prints, inside its colours (colored_text_ostream_backend)
+inline auto line_format() {
+    return expr::format("[%1%][%2%][%3%] %4%") %
+           expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f") %
+           expr::attr<severity_level>("Severity") % expr::attr<std::string>("Channel") % expr::smessage;
+}
+
+// ----------------------------------------------------------------------------
+// The slot states: the tracking container follows the slot list
+// (design_logging.md §3 "Sink slots underneath the toggles")
+// ----------------------------------------------------------------------------
+
+using console_sink = sinks::synchronous_sink<colored_text_ostream_backend<char>>;
+
+/// What the subsystem holds for one slot. Specialized per slot; protected by log_mutex.
+template <SinkSlot Slot> struct slot_state;
+
+template <> struct slot_state<ConsoleSlot> {
+    boost::shared_ptr<console_sink> sink; ///< the one console sink, or null
 };
 
-/// FlatMap tracking sink status (protected by log_mutex)
-static boost::container::flat_map<sink_type, boost::shared_ptr<sinks::sink>> sink_map;
+/// The slot list. A new slot adds its type here and its slot_impl below; enable<Slot>
+/// and disable<Slot> need no change.
+static std::tuple<slot_state<ConsoleSlot>> slots;
+
+template <SinkSlot Slot> slot_state<Slot>& state_of() noexcept { return std::get<slot_state<Slot>>(slots); }
+
+/// The core is enabled only while a sink is registered (design_logging.md §1). With no
+/// sink, Boost would write every record to stdout through its default sink. Called under
+/// log_mutex after every change to the sinks.
+void apply_core_enabled() {
+    const bool any = static_cast<bool>(state_of<ConsoleSlot>().sink);
+    logging::core::get()->set_logging_enabled(any);
+}
+
+/// Flush, forget every sink and remove them from the core (under log_mutex)
+void clear_slots() {
+    logging::core::get()->flush();
+    state_of<ConsoleSlot>().sink.reset();
+    logging::core::get()->remove_all_sinks();
+}
+
+// ----------------------------------------------------------------------------
+// slot_impl: what enable<Slot> and disable<Slot> need from each slot. The Boost
+// backend, the formatter and the filter of a slot live here and nowhere else.
+// ----------------------------------------------------------------------------
+
+template <SinkSlot Slot> struct slot_impl;
+
+template <> struct slot_impl<ConsoleSlot> {
+    using sink_type = console_sink;
+
+    static bool has(const slot_state<ConsoleSlot>& state, const ConsoleSlot::params&) noexcept {
+        return static_cast<bool>(state.sink);
+    }
+
+    /// The colored backend on std::clog, through a non-owning pointer
+    static boost::shared_ptr<sink_type> open(const ConsoleSlot::params&) {
+        auto stream  = boost::shared_ptr<std::ostream>(&std::clog, boost::null_deleter());
+        auto backend = boost::make_shared<colored_text_ostream_backend<char>>();
+        backend->add_stream(stream);
+        backend->auto_flush(ConsoleSlot::auto_flush);
+        auto sink = boost::make_shared<sink_type>(backend);
+        sink->set_formatter(line_format());
+        return sink;
+    }
+
+    static void add(slot_state<ConsoleSlot>& state, const ConsoleSlot::params&, boost::shared_ptr<sink_type> sink) {
+        state.sink = std::move(sink);
+    }
+
+    static boost::shared_ptr<sink_type> take(slot_state<ConsoleSlot>& state, const ConsoleSlot::key&) noexcept {
+        return std::exchange(state.sink, nullptr);
+    }
+};
 
 } // namespace detail
+
+// ============================================================================
+// The slot pair (design_logging.md §3): one body per operation, instantiated per slot
+// ============================================================================
+
+template <SinkSlot Slot> void enable(const typename Slot::params& params) {
+    using impl = detail::slot_impl<Slot>;
+    std::lock_guard<std::mutex> lock(detail::log_mutex);
+
+    // Toggle shape (design_patterns.md §2): a no-op when not initialized, a no-op on a
+    // sink that is already enabled
+    if (!detail::init_status.load(std::memory_order_acquire)) {
+        return;
+    }
+    auto& state = detail::state_of<Slot>();
+    if (impl::has(state, params)) {
+        return;
+    }
+
+    // A failed open throws here, before anything is registered
+    auto sink = impl::open(params);
+    logging::core::get()->add_sink(sink);
+    impl::add(state, params, std::move(sink));
+    detail::apply_core_enabled();
+}
+
+template <SinkSlot Slot> void disable(const typename Slot::key& key) noexcept {
+    using impl = detail::slot_impl<Slot>;
+    std::lock_guard<std::mutex> lock(detail::log_mutex);
+
+    if (!detail::init_status.load(std::memory_order_acquire)) {
+        return;
+    }
+    auto sink = impl::take(detail::state_of<Slot>(), key);
+    if (!sink) {
+        return;
+    }
+
+    // Flush all pending log records before removal
+    logging::core::get()->flush();
+    logging::core::get()->remove_sink(sink);
+    detail::apply_core_enabled();
+}
+
+template void enable<ConsoleSlot>(const ConsoleSlot::params&);
+template void disable<ConsoleSlot>(const ConsoleSlot::key&) noexcept;
+
+// ============================================================================
+// The triad and the named pairs
+// ============================================================================
 
 /**
  * Initialize the hierarchical logging system
  *
- * Sets up the complete logging infrastructure with the following components:
- * - Console sink writing to std::clog with automatic flushing
- * - Timestamp formatting with microsecond precision
- * - Severity level display
- * - Hierarchical channel name display
- * - Default severity filter set to INFO level and above
- * - Common Boost.Log attributes (timestamp, thread ID, etc.)
+ * Removes every sink from the process's one Boost.Log core, sets the core filter to info,
+ * adds the console sink and enables the core, which stays enabled while a sink is
+ * registered. Thread-safe and idempotent: a call while initialized does nothing.
  *
- * This function is thread-safe and idempotent - multiple calls are safe
- * and subsequent calls after the first will be ignored.
- *
- * @note Must be called before any logging operations
  * @throws May throw boost::log exceptions if system resources are insufficient
  */
 void log_init() {
@@ -398,45 +470,26 @@ void log_init() {
             return;
         }
 
-        // Cleanup work
-        {
-            // Flush all pending log records before cleanup
-            logging::core::get()->flush();
+        // Cleanup work: whatever sinks the core holds, ours or another user's
+        detail::clear_slots();
 
-            // Clear our tracking map
-            detail::sink_map.clear();
-
-            // Boost.Log will handle ongoing operations gracefully via shared_ptr
-            logging::core::get()->remove_all_sinks();
-        }
-
-        // Enable logging
-        logging::core::get()->set_logging_enabled(true);
-
-        // Add common attributes (timestamp, file, line, function)
+        // Add common attributes (timestamp, process id, thread id, line id)
         logging::add_common_attributes();
 
         // Enable filtering, default to INFO level and above
         logging::core::get()->set_filter(expr::attr<severity_level>("Severity") >= severity_level::info);
 
-        // Automatic enable console
+        // The console, automatically. enable<ConsoleSlot> would return early here, since
+        // the init flag is still down, so the slot is opened directly.
         {
-            // Setup colored console logging with hierarchical formatting
-            auto sink = detail::add_colored_console_log(std::clog);
-
-            sink->set_formatter(expr::format("[%1%][%2%][%3%] %4%") %
-                                expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f") %
-                                expr::attr<severity_level>("Severity") % expr::attr<std::string>("Channel") %
-                                expr::smessage);
-
-            sink->locked_backend()->auto_flush(true);
-
-            // Add sink to boost core
+            using console = detail::slot_impl<ConsoleSlot>;
+            auto sink     = console::open({});
             logging::core::get()->add_sink(sink);
-
-            // Add sink to the map
-            detail::sink_map[detail::sink_type::console] = sink;
+            console::add(detail::state_of<ConsoleSlot>(), {}, std::move(sink));
         }
+
+        // Enable logging: the console is registered
+        detail::apply_core_enabled();
 
         // Release: a caller that observes `true` also observes the sinks above.
         detail::init_status.store(true, std::memory_order_release);
@@ -453,13 +506,8 @@ void log_init() {
 /**
  * Deinitialize the logging system
  *
- * Performs complete cleanup of the logging system in the following order:
- * 1. Flushes all pending log records to ensure no data loss
- * 2. Removes all configured sinks
- * 3. Resets initialization status to allow re-initialization
- *
- * This function is thread-safe, idempotent, and exception-safe.
- * Multiple calls are safe - subsequent calls after the first will be ignored.
+ * Emits the last lifecycle record, clears the init flag, flushes and removes every
+ * sink, and disables the core. Thread-safe, idempotent and noexcept.
  *
  * @note After calling this function, log_init() must be called again
  *       before any logging operations can be performed.
@@ -482,14 +530,8 @@ void log_deinit() noexcept {
     // externally synchronized against emission rather than draining it.
     detail::init_status.store(false, std::memory_order_release);
 
-    // Flush all pending log records before cleanup
-    logging::core::get()->flush();
-
-    // Clear our tracking map
-    detail::sink_map.clear();
-
-    // Boost.Log will handle ongoing operations gracefully via shared_ptr
-    logging::core::get()->remove_all_sinks();
+    // Flush, forget and remove every sink
+    detail::clear_slots();
 
     // Disable logging
     logging::core::get()->set_logging_enabled(false);
@@ -506,81 +548,9 @@ bool log_is_init() noexcept {
     return detail::init_status.load(std::memory_order_acquire);
 }
 
-/**
- * Enable console logging output
- *
- * This function adds a console sink to the logging system if one doesn't already exist.
- * The console sink will output colored log messages to std::clog with automatic flushing.
- *
- * This function is thread-safe and idempotent - multiple calls are safe
- * and subsequent calls after the first will be ignored.
- *
- * @note The logging system must be initialized before calling this function
- * @throws May throw boost::log exceptions if system resources are insufficient
- */
-void enable_console() {
-    std::lock_guard<std::mutex> lock(detail::log_mutex);
+void enable_console() { enable<ConsoleSlot>({}); }
 
-    // Check if logging system is initialized
-    if (!detail::init_status.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    // Check if console sink already exists
-    if (detail::sink_map.find(detail::sink_type::console) != detail::sink_map.end()) {
-        return; // Console sink already exists
-    }
-
-    // Setup colored console logging with hierarchical formatting
-    auto sink = detail::add_colored_console_log(std::clog);
-
-    sink->set_formatter(expr::format("[%1%][%2%][%3%] %4%") %
-                        expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f") %
-                        expr::attr<severity_level>("Severity") % expr::attr<std::string>("Channel") % expr::smessage);
-
-    sink->locked_backend()->auto_flush(true);
-
-    // Add sink to boost core
-    logging::core::get()->add_sink(sink);
-
-    // Add sink to the map
-    detail::sink_map[detail::sink_type::console] = sink;
-}
-
-/**
- * Disable console logging output
- *
- * This function removes the console sink from the logging system if it exists.
- * All pending log records will be flushed before removal.
- *
- * This function is thread-safe and idempotent - multiple calls are safe
- * and subsequent calls after the first will be ignored.
- *
- * @note The logging system must be initialized before calling this function
- */
-void disable_console() noexcept {
-    std::lock_guard<std::mutex> lock(detail::log_mutex);
-
-    // Check if logging system is initialized
-    if (!detail::init_status.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    // Check if console sink exists
-    auto it = detail::sink_map.find(detail::sink_type::console);
-    if (it == detail::sink_map.end()) {
-        return; // Console sink doesn't exist
-    }
-
-    // Flush all pending log records before removal
-    logging::core::get()->flush();
-
-    // Remove the sink from the logging core
-    logging::core::get()->remove_sink(it->second);
-
-    // Remove from the map
-    detail::sink_map.erase(it);
-}
+void disable_console() noexcept { disable<ConsoleSlot>({}); }
 
 // Note: sim_estab_log() is now fully implemented in the module interface
 // using the exported opaque wrapper classes (logger_mt, record, record_ostream)

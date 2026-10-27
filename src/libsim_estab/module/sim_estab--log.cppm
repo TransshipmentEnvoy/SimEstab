@@ -245,6 +245,42 @@ export void enable_console();
 export void disable_console() noexcept;
 
 // ============================================================================
+// Sink slots (design_logging.md §3 "Sink slots underneath the toggles")
+//
+// Each sink kind is a type that carries its fixed policy as constexpr members. One pair
+// of function templates, enable<Slot> and disable<Slot>, implements every named pair
+// above, and log.cpp maps each slot to its Boost formatter, so Boost stays out of this
+// interface. The slot types and the pair are C++ interface: engine code may use them
+// directly. They are not bound to Python.
+// ============================================================================
+
+/// The console slot: one sink on std::clog, coloured, flushed on every record
+export struct ConsoleSlot {
+    static constexpr std::string_view name = "console";
+    static constexpr bool auto_flush       = true; ///< a terminal shows a record when it is written
+
+    struct params {}; ///< the console takes no parameters
+    struct key {};    ///< and holds one sink
+};
+
+/// A sink slot: a type with the two policy members and the two nested types above
+export template <class Slot>
+concept SinkSlot = requires {
+    { Slot::name } -> std::convertible_to<std::string_view>;
+    { Slot::auto_flush } -> std::convertible_to<bool>;
+    typename Slot::params;
+    typename Slot::key;
+};
+
+/// Enable one sink of `Slot`. enable_console() is enable<ConsoleSlot>({}). Defined in
+/// log.cpp for each slot.
+export template <SinkSlot Slot> void enable(const typename Slot::params& params);
+
+/// Disable the sink of `Slot` that `key` names. disable_console() is
+/// disable<ConsoleSlot>({}).
+export template <SinkSlot Slot> void disable(const typename Slot::key& key) noexcept;
+
+// ============================================================================
 // Opaque wrapper classes for Boost.Log types
 // These classes use fast pimpl to completely hide Boost.Log from the interface
 // ============================================================================

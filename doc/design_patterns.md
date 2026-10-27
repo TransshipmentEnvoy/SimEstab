@@ -237,13 +237,14 @@ Implementation rules:
 
 ### Example: logging (`sim_estab:log`)
 
-- Tracking container: `flat_map<sink_type, sink_ptr> sink_map`. It tracks
-  the sinks registered with the Boost.Log core.
-- Defensive cleanup in `log_init`: flush, clear the tracking map, remove
-  stale sinks from the core.
-- Feature toggles: `enable_console()` / `disable_console()`. The file sink slots exist in
-  the enumeration but have **no toggle pair yet**. They are planned (`design_logging.md`
-  §4), and this document must not describe them as shipped.
+- Tracking container: one state per sink slot, in a tuple that follows the slot list
+  (`design_logging.md` §3). It tracks the sinks registered with the Boost.Log core.
+- Defensive cleanup in `log_init`: flush, clear the slot states, remove every sink
+  from the core.
+- Feature toggles: `enable_console()` / `disable_console()`, over the slot pair
+  `enable<Slot>` / `disable<Slot>` (`design_logging.md` §3). The file sinks have no toggle
+  pair yet. They are planned (`design_logging.md` §4), and this document must not describe
+  them as shipped.
 - Hot-path guard: `sim_estab_log()` returns silently when `!log_is_init()`. That is one
   atomic load, with no lock, on every emission in the process.
 - **The subsystem's own lifecycle records are ordered around its lock**, which is the one

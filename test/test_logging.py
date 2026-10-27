@@ -5,6 +5,7 @@
 and the count is one step from any thread.
 """
 
+import logging
 import threading
 
 import pytest
@@ -83,3 +84,14 @@ def test_acquire_and_release_are_safe_from_any_thread():
         thread.join()
     assert sim_log.holder_count() == 0
     assert not if_module.log.log_is_init()
+
+
+def test_no_sink_prints_nothing(capfd):
+    """With the console off and no file, no sink is registered, so the core is off and
+    Boost's default sink never prints to stdout (``design_logging.md`` §1)."""
+    sim_log.acquire(LogConfig(console=False))
+    logging.getLogger("test.quiet").warning("nobody hears this")
+    sim_log.release()
+    out, err = capfd.readouterr()
+    assert "nobody hears this" not in out
+    assert "nobody hears this" not in err

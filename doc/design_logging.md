@@ -38,10 +38,18 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
     subsystem initialized".
   - `log_deinit` emits "Logging subsystem shutting down", clears the flag, flushes, then
     tears down.
-- **Sinks** are tracked in a `flat_map<sink_type, sink_ptr>`. Before building fresh state,
-  `log_init` cleans up defensively: it flushes, clears the map, and removes stale sinks. The
-  sink slots are `console`, `file`, `file_error` and `file_debug`. Only **console** is
-  implemented; the file slots are reserved (*planned*, §4).
+- **Sinks** are tracked per sink slot: the console slot holds one sink (§3). A file slot is
+  planned (§4). Before building fresh state, `log_init` cleans up defensively: it flushes,
+  clears the slot states, and removes every sink from the core.
+- **The Boost.Log core is the process's one core, and this subsystem owns it.** `log_init`
+  removes every sink from it and sets its filter; `log_deinit` disables it and removes
+  every sink. Another Boost.Log user in the same process loses its sinks at either call.
+  The console sink writes to `std::clog` through a non-owning pointer and never redirects
+  the stream.
+- **The core is enabled only while a sink is registered.** With no sink, Boost writes
+  every record to stdout through its default sink, in its own format. So
+  `disable_console()` turns the core off, and `enable_console()` turns it on again. A
+  record emitted while the core is off is dropped before it is built.
 - **Console sink**: colored output (by severity) to `std::clog`, with auto-flush,
   microsecond timestamps, and the severity and hierarchical channel in the format. It is
   toggled with `enable_console()` / `disable_console()`. Both are idempotent and do nothing
@@ -138,8 +146,18 @@ hierarchy, not an import path, and the two never resolve against each other.
 
 ## 3. File sinks and the severity filter
 
-This section sets the names from the enums. The file sinks and the severity filter are
-planned (§4).
+This section sets the sink slots under the toggles and the names from the enums. The file
+sinks and the severity filter are planned (§4).
+
+**Sink slots underneath the toggles.** The Python surface is the triad and the named
+pairs. Underneath, each sink kind is a **sink slot**: a type, one for the console now and
+one for the file once the file sinks exist (§4). A slot carries its fixed policy as
+`static constexpr` members: its name and its flush rule. `log.cpp` maps each slot to its
+Boost formatter (the console's colours), so Boost stays out of the interface. One pair of
+function templates, `enable<Slot>(...)` and `disable<Slot>(...)`, implements every named
+pair. The console slot holds one sink. The tracking container follows the slot list (§1).
+The slot types and the pair are part of the C++ interface of `sim_estab:log`, so engine
+code may use them directly. They are not bound to Python.
 
 **Names from the enums.** `sim_estab:log` lists the enumerators of `severity_level` with
 C++26 reflection (`std::meta::enumerators_of`). The name of a value, the parse of a name and
@@ -149,9 +167,9 @@ other enums stay with [Q73](open_question.md#q73-magic_enum-or-reflection-for-en
 
 ## 4. Planned
 
-- **File sinks**: fill the reserved `file`, `file_error` and `file_debug` slots, with
-  `enable_file(...)` / `disable_file()` following the console toggle's shape. They are a
-  general rotating file sink, an error-and-above sink, and an opt-in debug sink.
+- **File sinks**: a file slot beside the console slot (§3), with `enable_file(...)` /
+  `disable_file()` over the same slot pair. They are a general rotating file sink, an
+  error-and-above sink, and an opt-in debug sink.
 - **Runtime severity filter API**: `set_severity(level)`, global at first and later per
   channel prefix. The filter is fixed at `info` inside `log_init`; `LogConfig.level` sets
   the starting value once the API exists. Until then `acquire` accepts a `level` other
