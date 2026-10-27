@@ -195,7 +195,8 @@ class LogConfig:
     #: The console sink.
     console: bool = True
 
-    #: The starting severity filter, one of ``LOG_LEVELS``.
+    #: The starting severity filter, one of ``LOG_LEVELS``: the user's level
+    #: (``design_logging.md`` §3).
     level: str = "info"
 
     #: Where the freeze opens the per-session file sink; ``None`` opens no per-session

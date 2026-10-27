@@ -245,6 +245,18 @@ export void enable_console();
 export void disable_console() noexcept;
 
 // ============================================================================
+// The severity filter (design_logging.md §3)
+// ============================================================================
+
+/**
+ * Set the user's level (design_logging.md §3 "The core filter and set_severity")
+ *
+ * The console carries the user's level as its own filter, and the core filter follows
+ * it. A no-op when the subsystem is not initialized; log_init resets the level to `info`.
+ */
+export void set_severity(severity_level level);
+
+// ============================================================================
 // Sink slots (design_logging.md §3 "Sink slots underneath the toggles")
 //
 // Each sink kind is a type that carries its fixed policy as constexpr members. One pair

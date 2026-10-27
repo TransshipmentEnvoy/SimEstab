@@ -4,8 +4,9 @@ This document describes the `sim_estab:log` subsystem: how it is built, and the 
 starting, stopping and controlling it. Unlike the other design docs, most of it is
 **implemented**. Parts marked *planned* are not.
 
-Status: the C++ subsystem (§1) and the Python refcounted holder (§2) are built. File sinks,
-a runtime severity API and the per-session file sink (§4) are planned.
+Status: the C++ subsystem (§1), the Python refcounted holder (§2) and the severity filter
+(§3) are built. File sinks, the per-session file sink, the per channel prefix filter and
+the per-worker buffer are planned (§4).
 
 Terms are defined in [glossary.md](glossary.md).
 
@@ -80,8 +81,9 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
 - **Errors**: `log_error`, derived from `sim_estab_error`, exists and is bound to Python as
   `_if.log.log_error`, but no code throws it yet. Boost exceptions can escape `log_init` and
   `enable_console` directly.
-- **Python surface**: mirrors the triad and the console toggles one to one, plus a concrete
-  `log(channel, level, message)` wrapper and the name list of `severity_level` (§3).
+- **Python surface**: mirrors the triad, the console toggles and `set_severity` one to one,
+  plus a concrete `log(channel, level, message)` wrapper and the name list of
+  `severity_level` (§3).
 
 ## 2. Lifetime and runtime control (rules)
 
@@ -111,6 +113,15 @@ C++ triad does not change; the ordering lives above it, in `sim_estab/upkeep/log
   free-threaded build. An atomic count alone would not do it: a second `acquire` could see
   the count already raised and log before the first holder's `log_init` had finished. The
   lock is taken twice per `Engine` lifetime, so its cost does not matter.
+- **The Python side adds one handler and touches no other.** `log_init` adds
+  `EngineLogHandler` to the root logger, which forwards every Python record to the C++
+  subsystem, and sets the root level to `DEBUG`, saving the level it found; `log_deinit`
+  removes that handler and restores the saved level. A handler the application or a
+  process-level mod added stays as it is. The root level is set automatically because the
+  bridge needs every record, and the application may set it again after `acquire`. Then
+  `log_deinit` keeps the application's level and warns with a `RuntimeWarning` that it
+  did not restore the saved one. The bridge is one way: a C++ record never reaches a
+  Python handler.
 - **The first caller's configuration wins**, with a warning. A later `acquire` with a
   different `LogConfig` does not reconfigure the sinks, following "immutable creation
   options, first caller wins" (`design_patterns.md` §3). `LogConfig` has three fields
@@ -119,7 +130,7 @@ C++ triad does not change; the ordering lives above it, in `sim_estab/upkeep/log
   | Field | Default | Meaning |
   |---|---|---|
   | `console` | `True` | the console sink of §1 |
-  | `level` | `"info"` | the starting severity filter |
+  | `level` | `"info"` | the starting severity filter (§3) |
   | `session_dir` | `None` | the directory for the per-session file sink (below). `None` opens no per-session file |
 
 **Per-session file sink.** It opens at the **freeze**, in `LogConfig.session_dir`, not when
@@ -134,9 +145,10 @@ This is safe because log naming is not part of the replay header (`design_engine
 
 **Runtime control.** Log level and sink toggles are **control calls**, never simulation
 commands. They change no engine core state and are never recorded in the replay's input stream
-(`design_engine_core.md` §1, `design_python_api.md` §3). A future
-`Engine.set_log_level(...)` will forward to this subsystem, and a replay may run at any
-verbosity.
+(`design_engine_core.md` §1, `design_python_api.md` §3). `Engine.set_log_level(...)`
+enters the engine's operation lease and forwards to `set_severity` (§3), so a closed
+engine raises instead of changing the level (`design_python_api.md` §8). A replay may run
+at any verbosity.
 
 **Mod channels.** Each mod logs on its own channel, `sim_estab.mod.<id>`
 (`design_modding.md` §4.1). This keeps the hierarchical channel convention, so filtering by
@@ -146,8 +158,8 @@ hierarchy, not an import path, and the two never resolve against each other.
 
 ## 3. File sinks and the severity filter
 
-This section sets the sink slots under the toggles and the names from the enums. The file
-sinks and the severity filter are planned (§4).
+This section sets the sink slots under the toggles, the severity filter and the names from
+the enums. The file sinks are planned (§4).
 
 **Sink slots underneath the toggles.** The Python surface is the triad and the named
 pairs. Underneath, each sink kind is a **sink slot**: a type, one for the console now and
@@ -158,6 +170,11 @@ function templates, `enable<Slot>(...)` and `disable<Slot>(...)`, implements eve
 pair. The console slot holds one sink. The tracking container follows the slot list (§1).
 The slot types and the pair are part of the C++ interface of `sim_estab:log`, so engine
 code may use them directly. They are not bound to Python.
+
+**The core filter and `set_severity`.** `set_severity(level)` sets the user's level,
+global at first and later per channel prefix. The console carries the user's level as its
+own filter, and the core filter follows it. `LogConfig.level` is the starting value, and
+`Engine.set_log_level` forwards here (§2).
 
 **Names from the enums.** `sim_estab:log` lists the enumerators of `severity_level` with
 C++26 reflection (`std::meta::enumerators_of`). The name of a value, the parse of a name and
@@ -170,11 +187,10 @@ other enums stay with [Q73](open_question.md#q73-magic_enum-or-reflection-for-en
 - **File sinks**: a file slot beside the console slot (§3), with `enable_file(...)` /
   `disable_file()` over the same slot pair. They are a general rotating file sink, an
   error-and-above sink, and an opt-in debug sink.
-- **Runtime severity filter API**: `set_severity(level)`, global at first and later per
-  channel prefix. The filter is fixed at `info` inside `log_init`; `LogConfig.level` sets
-  the starting value once the API exists. Until then `acquire` accepts a `level` other
-  than `info`, warns and leaves the filter alone.
 - **Session integration**: the per-session file sink of §2, named from the session identity
   plus a run-unique part, opened at the freeze in `LogConfig.session_dir`
   (`design_engine_core.md` §2.4) and closed by `Engine.close()`. Until then `acquire`
   accepts a `session_dir`, warns and opens nothing.
+
+Not built: the per channel prefix filter of `set_severity`, which is global today (§3);
+and the per-worker buffer for emission inside a phase (§1, `design_modding.md` §5.2).

@@ -85,6 +85,7 @@ def test_all_logging_apis_exist():
     assert hasattr(if_module.log, "enable_console")
     assert hasattr(if_module.log, "disable_console")
     assert hasattr(if_module.log, "severity_level_names")
+    assert hasattr(if_module.log, "set_severity")
 
     # Check that they are callable (except for the enum and exception)
     assert callable(if_module.log.log_init)
@@ -92,3 +93,4 @@ def test_all_logging_apis_exist():
     assert callable(if_module.log.log_is_init)
     assert callable(if_module.log.enable_console)
     assert callable(if_module.log.disable_console)
+    assert callable(if_module.log.set_severity)

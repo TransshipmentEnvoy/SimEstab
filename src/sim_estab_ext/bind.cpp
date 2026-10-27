@@ -92,6 +92,9 @@ void bind_log(nb::module_& m, const nb::exception<error::sim_estab_error>& root)
     log_module.def("log_is_init", &estab_log::log_is_init, "Check if the logging system is initialized");
     log_module.def("enable_console", &estab_log::enable_console, "Enable console logging output");
     log_module.def("disable_console", &estab_log::disable_console, "Disable console logging output");
+    log_module.def("set_severity", &estab_log::set_severity, nb::arg("level"),
+                   "Set the user's level: the console's filter, and with the open files' floors the core "
+                   "filter. A file's band is fixed at its open (design_logging.md §3).");
 
     // The variadic sim_estab_log gets a concrete wrapper (design_patterns.md §8)
     log_module.def(
@@ -490,6 +493,8 @@ void bind_engine_classes(nb::module_& engine_module) {
         .def("resume", &engine::Engine::resume, "Any thread: lift the ceiling on the run grant")
         .def("request_stop", &engine::Engine::request_stop, "Any thread: no tick runs again in this session")
         .def("stop_requested", &engine::Engine::stop_requested, "Any thread: whether a stop was requested")
+        .def("set_log_level", &engine::Engine::set_log_level, nb::arg("level"),
+             "Any thread: the user's severity level (design_logging.md §3)")
         .def("stop_sim_async", &engine::Engine::stop_sim_async, nb::call_guard<nb::gil_scoped_release>(),
              "Running: end ticking for the session; the engine is Stopped")
         .def("close", &engine::Engine::close, nb::call_guard<nb::gil_scoped_release>(),

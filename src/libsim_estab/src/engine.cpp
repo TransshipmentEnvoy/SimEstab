@@ -822,6 +822,12 @@ bool Engine::stop_requested() const noexcept {
     return impl.pending_stop;
 }
 
+void Engine::set_log_level(severity_level level) {
+    check_impl();
+    const lease::LeaseGuard guard = impl_->enter("set_log_level()");
+    set_severity(level);
+}
+
 void Engine::stop_sim_async() {
     check_impl();
     Impl& impl                    = *impl_;

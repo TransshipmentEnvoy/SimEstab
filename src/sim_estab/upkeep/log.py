@@ -1,5 +1,5 @@
 """The logging subsystem's Python side: the refcounted holder over the C++ triad, and
-the 1:1 functions (``design_logging.md`` §2).
+the 1:1 functions (``design_logging.md`` §2, §3).
 
 Logging starts before every other subsystem and stops after the last. ``acquire()``
 initializes it for the first holder and ``release()`` shuts it down for the last; the
@@ -18,7 +18,7 @@ from logging import LogRecord
 from typing import Optional
 
 from .. import _if
-from ..config import LogConfig
+from ..config import LOG_LEVELS, LogConfig
 
 # module local logger
 _logger = logging.getLogger(__name__)
@@ -26,6 +26,8 @@ _logger = logging.getLogger(__name__)
 # root logger
 _root_logger = logging.getLogger()
 _engine_handler: Optional[logging.Handler] = None
+# The root level log_init found, restored by log_deinit (design_logging.md §2)
+_saved_root_level: int = logging.NOTSET
 
 # The refcount (design_logging.md §2): the first holder initializes, the last tears
 # down, and the first holder's config wins. The lock makes each of those one step.
@@ -74,13 +76,15 @@ class EngineLogHandler(logging.Handler):
 
 def log_init():
     """Initialize the logging system and add Python engine handler."""
-    global _engine_handler
+    global _engine_handler, _saved_root_level
 
     _if.log.log_init()
-    _root_logger.setLevel(logging.DEBUG)
 
-    # Add engine handler that forwards Python logs to C++ engine
+    # Add engine handler that forwards Python logs to C++ engine. The bridge needs every
+    # record, so the root level goes to DEBUG; log_deinit restores the saved one.
     if _engine_handler is None:
+        _saved_root_level = _root_logger.level
+        _root_logger.setLevel(logging.DEBUG)
         _engine_handler = EngineLogHandler()
         _engine_handler.setFormatter(logging.Formatter("%(message)s"))
         _root_logger.addHandler(_engine_handler)
@@ -90,12 +94,23 @@ def log_deinit():
     """Deinitialize the logging system and remove Python engine handler."""
     global _engine_handler
 
-    # Remove engine handler if it exists
+    # Remove engine handler if it exists, and restore the root level log_init found. A
+    # level the application set while logging was held stays, with a warning.
     if _engine_handler is not None:
         _root_logger.removeHandler(_engine_handler)
         _engine_handler = None
+        level = _root_logger.level
+        if level == logging.DEBUG:
+            _root_logger.setLevel(_saved_root_level)
+        elif level != _saved_root_level:
+            warnings.warn(
+                f"the root logger level is {logging.getLevelName(level)}, set while "
+                f"logging was held; it stays, and log_deinit does not restore "
+                f"{logging.getLevelName(_saved_root_level)} (design_logging.md §2)",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
-    _root_logger.setLevel(logging.NOTSET)
     _if.log.log_deinit()
 
 
@@ -107,15 +122,30 @@ def disable_console():
     _if.log.disable_console()
 
 
+def _severity(name: str, field: str) -> _if.log.severity_level:
+    if name not in LOG_LEVELS:
+        raise ValueError(
+            f"{field} must be one of {', '.join(LOG_LEVELS)}, got {name!r}"
+        )
+    return getattr(_if.log.severity_level, name)
+
+
+def set_severity(level: str) -> None:
+    """The user's level, one of ``LOG_LEVELS`` (``design_logging.md`` §3): the console's
+    filter and, with the open files' floors, the core filter. A file's band is fixed at
+    its open, so this never changes a file."""
+    _if.log.set_severity(_severity(level, "level"))
+
+
 def acquire(config: LogConfig | None = None) -> None:
     """Hold the logging subsystem: initialize it for the first holder, count for the
     rest.
 
-    The first holder's ``config`` is applied and kept. A later holder with a different
-    one is warned about and ignored (``design_logging.md`` §2: first caller wins).
-    ``level`` and ``session_dir`` are accepted but not applied yet: the severity API and
-    the per-session file sink are planned (``design_logging.md`` §4), and a value other
-    than the default is warned about until they exist.
+    The first holder's ``config`` is applied and kept: the level and the console, in that
+    order. A later holder with a different one is warned about and ignored
+    (``design_logging.md`` §2: first caller wins). ``session_dir`` is accepted but not
+    applied yet: the session file is planned (``design_logging.md`` §4), and a value is
+    warned about until it exists.
     """
     global _holders, _held_config
 
@@ -124,24 +154,20 @@ def acquire(config: LogConfig | None = None) -> None:
     with _lock:
         if _holders == 0:
             log_init()
-            if config.console:
-                enable_console()
-            else:
-                disable_console()
+            try:
+                set_severity(config.level)
+                if config.console:
+                    enable_console()
+                else:
+                    disable_console()
+            except BaseException:
+                log_deinit()
+                raise
             _held_config = config
-            if config.level != "info":
-                warnings.warn(
-                    f"LogConfig.level={config.level!r} is not applied yet: "
-                    f"the severity "
-                    f"filter stays at 'info' until the runtime severity API exists "
-                    f"(design_logging.md §4)",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
             if config.session_dir is not None:
                 warnings.warn(
                     f"LogConfig.session_dir={str(config.session_dir)!r} is not applied "
-                    f"yet: the per-session file sink is planned (design_logging.md §4)",
+                    f"yet: the session file is planned (design_logging.md §4)",
                     RuntimeWarning,
                     stacklevel=2,
                 )

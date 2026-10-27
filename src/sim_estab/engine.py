@@ -429,6 +429,14 @@ class Engine:
         """Any thread: whether a stop was requested."""
         return self._native_engine().stop_requested()
 
+    def set_log_level(self, level: str) -> None:
+        """Any thread: the user's severity level, one of ``LOG_LEVELS``. It is the
+        console's filter and, with the open files' floors, the core filter
+        (``design_logging.md`` §3). A file's band is fixed at its open, so this never
+        changes a file. A control call: never recorded in the replay. Raises
+        ``EngineClosedError`` on a closed engine, like the other control calls."""
+        self._native_engine().set_log_level(upkeep_log._severity(level, "level"))
+
     # ------------------------------------------------------------------
     # shutdown
     # ------------------------------------------------------------------

@@ -55,6 +55,31 @@ def engine():
 # --------------------------------------------------------------------------
 
 
+def test_set_log_level_is_a_control_call(engine):
+    """``set_log_level`` forwards to the subsystem's ``set_severity`` from any thread
+    and validates its string (``design_logging.md`` §2, §3)."""
+    engine.set_log_level("debug")
+    done = threading.Event()
+
+    def from_another_thread() -> None:
+        engine.set_log_level("info")
+        done.set()
+
+    threading.Thread(target=from_another_thread).start()
+    assert done.wait(5)
+    with pytest.raises(ValueError, match="level must be one of"):
+        engine.set_log_level("bogus")
+
+
+def test_set_log_level_on_a_closed_engine_raises():
+    """A closed engine never changes the level, which an application may still hold
+    (``design_python_api.md`` §8)."""
+    closed = Engine(sink_config())
+    closed.close()
+    with pytest.raises(EngineClosedError):
+        closed.set_log_level("trace")
+
+
 def test_the_states_through_a_session(engine):
     assert engine.state == EngineState.Configuring
     engine.start_session()

@@ -17,7 +17,8 @@
  * Threads. Construction, the freeze, step(), submit(), outcome(), view(), drain_events(),
  * sink_digest(), snapshot() and stop_sim_async() belong to the owner thread, the thread that
  * constructed the Engine; the Python layer checks it (design_python_api.md §6). The control
- * calls pause(), resume(), request_stop() and stop_requested() may come from any thread. An
+ * calls pause(), resume(), request_stop(), stop_requested() and set_log_level() may come from
+ * any thread. An
  * EngineViewHandle belongs to its engine view's one reader thread. One short mutex, the
  * control mutex, guards the state transitions and the control calls made before the
  * freeze; it is never held together with another engine mutex (design_engine_core.md
@@ -55,6 +56,7 @@ export module sim_estab:engine;
 
 import :error;
 import :limits;
+import :log;
 import :engine.tick;
 import :engine.lease;
 import :engine.view;
@@ -437,6 +439,10 @@ public:
 
     /// Any thread: whether a stop was requested
     [[nodiscard]] bool stop_requested() const noexcept;
+
+    /// Any thread: the user's severity level, forwarded to log::set_severity
+    /// (design_logging.md §3). A control call: never recorded in the replay.
+    void set_log_level(log::severity_level level);
 
     /// Running: end ticking for the session; the engine is Stopped (design_python_api.md
     /// §2). With no sim thread there is nothing to join. Nothing to do in any other state

@@ -324,12 +324,19 @@ static std::mutex log_mutex;
 /// a caller that observes `true` also observes the fully-built sink state.
 static std::atomic<bool> init_status{false};
 
+/// The user's level (design_logging.md §3 "The core filter and set_severity").
+/// Protected by log_mutex; log_init resets it to info.
+static severity_level user_level = severity_level::info;
+
 /// The line the console prints, inside its colours (colored_text_ostream_backend)
 inline auto line_format() {
     return expr::format("[%1%][%2%][%3%] %4%") %
            expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f") %
            expr::attr<severity_level>("Severity") % expr::attr<std::string>("Channel") % expr::smessage;
 }
+
+/// A sink filter: `floor <= Severity` (the console)
+inline auto floor_filter(severity_level floor) { return expr::attr<severity_level>("Severity") >= floor; }
 
 // ----------------------------------------------------------------------------
 // The slot states: the tracking container follows the slot list
@@ -350,6 +357,10 @@ template <> struct slot_state<ConsoleSlot> {
 static std::tuple<slot_state<ConsoleSlot>> slots;
 
 template <SinkSlot Slot> slot_state<Slot>& state_of() noexcept { return std::get<slot_state<Slot>>(slots); }
+
+/// The core filter: the user's level (design_logging.md §3 "The core filter and
+/// set_severity"). Called under log_mutex after every change to it.
+void apply_core_filter() { logging::core::get()->set_filter(floor_filter(user_level)); }
 
 /// The core is enabled only while a sink is registered (design_logging.md §1). With no
 /// sink, Boost would write every record to stdout through its default sink. Called under
@@ -388,6 +399,7 @@ template <> struct slot_impl<ConsoleSlot> {
         backend->auto_flush(ConsoleSlot::auto_flush);
         auto sink = boost::make_shared<sink_type>(backend);
         sink->set_formatter(line_format());
+        sink->set_filter(floor_filter(user_level));
         return sink;
     }
 
@@ -425,6 +437,7 @@ template <SinkSlot Slot> void enable(const typename Slot::params& params) {
     logging::core::get()->add_sink(sink);
     impl::add(state, params, std::move(sink));
     detail::apply_core_enabled();
+    detail::apply_core_filter();
 }
 
 template <SinkSlot Slot> void disable(const typename Slot::key& key) noexcept {
@@ -443,6 +456,7 @@ template <SinkSlot Slot> void disable(const typename Slot::key& key) noexcept {
     logging::core::get()->flush();
     logging::core::get()->remove_sink(sink);
     detail::apply_core_enabled();
+    detail::apply_core_filter();
 }
 
 template void enable<ConsoleSlot>(const ConsoleSlot::params&);
@@ -455,9 +469,10 @@ template void disable<ConsoleSlot>(const ConsoleSlot::key&) noexcept;
 /**
  * Initialize the hierarchical logging system
  *
- * Removes every sink from the process's one Boost.Log core, sets the core filter to info,
- * adds the console sink and enables the core, which stays enabled while a sink is
- * registered. Thread-safe and idempotent: a call while initialized does nothing.
+ * Removes every sink from the process's one Boost.Log core, sets the user's level to info
+ * and the core filter with it, adds the console sink and enables the core, which stays
+ * enabled while a sink is registered. Thread-safe and idempotent: a call while
+ * initialized does nothing.
  *
  * @throws May throw boost::log exceptions if system resources are insufficient
  */
@@ -476,8 +491,9 @@ void log_init() {
         // Add common attributes (timestamp, process id, thread id, line id)
         logging::add_common_attributes();
 
-        // Enable filtering, default to INFO level and above
-        logging::core::get()->set_filter(expr::attr<severity_level>("Severity") >= severity_level::info);
+        // The user's level starts at info; the core filter follows it
+        detail::user_level = severity_level::info;
+        detail::apply_core_filter();
 
         // The console, automatically. enable<ConsoleSlot> would return early here, since
         // the init flag is still down, so the slot is opened directly.
@@ -551,6 +567,19 @@ bool log_is_init() noexcept {
 void enable_console() { enable<ConsoleSlot>({}); }
 
 void disable_console() noexcept { disable<ConsoleSlot>({}); }
+
+void set_severity(severity_level level) {
+    std::lock_guard<std::mutex> lock(detail::log_mutex);
+
+    if (!detail::init_status.load(std::memory_order_acquire)) {
+        return;
+    }
+    detail::user_level = level;
+    if (const auto& console = detail::state_of<ConsoleSlot>().sink) {
+        console->set_filter(detail::floor_filter(level));
+    }
+    detail::apply_core_filter();
+}
 
 // Note: sim_estab_log() is now fully implemented in the module interface
 // using the exported opaque wrapper classes (logger_mt, record, record_ostream)

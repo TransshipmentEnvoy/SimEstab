@@ -64,6 +64,7 @@ void check_every_call_is_refused_as_closed(Engine& engine, EngineViewHandle *han
     BOOST_CHECK_THROW(engine.resume(), engine_closed_error);
     BOOST_CHECK_THROW(engine.request_stop(), engine_closed_error);
     BOOST_CHECK_THROW(engine.stop_sim_async(), engine_closed_error);
+    BOOST_CHECK_THROW(engine.set_log_level(sim_estab::core::log::severity_level::trace), engine_closed_error);
     BOOST_TEST(!engine.stop_requested()); // a query degrades
     if (handle != nullptr) {
         BOOST_CHECK_THROW((void)handle->take(), engine_closed_error);

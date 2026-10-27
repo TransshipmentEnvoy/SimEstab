@@ -7,9 +7,10 @@ Status: the M1 surface is built. `src/sim_estab/config.py` holds the option obje
 `engine.py` holds the `Engine` of §2 with the headless `step(n)` of §4.2 and §4.3, the host
 endpoint's commands (§7.1), the engine view handle, the event drains (§7.3) and the error
 family (§8); `loop.py` holds the headless loop; `upkeep/log.py` holds the refcounted
-logging holder of §2. They stand over the `_if.engine` and `_if.limits` bindings. Not built:
-the windowed loop and the sim thread (§4.1, §4.3), snapshots with columns and zero-copy
-engine views (§7.2), replay (§4.2), mods, and the per-session file sink and severity filter
+logging holder of §2 with the severity filter behind `LogConfig` (`design_logging.md` §3).
+They stand over the `_if.engine`, `_if.limits` and `_if.log` bindings. Not built: the
+windowed loop and the sim thread (§4.1, §4.3), snapshots with columns and zero-copy engine
+views (§7.2), replay (§4.2), mods, and the file toggles and the per-session file sink
 behind `LogConfig` (`design_logging.md` §4).
 
 Scope of v1: every engine view is `PRIVATE`. The multi-reader `SHARED` mode is deferred to
@@ -1184,8 +1185,9 @@ Rules:
     - The event backlog is a plain value owned by the executor (`design_engine_core.md`
       §5.2), so no control call writes it. A drain wakes a sim parked on the backlog by
       storing the ring's `read` index under the gate mutex and notifying it.
-    - `set_time_scale` uses its loop-level atomic. `set_log_level` calls a subsystem with
-      its own mutex (`design_logging.md` §2).
+    - `set_time_scale` uses its loop-level atomic. `set_log_level` enters the operation
+      lease like every engine call (§6), then calls a subsystem with its own mutex
+      (`design_logging.md` §1).
 
     These calls are not owner-only, on purpose. `request_stop` from a watchdog thread and
     `pause` from a debug console are both ordinary uses, and making them safe costs nothing.
