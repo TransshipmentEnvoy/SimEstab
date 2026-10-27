@@ -15,10 +15,11 @@ import logging
 import threading
 import warnings
 from logging import LogRecord
+from pathlib import Path
 from typing import Optional
 
 from .. import _if
-from ..config import LOG_LEVELS, LogConfig
+from ..config import FILE_OPENS, LOG_LEVELS, LogConfig
 
 # module local logger
 _logger = logging.getLogger(__name__)
@@ -130,11 +131,42 @@ def _severity(name: str, field: str) -> _if.log.severity_level:
     return getattr(_if.log.severity_level, name)
 
 
+def _file_open(name: str) -> _if.log.file_open:
+    if name not in FILE_OPENS:
+        raise ValueError(
+            f"on_open must be one of {', '.join(FILE_OPENS)}, got {name!r}"
+        )
+    return getattr(_if.log.file_open, name)
+
+
 def set_severity(level: str) -> None:
     """The user's level, one of ``LOG_LEVELS`` (``design_logging.md`` §3): the console's
     filter and, with the open files' floors, the core filter. A file's band is fixed at
     its open, so this never changes a file."""
     _if.log.set_severity(_severity(level, "level"))
+
+
+def enable_file(
+    path: str | Path,
+    floor: str = "trace",
+    ceiling: str = "critical",
+    on_open: str = "rotate",
+) -> None:
+    """Open a file sink on ``path`` (``design_logging.md`` §3): the file receives a
+    record when ``floor <= severity <= ceiling``, and ``on_open`` says what happens to a
+    file that exists, one of ``FILE_OPENS``. The 1:1 function over ``_if.log``, with
+    the strings validated here. Raises ``log_error`` when the open fails."""
+    _if.log.enable_file(
+        Path(path),
+        _severity(floor, "floor"),
+        _severity(ceiling, "ceiling"),
+        _file_open(on_open),
+    )
+
+
+def disable_file(path: str | Path) -> None:
+    """Remove the file sink on ``path``, if there is one."""
+    _if.log.disable_file(Path(path))
 
 
 def acquire(config: LogConfig | None = None) -> None:
@@ -200,16 +232,6 @@ def holder_count() -> int:
     """How many holders have acquired logging and not released it."""
     with _lock:
         return _holders
-
-
-# TODO
-def enable_file(filename):
-    pass
-
-
-# TODO
-def disable_file(filename):
-    pass
 
 
 # interactive fn

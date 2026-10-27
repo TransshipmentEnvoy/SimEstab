@@ -2,6 +2,7 @@
 // because it defines _POSIX_C_SOURCE and _XOPEN_SOURCE
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/chrono.h>
+#include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
@@ -65,7 +66,7 @@ nb::exception<error::sim_estab_error>& bind_error(nb::module_& m) {
 }
 
 /// The name list of a log enum as a tuple of str, in enum order (design_logging.md §3
-/// "Names from the enums"): config.py reads LOG_LEVELS from it
+/// "Names from the enums"): config.py reads LOG_LEVELS and FILE_OPENS from them
 template <class Table> nb::tuple names_tuple(const Table& table) {
     nb::list names;
     for (const auto& [value, name] : table) {
@@ -77,13 +78,19 @@ template <class Table> nb::tuple names_tuple(const Table& table) {
 void bind_log(nb::module_& m, const nb::exception<error::sim_estab_error>& root) {
     nb::module_ log_module = m.def_submodule("log", "Logging system for SimEstab");
 
-    // The enum is bound from its reflection table, so a value added to the C++ enum is
-    // bound without a change here
+    // Both enums are bound from their reflection tables, so a value added to the C++ enum
+    // is bound without a change here
     nb::enum_<estab_log::severity_level> severity(log_module, "severity_level");
     for (const auto& [value, name] : estab_log::severity_level_names) {
         severity.value(name.data(), value);
     }
+    nb::enum_<estab_log::file_open> open_mode(log_module, "file_open",
+                                              "What enable_file does to a file that exists (design_logging.md §3)");
+    for (const auto& [value, name] : estab_log::file_open_names) {
+        open_mode.value(name.data(), value);
+    }
     log_module.attr("severity_level_names") = names_tuple(estab_log::severity_level_names);
+    log_module.attr("file_open_names")      = names_tuple(estab_log::file_open_names);
 
     static nb::exception<estab_log::log_error> log_error_exc(log_module, "log_error", root.ptr());
 
@@ -92,6 +99,14 @@ void bind_log(nb::module_& m, const nb::exception<error::sim_estab_error>& root)
     log_module.def("log_is_init", &estab_log::log_is_init, "Check if the logging system is initialized");
     log_module.def("enable_console", &estab_log::enable_console, "Enable console logging output");
     log_module.def("disable_console", &estab_log::disable_console, "Disable console logging output");
+    log_module.def(
+        "enable_file", &estab_log::enable_file, nb::arg("path"), nb::arg("floor") = estab_log::severity_level::trace,
+        nb::arg("ceiling") = estab_log::severity_level::critical, nb::arg("on_open") = estab_log::file_open::rotate,
+        "Open a file sink on path: the file receives a record when floor <= severity <= ceiling, "
+        "and on_open says what happens to a file that exists (design_logging.md §3). "
+        "Raises log_error when the open fails.");
+    log_module.def("disable_file", &estab_log::disable_file, nb::arg("path"),
+                   "Remove the file sink on path, if there is one");
     log_module.def("set_severity", &estab_log::set_severity, nb::arg("level"),
                    "Set the user's level: the console's filter, and with the open files' floors the core "
                    "filter. A file's band is fixed at its open (design_logging.md §3).");
@@ -131,6 +146,7 @@ void bind_limits(nb::module_& m) {
     limits_module.attr("default_entity_capacity")                  = limits::default_entity_capacity;
     limits_module.attr("max_entity_capacity")                      = limits::max_entity_capacity;
     limits_module.attr("default_projection_warn_bytes_per_second") = limits::default_projection_warn_bytes_per_second;
+    limits_module.attr("max_log_files")                            = limits::max_log_files;
 }
 
 /// The engine's errors, in C++ order: the base before the classes derived from it

@@ -5,9 +5,8 @@ starting, stopping and controlling it. Unlike the other design docs, most of it 
 **implemented**. Parts marked *planned* are not.
 
 Status: the C++ subsystem (§1), the Python refcounted holder (§2), and the file sinks and
-the severity filter (§3) are built; the file sinks are not bound to Python yet. The
-per-session file sink, the per channel prefix filter and the per-worker buffer are planned
-(§4).
+the severity filter (§3) are built. The per-session file sink, the per channel prefix
+filter and the per-worker buffer are planned (§4).
 
 Terms are defined in [glossary.md](glossary.md).
 
@@ -82,9 +81,9 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
 - **Errors**: `log_error`, derived from `sim_estab_error`, is bound to Python as
   `_if.log.log_error`. `enable_file` throws it for a failed open and for an empty band (§3).
   Boost exceptions can escape `log_init` and `enable_console` directly.
-- **Python surface**: mirrors the triad, the console toggles and `set_severity` one to one,
-  plus a concrete `log(channel, level, message)` wrapper and the name list of
-  `severity_level` (§3).
+- **Python surface**: mirrors the triad, the console and file toggles and `set_severity` one
+  to one, plus a concrete `log(channel, level, message)` wrapper and the two name lists
+  (§3).
 
 ## 2. Lifetime and runtime control (rules)
 
@@ -148,8 +147,8 @@ This is safe because log naming is not part of the replay header (`design_engine
 commands. They change no engine core state and are never recorded in the replay's input stream
 (`design_engine_core.md` §1, `design_python_api.md` §3). `Engine.set_log_level(...)`
 enters the engine's operation lease and forwards to `set_severity` (§3), so a closed
-engine raises instead of changing the level (`design_python_api.md` §8). A replay may run
-at any verbosity.
+engine raises instead of changing the level (`design_python_api.md` §8). The file toggles
+are `upkeep.log.enable_file` / `disable_file` (§3), and a replay may run at any verbosity.
 
 **Mod channels.** Each mod logs on its own channel, `sim_estab.mod.<id>`
 (`design_modding.md` §4.1). This keeps the hierarchical channel convention, so filtering by
@@ -244,11 +243,17 @@ stream failed: the file keeps what it has, and later records are lost until the 
 enabled again. The subsystem never opens the file again on its own, so a write failure
 never empties a file.
 
+**Python surface.** `upkeep.log.enable_file(path, floor="trace", ceiling="critical",
+on_open="rotate")` and `disable_file(path)` are the 1:1 functions over `_if.log`, with
+the strings validated against `LOG_LEVELS` and `FILE_OPENS` in `config.py`. `_if.log`
+binds `file_open` as it binds `severity_level`. The last `release` removes every sink,
+toggled files included, with `log_deinit`.
+
 **Names from the enums.** `sim_estab:log` lists the enumerators of `severity_level` and
 `file_open` with C++26 reflection (`std::meta::enumerators_of`). The name of a value, the
 parse of a name and the console colour table come from that one list per enum. `_if.log`
-exports the name list of `severity_level`, and `config.py` reads `LOG_LEVELS` from it. So
-each name is written once, in the enum. The other enums stay with
+exports the two name lists, and `config.py` reads `LOG_LEVELS` and `FILE_OPENS` from
+them. So each name is written once, in the enum. The other enums stay with
 [Q73](open_question.md#q73-magic_enum-or-reflection-for-enum-names).
 
 ## 4. Planned

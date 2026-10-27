@@ -74,6 +74,22 @@ def test_session_dir_warns_until_the_session_file_exists(tmp_path):
         sim_log.acquire(LogConfig(session_dir=tmp_path))
 
 
+def test_the_file_functions_validate_their_strings(tmp_path):
+    sim_log.acquire(LogConfig(console=False))
+    with pytest.raises(ValueError, match="floor must be one of"):
+        sim_log.enable_file(tmp_path / "x.log", floor="bogus")
+    with pytest.raises(ValueError, match="on_open must be one of"):
+        sim_log.enable_file(tmp_path / "x.log", on_open="bogus")
+    with pytest.raises(ValueError, match="level must be one of"):
+        sim_log.set_severity("bogus")
+    assert not (tmp_path / "x.log").exists()
+
+    sim_log.enable_file(tmp_path / "x.log", floor="info", on_open="truncate")
+    logging.getLogger("test.file").info("through the toggle")
+    sim_log.disable_file(tmp_path / "x.log")
+    assert "through the toggle" in (tmp_path / "x.log").read_text()
+
+
 def test_acquire_and_release_are_safe_from_any_thread():
     """Many threads acquire and release at once; the count and the triad agree at the
     end."""

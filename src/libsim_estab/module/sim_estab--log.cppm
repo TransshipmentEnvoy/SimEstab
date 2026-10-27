@@ -141,7 +141,8 @@ template <LogEnum E> inline constexpr auto upper_table = make_upper_table<E>();
 /// _if.log.severity_level_names; config.py reads LOG_LEVELS from it.
 export inline constexpr auto severity_level_names = detail::enum_table<severity_level>;
 
-/// The open modes, in declaration order: ("rotate", "append", "truncate")
+/// The open modes, in declaration order: ("rotate", "append", "truncate"). Bound as
+/// _if.log.file_open_names; config.py reads FILE_OPENS from it.
 export inline constexpr auto file_open_names = detail::enum_table<file_open>;
 
 /// The identifier of a value, "unknown" for a value outside the enum

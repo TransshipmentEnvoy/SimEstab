@@ -302,13 +302,13 @@ def test_defaults_construct_without_arguments():
 
 
 # --------------------------------------------------------------------------
-# logging: the level list (design_logging.md §3)
+# logging: the level lists and the file sinks (design_logging.md §3)
 # --------------------------------------------------------------------------
 
 
 def test_the_level_lists_come_from_the_binding():
-    """``LOG_LEVELS`` is read from the bound enum's name list, so each name is written
-    once, in the C++ enum (``design_logging.md`` §3)."""
+    """``LOG_LEVELS`` and ``FILE_OPENS`` are read from the bound enums' name lists, so
+    each name is written once, in the C++ enum (``design_logging.md`` §3)."""
     assert engine_config.LOG_LEVELS == tuple(if_module.log.severity_level_names)
     assert engine_config.LOG_LEVELS == (
         "trace",
@@ -318,5 +318,14 @@ def test_the_level_lists_come_from_the_binding():
         "error",
         "critical",
     )
+    assert engine_config.FILE_OPENS == tuple(if_module.log.file_open_names)
+    assert engine_config.FILE_OPENS == ("rotate", "append", "truncate")
     for name in engine_config.LOG_LEVELS:
         assert getattr(if_module.log.severity_level, name).name == name
+    for name in engine_config.FILE_OPENS:
+        assert getattr(if_module.log.file_open, name).name == name
+
+
+def test_max_log_files_is_a_build_constant():
+    """The active file plus 99 backups (``design_limits.md`` §8)."""
+    assert if_module.limits.max_log_files == 100

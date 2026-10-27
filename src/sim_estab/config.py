@@ -55,6 +55,11 @@ EVENT_DRAINS: Final[tuple[str, ...]] = ("owner", "sink")
 #: "Names from the enums").
 LOG_LEVELS: Final[tuple[str, ...]] = tuple(_if.log.severity_level_names)
 
+#: What ``enable_file`` does to a file that exists: ``"rotate"``, ``"append"`` or
+#: ``"truncate"`` (``design_logging.md`` §3 "Open"). Read from the bound enum, like
+#: ``LOG_LEVELS``.
+FILE_OPENS: Final[tuple[str, ...]] = tuple(_if.log.file_open_names)
+
 
 def _require_positive(value: int | float, name: str) -> None:
     if value <= 0:
