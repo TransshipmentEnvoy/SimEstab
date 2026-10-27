@@ -619,7 +619,7 @@ void Engine::start_session() {
                       "start_session(): the freeze failed while building the session; the engine is LoadFailed");
         throw;
     }
-    // Step 8: the per-session log sink opens here once it exists (design_logging.md §3).
+    // Step 8: the per-session log sink opens here once it exists (design_logging.md §4).
     // Step 9: tick 0 into every engine view, session.started, and the host endpoint opens.
     // The session is still private, so nothing of this is seen before it is installed.
     session->publish(Tick{0});

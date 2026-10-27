@@ -24,6 +24,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Mapping
 
+from . import _if
+
 __all__ = [
     "CommandPolicy",
     "EngineConfig",
@@ -48,15 +50,10 @@ MAX_ENTITY_CAPACITY: Final[int] = (1 << 32) - 1
 #: engine's own sink (``design_python_api.md`` §3, §7.3).
 EVENT_DRAINS: Final[tuple[str, ...]] = ("owner", "sink")
 
-#: The severity levels of ``sim_estab:log``, lowest first (``design_logging.md`` §1).
-LOG_LEVELS: Final[tuple[str, ...]] = (
-    "trace",
-    "debug",
-    "info",
-    "warning",
-    "error",
-    "critical",
-)
+#: The severity levels of ``sim_estab:log``, lowest first. Read from the bound enum's
+#: name list, so each name is written once, in the C++ enum (``design_logging.md`` §3
+#: "Names from the enums").
+LOG_LEVELS: Final[tuple[str, ...]] = tuple(_if.log.severity_level_names)
 
 
 def _require_positive(value: int | float, name: str) -> None:

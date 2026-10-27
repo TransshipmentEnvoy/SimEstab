@@ -57,7 +57,7 @@ def test_a_same_config_does_not_warn(recwarn):
 
 def test_unapplied_fields_warn(tmp_path):
     """``level`` and ``session_dir`` are accepted ahead of the severity API and the
-    per-session file sink (``design_logging.md`` §3), and say so."""
+    per-session file sink (``design_logging.md`` §4), and say so."""
     with pytest.warns(RuntimeWarning, match="level='debug' is not applied yet"):
         sim_log.acquire(LogConfig(level="debug"))
     sim_log.release()

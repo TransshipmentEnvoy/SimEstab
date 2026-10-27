@@ -114,7 +114,7 @@ def acquire(config: LogConfig | None = None) -> None:
     The first holder's ``config`` is applied and kept. A later holder with a different
     one is warned about and ignored (``design_logging.md`` §2: first caller wins).
     ``level`` and ``session_dir`` are accepted but not applied yet: the severity API and
-    the per-session file sink are planned (``design_logging.md`` §3), and a value other
+    the per-session file sink are planned (``design_logging.md`` §4), and a value other
     than the default is warned about until they exist.
     """
     global _holders, _held_config
@@ -134,14 +134,14 @@ def acquire(config: LogConfig | None = None) -> None:
                     f"LogConfig.level={config.level!r} is not applied yet: "
                     f"the severity "
                     f"filter stays at 'info' until the runtime severity API exists "
-                    f"(design_logging.md §3)",
+                    f"(design_logging.md §4)",
                     RuntimeWarning,
                     stacklevel=2,
                 )
             if config.session_dir is not None:
                 warnings.warn(
                     f"LogConfig.session_dir={str(config.session_dir)!r} is not applied "
-                    f"yet: the per-session file sink is planned (design_logging.md §3)",
+                    f"yet: the per-session file sink is planned (design_logging.md §4)",
                     RuntimeWarning,
                     stacklevel=2,
                 )

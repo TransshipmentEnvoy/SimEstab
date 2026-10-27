@@ -10,7 +10,7 @@ family (§8); `loop.py` holds the headless loop; `upkeep/log.py` holds the refco
 logging holder of §2. They stand over the `_if.engine` and `_if.limits` bindings. Not built:
 the windowed loop and the sim thread (§4.1, §4.3), snapshots with columns and zero-copy
 engine views (§7.2), replay (§4.2), mods, and the per-session file sink and severity filter
-behind `LogConfig` (`design_logging.md` §3).
+behind `LogConfig` (`design_logging.md` §4).
 
 Scope of v1: every engine view is `PRIVATE`. The multi-reader `SHARED` mode is deferred to
 `design_engine_core.md` Appendix A, together with process-host engine views. So

@@ -16,6 +16,7 @@
 module;
 
 // Standard library headers
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -23,12 +24,15 @@ module;
 #include <functional>
 #include <iomanip>
 #include <ios>
+#include <meta>
+#include <optional>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 // Module declaration
 export module sim_estab:log;
@@ -70,34 +74,94 @@ export enum class severity_level : int {
     critical = 50  ///< Critical/Fatal error messages (highest, irrecoverable)
 };
 
+// ============================================================================
+// Names from the enums (design_logging.md §3 "Names from the enums")
+//
+// C++26 reflection lists the enumerators of severity_level once. The name of a value,
+// the parse of a name, the console line's upper-case severity and the name list that
+// _if.log exports all come from that one table, so each name is written once, in the
+// enum.
+// ============================================================================
+
+/// The enum whose names are generated
+export template <class E>
+concept LogEnum = std::same_as<E, severity_level>;
+
+namespace detail {
+
+/// The enumerators of E as (value, identifier) pairs, in declaration order, with the
+/// identifiers in static storage
+template <LogEnum E> consteval auto make_enum_table() {
+    constexpr auto count = std::meta::enumerators_of(^^E).size();
+    std::array<std::pair<E, std::string_view>, count> table{};
+    std::size_t i = 0;
+    template for (constexpr auto e : std::define_static_array(std::meta::enumerators_of(^^E))) {
+        table[i++] = std::pair<E, std::string_view>{[:e:], std::define_static_string(std::meta::identifier_of(e))};
+    }
+    return table;
+}
+
+/// `name` in upper case, in static storage: the log line prints the severity this way
+consteval std::string_view upper(std::string_view name) {
+    std::vector<char> out(name.begin(), name.end());
+    for (char& c : out) {
+        if (c >= 'a' && c <= 'z') {
+            c = static_cast<char>(c - 'a' + 'A');
+        }
+    }
+    return std::string_view{std::define_static_string(out)};
+}
+
+template <LogEnum E> consteval auto make_upper_table() {
+    constexpr auto table = make_enum_table<E>();
+    std::array<std::pair<E, std::string_view>, table.size()> upper_table{};
+    for (std::size_t i = 0; i < table.size(); ++i) {
+        upper_table[i] = {table[i].first, upper(table[i].second)};
+    }
+    return upper_table;
+}
+
+template <LogEnum E> inline constexpr auto enum_table  = make_enum_table<E>();
+template <LogEnum E> inline constexpr auto upper_table = make_upper_table<E>();
+
+} // namespace detail
+
+/// The severity names, lowest first: ("trace", "debug", ...). Bound as
+/// _if.log.severity_level_names; config.py reads LOG_LEVELS from it.
+export inline constexpr auto severity_level_names = detail::enum_table<severity_level>;
+
+/// The identifier of a value, "unknown" for a value outside the enum
+export template <LogEnum E> [[nodiscard]] constexpr std::string_view name_of(E value) noexcept {
+    for (const auto& [v, name] : detail::enum_table<E>) {
+        if (v == value) {
+            return name;
+        }
+    }
+    return "unknown";
+}
+
+/// The value of an identifier, nullopt for a name outside the enum
+export template <LogEnum E> [[nodiscard]] constexpr std::optional<E> from_name(std::string_view name) noexcept {
+    for (const auto& [v, n] : detail::enum_table<E>) {
+        if (n == name) {
+            return v;
+        }
+    }
+    return std::nullopt;
+}
+
 /**
- * Stream output operator for severity levels
- *
- * Converts severity level enumeration values to human-readable string representations
- * for use in log formatting and output streams.
- *
- * @param os Output stream to write to
- * @param level Severity level to convert to string
- * @return Reference to the output stream for chaining
+ * Stream output operator for severity levels: the upper-case name, as the log line
+ * prints it ("INFO")
  */
 export template <typename CharT>
 std::basic_ostream<CharT>& operator<<(std::basic_ostream<CharT>& os, severity_level level) {
-    switch (level) {
-    case severity_level::trace:
-        return os << "TRACE";
-    case severity_level::debug:
-        return os << "DEBUG";
-    case severity_level::info:
-        return os << "INFO";
-    case severity_level::warning:
-        return os << "WARNING";
-    case severity_level::error:
-        return os << "ERROR";
-    case severity_level::critical:
-        return os << "CRITICAL";
-    default:
-        return os << "UNKNOWN";
+    for (const auto& [v, name] : detail::upper_table<severity_level>) {
+        if (v == level) {
+            return os << name;
+        }
     }
+    return os << "UNKNOWN";
 }
 
 /**

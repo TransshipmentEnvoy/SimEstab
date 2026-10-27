@@ -243,7 +243,7 @@ Implementation rules:
   stale sinks from the core.
 - Feature toggles: `enable_console()` / `disable_console()`. The file sink slots exist in
   the enumeration but have **no toggle pair yet**. They are planned (`design_logging.md`
-  §3), and this document must not describe them as shipped.
+  §4), and this document must not describe them as shipped.
 - Hot-path guard: `sim_estab_log()` returns silently when `!log_is_init()`. That is one
   atomic load, with no lock, on every emission in the process.
 - **The subsystem's own lifecycle records are ordered around its lock**, which is the one

@@ -64,16 +64,26 @@ nb::exception<error::sim_estab_error>& bind_error(nb::module_& m) {
     return sim_estab_error_exc;
 }
 
+/// The name list of a log enum as a tuple of str, in enum order (design_logging.md §3
+/// "Names from the enums"): config.py reads LOG_LEVELS from it
+template <class Table> nb::tuple names_tuple(const Table& table) {
+    nb::list names;
+    for (const auto& [value, name] : table) {
+        names.append(nb::str(name.data(), name.size()));
+    }
+    return nb::tuple(names);
+}
+
 void bind_log(nb::module_& m, const nb::exception<error::sim_estab_error>& root) {
     nb::module_ log_module = m.def_submodule("log", "Logging system for SimEstab");
 
-    nb::enum_<estab_log::severity_level>(log_module, "severity_level")
-        .value("trace", estab_log::severity_level::trace)
-        .value("debug", estab_log::severity_level::debug)
-        .value("info", estab_log::severity_level::info)
-        .value("warning", estab_log::severity_level::warning)
-        .value("error", estab_log::severity_level::error)
-        .value("critical", estab_log::severity_level::critical);
+    // The enum is bound from its reflection table, so a value added to the C++ enum is
+    // bound without a change here
+    nb::enum_<estab_log::severity_level> severity(log_module, "severity_level");
+    for (const auto& [value, name] : estab_log::severity_level_names) {
+        severity.value(name.data(), value);
+    }
+    log_module.attr("severity_level_names") = names_tuple(estab_log::severity_level_names);
 
     static nb::exception<estab_log::log_error> log_error_exc(log_module, "log_error", root.ptr());
 

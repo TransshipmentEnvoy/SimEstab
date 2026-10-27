@@ -299,3 +299,24 @@ def test_entity_capacity_is_snapshotted_at_construction():
 @pytest.mark.smoke
 def test_defaults_construct_without_arguments():
     assert EngineConfig() == EngineConfig()
+
+
+# --------------------------------------------------------------------------
+# logging: the level list (design_logging.md §3)
+# --------------------------------------------------------------------------
+
+
+def test_the_level_lists_come_from_the_binding():
+    """``LOG_LEVELS`` is read from the bound enum's name list, so each name is written
+    once, in the C++ enum (``design_logging.md`` §3)."""
+    assert engine_config.LOG_LEVELS == tuple(if_module.log.severity_level_names)
+    assert engine_config.LOG_LEVELS == (
+        "trace",
+        "debug",
+        "info",
+        "warning",
+        "error",
+        "critical",
+    )
+    for name in engine_config.LOG_LEVELS:
+        assert getattr(if_module.log.severity_level, name).name == name

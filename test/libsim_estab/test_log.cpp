@@ -18,6 +18,7 @@
 #include <ctime>
 #include <iomanip>
 #include <ios>
+#include <optional>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
@@ -451,6 +452,35 @@ BOOST_AUTO_TEST_CASE(test_logging_performance) {
 
     // Performance assertion: should be able to log 1000 messages in reasonable time
     BOOST_CHECK(duration.count() < 5000); // Less than 5 seconds
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// ============================================================================
+// Names from the enums (design_logging.md §3 "Names from the enums")
+// ============================================================================
+
+BOOST_AUTO_TEST_SUITE(enum_name_tests)
+
+BOOST_AUTO_TEST_CASE(test_the_name_tables_follow_the_enums) {
+    BOOST_TEST(severity_level_names.size() == 6);
+    BOOST_TEST((severity_level_names[0].first == severity_level::trace));
+    BOOST_TEST(severity_level_names[0].second == "trace");
+    BOOST_TEST((severity_level_names[5].first == severity_level::critical));
+    BOOST_TEST(severity_level_names[5].second == "critical");
+}
+
+BOOST_AUTO_TEST_CASE(test_name_of_and_from_name) {
+    static_assert(name_of(severity_level::warning) == "warning");
+    static_assert(from_name<severity_level>("error") == severity_level::error);
+    BOOST_TEST(!from_name<severity_level>("bogus").has_value());
+    BOOST_TEST(name_of(static_cast<severity_level>(7)) == "unknown");
+}
+
+BOOST_AUTO_TEST_CASE(test_the_line_prints_the_upper_case_severity) {
+    std::ostringstream os;
+    os << severity_level::warning;
+    BOOST_TEST(os.str() == "WARNING");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

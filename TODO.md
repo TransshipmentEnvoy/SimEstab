@@ -112,7 +112,7 @@ not written.
   + [ ] logging management, the remaining parts: the file sinks, the runtime severity API,
         and the per-session file sink in `LogConfig.session_dir`. Until then `acquire`
         accepts `LogConfig.level` and `session_dir`, warns and applies neither
-        (`doc/design_logging.md` §3)
+        (`doc/design_logging.md` §4)
   + [x] sanitizer tests for both protocols: the engine view's permutation invariant,
         including the reverse edge from reader to publisher, and a return header written
         before a take arriving intact at the publisher that receives the block, never while

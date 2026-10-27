@@ -5,7 +5,7 @@ starting, stopping and controlling it. Unlike the other design docs, most of it 
 **implemented**. Parts marked *planned* are not.
 
 Status: the C++ subsystem (§1) and the Python refcounted holder (§2) are built. File sinks,
-a runtime severity API and the per-session file sink (§3) are planned.
+a runtime severity API and the per-session file sink (§4) are planned.
 
 Terms are defined in [glossary.md](glossary.md).
 
@@ -41,7 +41,7 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
 - **Sinks** are tracked in a `flat_map<sink_type, sink_ptr>`. Before building fresh state,
   `log_init` cleans up defensively: it flushes, clears the map, and removes stale sinks. The
   sink slots are `console`, `file`, `file_error` and `file_debug`. Only **console** is
-  implemented; the file slots are reserved (*planned*, §3).
+  implemented; the file slots are reserved (*planned*, §4).
 - **Console sink**: colored output (by severity) to `std::clog`, with auto-flush,
   microsecond timestamps, and the severity and hierarchical channel in the format. It is
   toggled with `enable_console()` / `disable_console()`. Both are idempotent and do nothing
@@ -73,7 +73,7 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
   `_if.log.log_error`, but no code throws it yet. Boost exceptions can escape `log_init` and
   `enable_console` directly.
 - **Python surface**: mirrors the triad and the console toggles one to one, plus a concrete
-  `log(channel, level, message)` wrapper.
+  `log(channel, level, message)` wrapper and the name list of `severity_level` (§3).
 
 ## 2. Lifetime and runtime control (rules)
 
@@ -136,7 +136,18 @@ mod uses the existing channel filter. The prefix is also the name of the `sim_es
 Python package (`design_python_api.md` §1). That is intended: a channel is a filtering
 hierarchy, not an import path, and the two never resolve against each other.
 
-## 3. Planned
+## 3. File sinks and the severity filter
+
+This section sets the names from the enums. The file sinks and the severity filter are
+planned (§4).
+
+**Names from the enums.** `sim_estab:log` lists the enumerators of `severity_level` with
+C++26 reflection (`std::meta::enumerators_of`). The name of a value, the parse of a name and
+the console colour table come from that one list. `_if.log` exports the name list, and
+`config.py` reads `LOG_LEVELS` from it. So each name is written once, in the enum. The
+other enums stay with [Q73](open_question.md#q73-magic_enum-or-reflection-for-enum-names).
+
+## 4. Planned
 
 - **File sinks**: fill the reserved `file`, `file_error` and `file_debug` slots, with
   `enable_file(...)` / `disable_file()` following the console toggle's shape. They are a
