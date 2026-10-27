@@ -239,3 +239,6 @@ conan.lock
 /.github/copilot-instructions.md
 /AGENTS.md
 /CLAUDE.md
+
+# Local tool config
+/.flake8
