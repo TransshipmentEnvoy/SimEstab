@@ -503,6 +503,7 @@ This section names the one place each value lives. The C++ side is the partition
 | host policy: shutdown deadline | `HostPolicy.shutdown_deadline` | `default_shutdown_deadline_seconds` | policy default; the C++ `EngineConfig.shutdown_deadline` mirrors it |
 | host policy: retry limit, inbox cap | `HostPolicy.mod_retry_limit`, `HostPolicy.max_inbox_size` | — | policy defaults, Python only |
 | cache line | — | `cache_line_bytes` | build constant, 64 bytes (§3) |
+| log files per path | — | `max_log_files` | build constant, 100: the active file plus 99 backups, rotated at open (`design_logging.md` §3) |
 | chunk quantum | — | `chunk_elements` | build constant. Its one definition is the CMake cache variable `LIBSIM_ESTAB__CHUNK_ELEMENTS` in `src/libsim_estab/CMakeLists.txt`. The partition falls back to 1024 only for a build outside this CMake |
 | projection warning bandwidth | `EngineConfig.projection_warn_bytes_per_second` | `default_projection_warn_bytes_per_second` | policy default. Checked per engine view, not against the session total (§5) |
 | default entity capacity | `DEFAULT_ENTITY_CAPACITY` | `default_entity_capacity` | build constant, 2²⁴ (§4) |

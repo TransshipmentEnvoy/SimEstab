@@ -232,7 +232,11 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 
 | Term | Meaning | Where |
 |---|---|---|
-| sink slot | A sink kind as a type, with its fixed policy as constexpr members: the console slot. `enable<Slot>` / `disable<Slot>` work on one. C++ interface only, not bound to Python. Not the pool slot of data_container §2.2. | logging §3 |
+| file sink | A log sink that writes one file. `enable_file(path, floor, ceiling, on_open)` opens one and `disable_file(path)` removes it. Keyed by its absolute, lexically normal path; the console is not one. | logging §3 |
+| sink slot | A sink kind as a type, with its fixed policy as constexpr members: the console slot and the file slot. `enable<Slot>` / `disable<Slot>` work on one. C++ interface only, not bound to Python. Not the pool slot of data_container §2.2. | logging §3 |
+| band | The severities a file sink accepts: `floor` to `ceiling`, both inclusive. The path alone means every severity. | logging §3 |
+| open mode | What `enable_file` does to a file that exists: `rotate`, `append` or `truncate`. `file_open` in C++. | logging §3 |
+| rotation | At open under `rotate`: the active file becomes backup `01`, each backup moves up by one, and the one past `max_log_files` is deleted. Never by size or by time. | logging §3 |
 
 ## Words with a preferred meaning
 

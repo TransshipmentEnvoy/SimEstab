@@ -21,6 +21,7 @@ module;
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <filesystem>
 #include <functional>
 #include <iomanip>
 #include <ios>
@@ -74,18 +75,27 @@ export enum class severity_level : int {
     critical = 50  ///< Critical/Fatal error messages (highest, irrecoverable)
 };
 
+/**
+ * What enable_file does to a file that exists (design_logging.md §3 "Open")
+ */
+export enum class file_open : int {
+    rotate   = 0, ///< the file becomes the newest backup, and the active file starts empty
+    append   = 1, ///< the file continues; the backups are not touched
+    truncate = 2, ///< the file starts over; the backups are not touched
+};
+
 // ============================================================================
 // Names from the enums (design_logging.md §3 "Names from the enums")
 //
-// C++26 reflection lists the enumerators of severity_level once. The name of a value,
-// the parse of a name, the console line's upper-case severity and the name list that
-// _if.log exports all come from that one table, so each name is written once, in the
-// enum.
+// C++26 reflection lists the enumerators of severity_level and file_open once. The name
+// of a value, the parse of a name, the console line's upper-case severity and the name
+// lists that _if.log exports all come from that one table per enum, so each name is
+// written once, in the enum.
 // ============================================================================
 
-/// The enum whose names are generated
+/// The two enums whose names are generated
 export template <class E>
-concept LogEnum = std::same_as<E, severity_level>;
+concept LogEnum = std::same_as<E, severity_level> || std::same_as<E, file_open>;
 
 namespace detail {
 
@@ -101,7 +111,8 @@ template <LogEnum E> consteval auto make_enum_table() {
     return table;
 }
 
-/// `name` in upper case, in static storage: the log line prints the severity this way
+/// `name` in upper case, in static storage: the console line and the file line print
+/// the severity this way
 consteval std::string_view upper(std::string_view name) {
     std::vector<char> out(name.begin(), name.end());
     for (char& c : out) {
@@ -129,6 +140,9 @@ template <LogEnum E> inline constexpr auto upper_table = make_upper_table<E>();
 /// The severity names, lowest first: ("trace", "debug", ...). Bound as
 /// _if.log.severity_level_names; config.py reads LOG_LEVELS from it.
 export inline constexpr auto severity_level_names = detail::enum_table<severity_level>;
+
+/// The open modes, in declaration order: ("rotate", "append", "truncate")
+export inline constexpr auto file_open_names = detail::enum_table<file_open>;
 
 /// The identifier of a value, "unknown" for a value outside the enum
 export template <LogEnum E> [[nodiscard]] constexpr std::string_view name_of(E value) noexcept {
@@ -162,6 +176,11 @@ std::basic_ostream<CharT>& operator<<(std::basic_ostream<CharT>& os, severity_le
         }
     }
     return os << "UNKNOWN";
+}
+
+/// Stream output operator for open modes: the identifier ("rotate")
+export template <typename CharT> std::basic_ostream<CharT>& operator<<(std::basic_ostream<CharT>& os, file_open mode) {
+    return os << name_of(mode);
 }
 
 /**
@@ -245,14 +264,43 @@ export void enable_console();
 export void disable_console() noexcept;
 
 // ============================================================================
-// The severity filter (design_logging.md §3)
+// File sinks and the severity filter (design_logging.md §3)
 // ============================================================================
+
+/**
+ * Open a file sink on `path` (design_logging.md §3 "One toggle pair, many files")
+ *
+ * The file receives a record when `floor <= severity <= ceiling`. `on_open` says what
+ * happens to a file that exists; under `rotate` the file becomes backup `.01`, each
+ * backup moves up by one, and the one past limits::max_log_files is deleted (§3
+ * "Rotation"). The file opens at once, and a failed open throws log_error naming the
+ * path.
+ *
+ * The sink is keyed by the absolute, lexically normal path, so two spellings of one path
+ * name one sink; disable_file normalizes its path the same way. Symlinks are not resolved.
+ *
+ * Toggle shape (design_patterns.md §2): a no-op when the subsystem is not initialized,
+ * a no-op on a path that is already enabled, safe from any thread. To change a file's
+ * band or open mode, disable it and enable it again.
+ *
+ * @throws log_error when the open or the rotation fails, or when the band is empty
+ */
+export void enable_file(const std::filesystem::path& path, severity_level floor = severity_level::trace,
+                        severity_level ceiling = severity_level::critical, file_open on_open = file_open::rotate);
+
+/**
+ * Remove the file sink on `path`, if there is one. Pending records are flushed first.
+ * The path is normalized as enable_file normalizes it.
+ */
+export void disable_file(const std::filesystem::path& path) noexcept;
 
 /**
  * Set the user's level (design_logging.md §3 "The core filter and set_severity")
  *
- * The console carries the user's level as its own filter, and the core filter follows
- * it. A no-op when the subsystem is not initialized; log_init resets the level to `info`.
+ * The console carries the user's level as its own filter. The core filter is the minimum
+ * of the user's level and the floors of the enabled file sinks. A file's band is fixed at
+ * its open: this call never moves a band. A no-op when the subsystem is not initialized;
+ * log_init resets the level to `info`.
  */
 export void set_severity(severity_level level);
 
@@ -275,6 +323,20 @@ export struct ConsoleSlot {
     struct key {};    ///< and holds one sink
 };
 
+/// The file slot: one sink per path, plain lines, buffered
+export struct FileSlot {
+    static constexpr std::string_view name = "file";
+    static constexpr bool auto_flush       = false; ///< buffered
+
+    struct params {
+        std::filesystem::path path;
+        severity_level floor   = severity_level::trace;
+        severity_level ceiling = severity_level::critical;
+        file_open on_open      = file_open::rotate;
+    };
+    using key = std::filesystem::path;
+};
+
 /// A sink slot: a type with the two policy members and the two nested types above
 export template <class Slot>
 concept SinkSlot = requires {
@@ -284,12 +346,12 @@ concept SinkSlot = requires {
     typename Slot::key;
 };
 
-/// Enable one sink of `Slot`. enable_console() is enable<ConsoleSlot>({}). Defined in
-/// log.cpp for each slot.
+/// Enable one sink of `Slot`. enable_console() is enable<ConsoleSlot>({}), and
+/// enable_file(...) is enable<FileSlot>({...}). Defined in log.cpp for each slot.
 export template <SinkSlot Slot> void enable(const typename Slot::params& params);
 
 /// Disable the sink of `Slot` that `key` names. disable_console() is
-/// disable<ConsoleSlot>({}).
+/// disable<ConsoleSlot>({}), and disable_file(path) is disable<FileSlot>(path).
 export template <SinkSlot Slot> void disable(const typename Slot::key& key) noexcept;
 
 // ============================================================================

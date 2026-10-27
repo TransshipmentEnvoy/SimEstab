@@ -241,10 +241,9 @@ Implementation rules:
   (`design_logging.md` §3). It tracks the sinks registered with the Boost.Log core.
 - Defensive cleanup in `log_init`: flush, clear the slot states, remove every sink
   from the core.
-- Feature toggles: `enable_console()` / `disable_console()`, over the slot pair
-  `enable<Slot>` / `disable<Slot>` (`design_logging.md` §3). The file sinks have no toggle
-  pair yet. They are planned (`design_logging.md` §4), and this document must not describe
-  them as shipped.
+- Feature toggles: `enable_console()` / `disable_console()` and `enable_file(path, ...)` /
+  `disable_file(path)`, both over the one slot pair `enable<Slot>` / `disable<Slot>`
+  (`design_logging.md` §3).
 - Hot-path guard: `sim_estab_log()` returns silently when `!log_is_init()`. That is one
   atomic load, with no lock, on every emission in the process.
 - **The subsystem's own lifecycle records are ordered around its lock**, which is the one
@@ -767,7 +766,7 @@ the exception, and the existing name stays.
 - A type is PascalCase: `ComputeContext`, `VizContext`, `EngineView`.
 - An exception is snake_case, `<name>_error`, like the standard library's
   (§6).
-- The log subsystem's types are snake_case and stay: `severity_level`,
+- The log subsystem's types are snake_case and stay: `severity_level`, `file_open`,
   `record`, `record_ostream`, `logger`, `logger_mt`.
 - A template parameter is PascalCase: `T`, `CharT`.
 
@@ -784,7 +783,7 @@ the exception, and the existing name stays.
   enum does not exist. The change that adds the enum respells the value in
   the docs.
 - The log subsystem's enumerators are snake_case and stay:
-  `severity_level::trace`.
+  `severity_level::trace`, `file_open::rotate`.
 
 **Functions, variables and fields**
 

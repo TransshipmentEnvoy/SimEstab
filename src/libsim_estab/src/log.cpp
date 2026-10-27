@@ -15,12 +15,16 @@
 // Global module fragment - for headers with macros and legacy code
 module;
 
+#include <algorithm>
 #include <atomic>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <ios>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -47,6 +51,7 @@ module;
 #include <boost/log/sources/severity_channel_logger.hpp>
 #include <boost/log/support/date_time.hpp>
 #include <boost/log/utility/formatting_ostream.hpp>
+#include <boost/log/utility/functional/nop.hpp>
 #include <boost/log/utility/setup.hpp>
 
 #include <rang.hpp>
@@ -328,15 +333,20 @@ static std::atomic<bool> init_status{false};
 /// Protected by log_mutex; log_init resets it to info.
 static severity_level user_level = severity_level::info;
 
-/// The line the console prints, inside its colours (colored_text_ostream_backend)
+/// The line every sink prints. The console adds its colours around it
+/// (colored_text_ostream_backend); the file prints it as it is.
 inline auto line_format() {
     return expr::format("[%1%][%2%][%3%] %4%") %
            expr::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S.%f") %
            expr::attr<severity_level>("Severity") % expr::attr<std::string>("Channel") % expr::smessage;
 }
 
-/// A sink filter: `floor <= Severity` (the console)
+/// A sink filter: `floor <= Severity` (the console) or `floor <= Severity <= ceiling`
+/// (a file's band, design_logging.md §3 "The band")
 inline auto floor_filter(severity_level floor) { return expr::attr<severity_level>("Severity") >= floor; }
+inline auto band_filter(severity_level floor, severity_level ceiling) {
+    return expr::attr<severity_level>("Severity") >= floor && expr::attr<severity_level>("Severity") <= ceiling;
+}
 
 // ----------------------------------------------------------------------------
 // The slot states: the tracking container follows the slot list
@@ -344,6 +354,7 @@ inline auto floor_filter(severity_level floor) { return expr::attr<severity_leve
 // ----------------------------------------------------------------------------
 
 using console_sink = sinks::synchronous_sink<colored_text_ostream_backend<char>>;
+using file_sink    = sinks::synchronous_sink<sinks::text_ostream_backend>;
 
 /// What the subsystem holds for one slot. Specialized per slot; protected by log_mutex.
 template <SinkSlot Slot> struct slot_state;
@@ -352,21 +363,36 @@ template <> struct slot_state<ConsoleSlot> {
     boost::shared_ptr<console_sink> sink; ///< the one console sink, or null
 };
 
+template <> struct slot_state<FileSlot> {
+    struct entry {
+        boost::shared_ptr<file_sink> sink;
+        FileSlot::params params; ///< the band and the open mode, fixed at the open
+    };
+    std::map<std::filesystem::path, entry> sinks; ///< one sink per file_key
+};
+
 /// The slot list. A new slot adds its type here and its slot_impl below; enable<Slot>
 /// and disable<Slot> need no change.
-static std::tuple<slot_state<ConsoleSlot>> slots;
+static std::tuple<slot_state<ConsoleSlot>, slot_state<FileSlot>> slots;
 
 template <SinkSlot Slot> slot_state<Slot>& state_of() noexcept { return std::get<slot_state<Slot>>(slots); }
 
-/// The core filter: the user's level (design_logging.md §3 "The core filter and
-/// set_severity"). Called under log_mutex after every change to it.
-void apply_core_filter() { logging::core::get()->set_filter(floor_filter(user_level)); }
+/// The core filter: the minimum of the user's level and the floors of the enabled file
+/// sinks (design_logging.md §3 "The core filter and set_severity"). Called under
+/// log_mutex after every change to either.
+void apply_core_filter() {
+    severity_level floor = user_level;
+    for (const auto& [path, entry] : state_of<FileSlot>().sinks) {
+        floor = std::min(floor, entry.params.floor);
+    }
+    logging::core::get()->set_filter(floor_filter(floor));
+}
 
 /// The core is enabled only while a sink is registered (design_logging.md §1). With no
 /// sink, Boost would write every record to stdout through its default sink. Called under
 /// log_mutex after every change to the sinks.
 void apply_core_enabled() {
-    const bool any = static_cast<bool>(state_of<ConsoleSlot>().sink);
+    const bool any = state_of<ConsoleSlot>().sink || !state_of<FileSlot>().sinks.empty();
     logging::core::get()->set_logging_enabled(any);
 }
 
@@ -374,7 +400,90 @@ void apply_core_enabled() {
 void clear_slots() {
     logging::core::get()->flush();
     state_of<ConsoleSlot>().sink.reset();
+    state_of<FileSlot>().sinks.clear();
     logging::core::get()->remove_all_sinks();
+}
+
+// ----------------------------------------------------------------------------
+// The file slot's open (design_logging.md §3 "Open", "Rotation")
+// ----------------------------------------------------------------------------
+
+[[noreturn]] void fail_open(const std::filesystem::path& path, const std::string& what) {
+    throw log_error("enable_file: cannot open " + path.string() + ": " + what);
+}
+
+/// The key of a file sink (design_logging.md §3 "One toggle pair, many files"): the
+/// absolute, lexically normal path, so two spellings of one path name one sink. A
+/// relative path resolves against the working directory at the call. Symlinks are not
+/// resolved.
+std::filesystem::path file_key(const std::filesystem::path& path) {
+    std::error_code ec;
+    std::filesystem::path absolute = std::filesystem::absolute(path, ec);
+    if (ec) {
+        absolute = path;
+    }
+    return absolute.lexically_normal();
+}
+
+/// Backup `n` of `active`: `<stem>.NN<ext>`. The number width follows max_log_files.
+std::filesystem::path backup_path(const std::filesystem::path& active, unsigned n) {
+    static const int width = static_cast<int>(std::to_string(limits::max_log_files - 1).size());
+    std::ostringstream number;
+    number << std::setw(width) << std::setfill('0') << n;
+    std::filesystem::path backup = active;
+    backup.replace_extension();
+    backup += "." + number.str();
+    backup += active.extension();
+    return backup;
+}
+
+/// The shuffle at open under `rotate`: delete the backup past max_log_files, move each
+/// backup up by one, and the active file becomes `.01`. A filesystem error fails the open.
+void rotate_at_open(const std::filesystem::path& active) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const unsigned last = limits::max_log_files - 1;
+    fs::remove(backup_path(active, last), ec);
+    if (ec) {
+        fail_open(active, "cannot delete " + backup_path(active, last).string());
+    }
+    for (unsigned n = last - 1; n >= 1; --n) {
+        const fs::path from = backup_path(active, n);
+        if (!fs::exists(from, ec)) {
+            continue;
+        }
+        fs::rename(from, backup_path(active, n + 1), ec);
+        if (ec) {
+            fail_open(active, "cannot rename " + from.string());
+        }
+    }
+    if (fs::exists(active, ec)) {
+        fs::rename(active, backup_path(active, 1), ec);
+        if (ec) {
+            fail_open(active, "cannot rename " + active.string());
+        }
+    }
+}
+
+/// The open (design_logging.md §3 "Open"): the subsystem opens the file itself, as the
+/// stream the sink writes through, so Boost never reads the name as a pattern. This
+/// creates the parent directory when it does not exist; a failure is a log_error.
+boost::shared_ptr<std::ofstream> open_stream(const std::filesystem::path& path, file_open on_open) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (path.has_parent_path()) {
+        fs::create_directories(path.parent_path(), ec);
+        if (ec) {
+            fail_open(path, "cannot create " + path.parent_path().string());
+        }
+    }
+    const std::ios_base::openmode mode =
+        std::ios_base::out | (on_open == file_open::append ? std::ios_base::app : std::ios_base::trunc);
+    auto stream = boost::make_shared<std::ofstream>(path, mode);
+    if (!*stream) {
+        fail_open(path, "open failed");
+    }
+    return stream;
 }
 
 // ----------------------------------------------------------------------------
@@ -386,6 +495,8 @@ template <SinkSlot Slot> struct slot_impl;
 
 template <> struct slot_impl<ConsoleSlot> {
     using sink_type = console_sink;
+
+    static ConsoleSlot::params normalize(const ConsoleSlot::params& p) noexcept { return p; }
 
     static bool has(const slot_state<ConsoleSlot>& state, const ConsoleSlot::params&) noexcept {
         return static_cast<bool>(state.sink);
@@ -412,14 +523,66 @@ template <> struct slot_impl<ConsoleSlot> {
     }
 };
 
+template <> struct slot_impl<FileSlot> {
+    using sink_type = file_sink;
+
+    /// The params with the path as its file_key, so every step below sees one spelling
+    static FileSlot::params normalize(const FileSlot::params& p) {
+        FileSlot::params out = p;
+        out.path             = file_key(p.path);
+        return out;
+    }
+
+    static bool has(const slot_state<FileSlot>& state, const FileSlot::params& p) {
+        return state.sinks.contains(p.path);
+    }
+
+    /// The text stream backend over the file stream the subsystem opened, behind a
+    /// synchronous frontend, buffered, with the band as its filter and a nothrow
+    /// exception handler: a failure inside the sink after the open is swallowed, and
+    /// the stream is never opened again (design_logging.md §3 "Errors after the open")
+    static boost::shared_ptr<sink_type> open(const FileSlot::params& p) {
+        if (p.floor > p.ceiling) {
+            throw log_error("enable_file: the band of " + p.path.string() + " is empty: floor " +
+                            std::string(name_of(p.floor)) + " is above ceiling " + std::string(name_of(p.ceiling)));
+        }
+        if (p.on_open == file_open::rotate) {
+            rotate_at_open(p.path);
+        }
+        auto backend = boost::make_shared<sinks::text_ostream_backend>();
+        backend->add_stream(open_stream(p.path, p.on_open));
+        backend->auto_flush(FileSlot::auto_flush);
+        auto sink = boost::make_shared<sink_type>(backend);
+        sink->set_formatter(line_format());
+        sink->set_filter(band_filter(p.floor, p.ceiling));
+        sink->set_exception_handler(logging::nop());
+        return sink;
+    }
+
+    static void add(slot_state<FileSlot>& state, const FileSlot::params& p, boost::shared_ptr<sink_type> sink) {
+        state.sinks.emplace(p.path, slot_state<FileSlot>::entry{std::move(sink), p});
+    }
+
+    static boost::shared_ptr<sink_type> take(slot_state<FileSlot>& state, const FileSlot::key& path) noexcept {
+        const auto it = state.sinks.find(file_key(path));
+        if (it == state.sinks.end()) {
+            return nullptr;
+        }
+        auto sink = std::move(it->second.sink);
+        state.sinks.erase(it);
+        return sink;
+    }
+};
+
 } // namespace detail
 
 // ============================================================================
 // The slot pair (design_logging.md §3): one body per operation, instantiated per slot
 // ============================================================================
 
-template <SinkSlot Slot> void enable(const typename Slot::params& params) {
-    using impl = detail::slot_impl<Slot>;
+template <SinkSlot Slot> void enable(const typename Slot::params& given) {
+    using impl                         = detail::slot_impl<Slot>;
+    const typename Slot::params params = impl::normalize(given);
     std::lock_guard<std::mutex> lock(detail::log_mutex);
 
     // Toggle shape (design_patterns.md §2): a no-op when not initialized, a no-op on a
@@ -460,7 +623,9 @@ template <SinkSlot Slot> void disable(const typename Slot::key& key) noexcept {
 }
 
 template void enable<ConsoleSlot>(const ConsoleSlot::params&);
+template void enable<FileSlot>(const FileSlot::params&);
 template void disable<ConsoleSlot>(const ConsoleSlot::key&) noexcept;
+template void disable<FileSlot>(const FileSlot::key&) noexcept;
 
 // ============================================================================
 // The triad and the named pairs
@@ -546,7 +711,7 @@ void log_deinit() noexcept {
     // externally synchronized against emission rather than draining it.
     detail::init_status.store(false, std::memory_order_release);
 
-    // Flush, forget and remove every sink
+    // Flush, forget and remove every sink, files included
     detail::clear_slots();
 
     // Disable logging
@@ -567,6 +732,12 @@ bool log_is_init() noexcept {
 void enable_console() { enable<ConsoleSlot>({}); }
 
 void disable_console() noexcept { disable<ConsoleSlot>({}); }
+
+void enable_file(const std::filesystem::path& path, severity_level floor, severity_level ceiling, file_open on_open) {
+    enable<FileSlot>({path, floor, ceiling, on_open});
+}
+
+void disable_file(const std::filesystem::path& path) noexcept { disable<FileSlot>(path); }
 
 void set_severity(severity_level level) {
     std::lock_guard<std::mutex> lock(detail::log_mutex);

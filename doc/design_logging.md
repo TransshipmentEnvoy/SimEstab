@@ -4,9 +4,10 @@ This document describes the `sim_estab:log` subsystem: how it is built, and the 
 starting, stopping and controlling it. Unlike the other design docs, most of it is
 **implemented**. Parts marked *planned* are not.
 
-Status: the C++ subsystem (§1), the Python refcounted holder (§2) and the severity filter
-(§3) are built. File sinks, the per-session file sink, the per channel prefix filter and
-the per-worker buffer are planned (§4).
+Status: the C++ subsystem (§1), the Python refcounted holder (§2), and the file sinks and
+the severity filter (§3) are built; the file sinks are not bound to Python yet. The
+per-session file sink, the per channel prefix filter and the per-worker buffer are planned
+(§4).
 
 Terms are defined in [glossary.md](glossary.md).
 
@@ -39,9 +40,9 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
     subsystem initialized".
   - `log_deinit` emits "Logging subsystem shutting down", clears the flag, flushes, then
     tears down.
-- **Sinks** are tracked per sink slot: the console slot holds one sink (§3). A file slot is
-  planned (§4). Before building fresh state, `log_init` cleans up defensively: it flushes,
-  clears the slot states, and removes every sink from the core.
+- **Sinks** are tracked per sink slot: the console slot holds one sink, and the file slot
+  one sink per path (§3). Before building fresh state, `log_init` cleans up defensively: it
+  flushes, clears the slot states, and removes every sink from the core.
 - **The Boost.Log core is the process's one core, and this subsystem owns it.** `log_init`
   removes every sink from it and sets its filter; `log_deinit` disables it and removes
   every sink. Another Boost.Log user in the same process loses its sinks at either call.
@@ -49,8 +50,8 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
   the stream.
 - **The core is enabled only while a sink is registered.** With no sink, Boost writes
   every record to stdout through its default sink, in its own format. So
-  `disable_console()` turns the core off, and `enable_console()` turns it on again. A
-  record emitted while the core is off is dropped before it is built.
+  `disable_console()` with no file open turns the core off, and the next enable turns it
+  on again. A record emitted while the core is off is dropped before it is built.
 - **Console sink**: colored output (by severity) to `std::clog`, with auto-flush,
   microsecond timestamps, and the severity and hierarchical channel in the format. It is
   toggled with `enable_console()` / `disable_console()`. Both are idempotent and do nothing
@@ -78,9 +79,9 @@ The subsystem wraps a Boost.Log core, hidden completely behind the module interf
 - **Opaque wrappers**: `record`, `record_ostream`, `logger` and `logger_mt` wrap the
   Boost.Log types one to one, with small-buffer storage. Copy and move behave exactly like
   the wrapped types (`design_patterns.md` §5b).
-- **Errors**: `log_error`, derived from `sim_estab_error`, exists and is bound to Python as
-  `_if.log.log_error`, but no code throws it yet. Boost exceptions can escape `log_init` and
-  `enable_console` directly.
+- **Errors**: `log_error`, derived from `sim_estab_error`, is bound to Python as
+  `_if.log.log_error`. `enable_file` throws it for a failed open and for an empty band (§3).
+  Boost exceptions can escape `log_init` and `enable_console` directly.
 - **Python surface**: mirrors the triad, the console toggles and `set_severity` one to one,
   plus a concrete `log(channel, level, message)` wrapper and the name list of
   `severity_level` (§3).
@@ -158,35 +159,88 @@ hierarchy, not an import path, and the two never resolve against each other.
 
 ## 3. File sinks and the severity filter
 
-This section sets the sink slots under the toggles, the severity filter and the names from
-the enums. The file sinks are planned (§4).
+This section sets what a file sink is, how one opens and rotates, and how the severity
+filter combines with the sinks. A **file sink** is a file stream the subsystem opens,
+written through one Boost text stream backend behind a synchronous frontend, hidden like
+the console sink.
+
+**One toggle pair, many files.** `enable_file(path, floor = trace, ceiling = critical,
+on_open = file_open::rotate)` opens a file sink on `path`, and `disable_file(path)
+noexcept` removes it. File sinks are instances keyed by path, not fixed slots, so one pair
+serves every kind of file. The key is the absolute, lexically normal path: `run.log`,
+`./run.log` and the absolute path of `run.log` name one sink. A relative path resolves
+against the working directory at the call. Symlinks are not resolved, so a link and its
+target are two sinks. A general file is the path alone, an error file is `floor =
+error`, and a debug file is `ceiling = debug`. Both calls follow the toggle shape of
+`design_patterns.md` §2: idempotent, no-ops when the subsystem is not initialized, and
+safe from any thread under the subsystem's mutex. A second `enable_file` on a path that is
+already enabled does nothing. To change a file's band or open mode, disable it and enable
+it again.
 
 **Sink slots underneath the toggles.** The Python surface is the triad and the named
-pairs. Underneath, each sink kind is a **sink slot**: a type, one for the console now and
-one for the file once the file sinks exist (§4). A slot carries its fixed policy as
-`static constexpr` members: its name and its flush rule. `log.cpp` maps each slot to its
-Boost formatter (the console's colours), so Boost stays out of the interface. One pair of
-function templates, `enable<Slot>(...)` and `disable<Slot>(...)`, implements every named
-pair. The console slot holds one sink. The tracking container follows the slot list (§1).
-The slot types and the pair are part of the C++ interface of `sim_estab:log`, so engine
-code may use them directly. They are not bound to Python.
+pairs. Underneath, each sink kind is a **sink slot**: a type, one for the console and one
+for the file. A slot carries its fixed policy as `static constexpr` members: its name and
+its flush rule. `log.cpp` maps each slot to its Boost formatter (the console's colours,
+the file's plain line), so Boost stays out of the interface. One pair of function
+templates, `enable<Slot>(...)` and `disable<Slot>(...)`, implements every named pair, so
+the console and the file sinks share one shape. The console slot holds one sink. The
+file slot holds one sink per path. The tracking container follows the slot list
+(§1). The slot types and the pair are part of the C++ interface
+of `sim_estab:log`, so engine code may use them directly. They are not bound to Python.
+
+**The band.** A record reaches a file when `floor <= severity <= ceiling`. With the path
+alone, every record that passes the core filter reaches the file. Each file sink carries
+its band as its own Boost filter. A floor above the ceiling is an empty band, and
+`enable_file` refuses it with `log_error`.
 
 **The core filter and `set_severity`.** `set_severity(level)` sets the user's level,
 global at first and later per channel prefix. The console carries the user's level as its
-own filter, and the core filter follows it. `LogConfig.level` is the starting value, and
-`Engine.set_log_level` forwards here (§2).
+own filter. The core filter is the minimum of the user's level and the floors of the
+enabled file sinks. So a file with a floor below the user's level receives those records
+while it is open. The console does not receive them. `LogConfig.level` is the starting
+value, and `Engine.set_log_level` forwards here (§2). A file's band is fixed at its open:
+`set_severity` moves the console and the core filter, never a band.
 
-**Names from the enums.** `sim_estab:log` lists the enumerators of `severity_level` with
-C++26 reflection (`std::meta::enumerators_of`). The name of a value, the parse of a name and
-the console colour table come from that one list. `_if.log` exports the name list, and
-`config.py` reads `LOG_LEVELS` from it. So each name is written once, in the enum. The
-other enums stay with [Q73](open_question.md#q73-magic_enum-or-reflection-for-enum-names).
+**Open.** `enable_file` opens the file at once, as the stream the sink writes through.
+When the open fails, it throws `log_error`, naming the path. Boost never sees the file
+name: its file backend would read a `%` in the name as a placeholder, and would open the
+file only at the first record and fail silently there. `enable_file` creates the parent
+directory when it does not exist. `on_open` says what happens to a file that exists:
+
+| `file_open` | A file that exists |
+|---|---|
+| `rotate` (default) | becomes the newest backup, and the active file starts empty |
+| `append` | continues; the backups are not touched |
+| `truncate` | starts over; the backups are not touched |
+
+**Rotation.** Rotation happens at open only. There is no rotation by size or by time. The
+active file is `<stem>.log`, and the backups are `<stem>.01.log` to `<stem>.99.log`,
+newest first. At open under `rotate`, `enable_file` deletes `.99`, renames each backup up
+by one, renames the active file to `.01`, and opens the active file fresh.
+`max_log_files = 100` (`sim_estab:limits`, `design_limits.md` §8) counts the active file
+and the backups, and the number width follows from it. Boost's file backend and its file
+collector are not used: the collector tracks only the files it stored or scanned, and its
+scan can delete any file that matches its pattern.
+
+**Writes.** Writes are buffered. A file sink flushes when it is disabled and at
+`log_deinit`. Timestamps are the machine's local time, as in the console.
+
+**Errors after the open.** Each file sink has a nothrow exception handler. A failure
+inside the sink after the open is swallowed. It never reaches the emitter, so it cannot
+reach `log_deinit` or `close()`, which are `noexcept`. A write that fails leaves the
+stream failed: the file keeps what it has, and later records are lost until the file is
+enabled again. The subsystem never opens the file again on its own, so a write failure
+never empties a file.
+
+**Names from the enums.** `sim_estab:log` lists the enumerators of `severity_level` and
+`file_open` with C++26 reflection (`std::meta::enumerators_of`). The name of a value, the
+parse of a name and the console colour table come from that one list per enum. `_if.log`
+exports the name list of `severity_level`, and `config.py` reads `LOG_LEVELS` from it. So
+each name is written once, in the enum. The other enums stay with
+[Q73](open_question.md#q73-magic_enum-or-reflection-for-enum-names).
 
 ## 4. Planned
 
-- **File sinks**: a file slot beside the console slot (§3), with `enable_file(...)` /
-  `disable_file()` over the same slot pair. They are a general rotating file sink, an
-  error-and-above sink, and an opt-in debug sink.
 - **Session integration**: the per-session file sink of §2, named from the session identity
   plus a run-unique part, opened at the freeze in `LogConfig.session_dir`
   (`design_engine_core.md` §2.4) and closed by `Engine.close()`. Until then `acquire`

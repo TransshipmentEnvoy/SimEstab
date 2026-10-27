@@ -202,6 +202,15 @@ export inline constexpr std::uint64_t default_projection_warn_bytes_per_second =
 // only the defaults; configured values are validated in config.py and again at the freeze.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Logging (build constant)
+// design_logging.md §3, design_limits.md §8
+// ---------------------------------------------------------------------------
+
+/// Log files per path: the active file plus the backups `.01` to `.99`, rotated at open
+/// (design_logging.md §3 "Rotation"). The backup number width follows from it.
+export inline constexpr unsigned max_log_files = 100;
+
 static_assert(default_tick_rate > 0, "a tick rate of zero has no meaning; the counter is the clock");
 
 static_assert(default_endpoint_capacity <= max_endpoint_capacity, "the default capacity must be requestable");
@@ -230,5 +239,7 @@ static_assert((chunk_elements & (chunk_elements - 1)) == 0, "the chunk quantum m
 static_assert(chunk_elements % padding_elements<std::uint8_t> == 0,
               "chunk boundaries must land on column-padding boundaries, or a chunk starts mid-vector; "
               "a power of two >= 64 satisfies this for every T up to 8 bytes at once");
+
+static_assert(max_log_files >= 2, "rotation needs the active file and at least one backup");
 
 } // namespace sim_estab::core::limits

@@ -409,8 +409,8 @@ magic_enum is a dependency that no code uses. C++26 reflection lists enumerators
 (`std::meta::enumerators_of`), and the data container already relies on reflection
 (`data_container` §2). magic_enum only sees values in a fixed range (-128 to 127 by default)
 but also works on MSVC. Reflection has no such limit but needs GCC 16 (Q34). `logging` §3
-settles it for `severity_level`: reflection. It stays open for the other enums, and for the
-Windows profiles, which are unverified.
+settles it for `severity_level` and `file_open`: reflection. It stays open for the other
+enums, and for the Windows profiles, which are unverified.
 
 ### Q74. scope-lite or Boost.Scope
 
