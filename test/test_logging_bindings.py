@@ -9,7 +9,7 @@ import sim_estab._if as if_module
 def test_severity_level_enum():
     """Test that severity_level enum values are correctly exposed."""
     # Test severity_level enum values
-    assert hasattr(if_module.log, 'severity_level')
+    assert hasattr(if_module.log, "severity_level")
     assert if_module.log.severity_level.trace.value == 0
     assert if_module.log.severity_level.debug.value == 10
     assert if_module.log.severity_level.info.value == 20
@@ -28,9 +28,9 @@ def test_severity_level_enum():
 
 def test_log_error_exception():
     """Test that log_error is exposed, under the sim_estab_error root."""
-    assert hasattr(if_module.error, 'sim_estab_error')
+    assert hasattr(if_module.error, "sim_estab_error")
     assert issubclass(if_module.error.sim_estab_error, RuntimeError)
-    assert hasattr(if_module.log, 'log_error')
+    assert hasattr(if_module.log, "log_error")
     assert issubclass(if_module.log.log_error, if_module.error.sim_estab_error)
 
 
@@ -77,13 +77,13 @@ def test_log_deinit():
 def test_all_logging_apis_exist():
     """Test that all expected logging APIs are exposed."""
     # Check that all expected functions exist in the log submodule
-    assert hasattr(if_module.log, 'severity_level')
-    assert hasattr(if_module.log, 'log_error')
-    assert hasattr(if_module.log, 'log_init')
-    assert hasattr(if_module.log, 'log_deinit')
-    assert hasattr(if_module.log, 'log_is_init')
-    assert hasattr(if_module.log, 'enable_console')
-    assert hasattr(if_module.log, 'disable_console')
+    assert hasattr(if_module.log, "severity_level")
+    assert hasattr(if_module.log, "log_error")
+    assert hasattr(if_module.log, "log_init")
+    assert hasattr(if_module.log, "log_deinit")
+    assert hasattr(if_module.log, "log_is_init")
+    assert hasattr(if_module.log, "enable_console")
+    assert hasattr(if_module.log, "disable_console")
 
     # Check that they are callable (except for the enum and exception)
     assert callable(if_module.log.log_init)
