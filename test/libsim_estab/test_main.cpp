@@ -12,6 +12,8 @@
 
 #include <cstdlib>
 
+#include "test_tsan.h"
+
 // Import the main SimEstab module if needed
 import sim_estab;
 
@@ -36,6 +38,8 @@ struct GlobalFixture {
         // hints, and every context shutdown calls it.
         ::setenv("SDL_VIDEO_DRIVER", "wayland,x11,offscreen", 0);
 #endif
+
+        set_tsan_vulkan_driver();
 
         // Add any global initialization code here
         // For example: initialize logging for tests

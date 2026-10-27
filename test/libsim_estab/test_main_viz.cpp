@@ -10,6 +10,8 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "test_tsan.h"
+
 // Import the main SimEstab module
 import sim_estab;
 import sim_estab.viz;
@@ -27,6 +29,8 @@ struct GlobalVizFixture {
     GlobalVizFixture() {
         // Initialize test environment
         BOOST_TEST_MESSAGE("Global visualization test setup started");
+
+        set_tsan_vulkan_driver();
 
         // Add any global initialization code here
         BOOST_TEST_MESSAGE("Global visualization test setup completed");
