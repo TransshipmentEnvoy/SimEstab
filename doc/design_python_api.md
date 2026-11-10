@@ -340,8 +340,11 @@ created ─(ctor ok)─► Configuring ─(start_session ok)─► Running ─(r
   still touch anything.
 
   In `Failed`, nothing a surviving thread can reach is destroyed. This is the Python face of
-  a disarmed RAII context (`design_patterns.md` §4): `close()` clears its witnesses without
-  releasing anything.
+  a disarmed RAII context (`design_patterns.md` §4): `close()` clears its witnesses and
+  releases nothing but the engine's logging hold. The engine releases that hold exactly
+  once, on the first `close()`, in every state (above). Logging is safe to release under a
+  surviving thread: a record that the thread emits after the last release is dropped
+  (`design_logging.md` §1).
 
   | What | Behaviour in `Failed` |
   |---|---|
@@ -349,7 +352,7 @@ created ─(ctor ok)─► Configuring ─(start_session ok)─► Running ─(r
   | logging | `critical`, naming exactly what was leaked |
   | `engine.state` | reports `Failed` |
   | any further API call | raises `sim_estab.EngineFailedError` |
-  | `close()` | a no-op; it does not raise for the failure |
+  | `close()` | releases the engine's logging hold and nothing else; it does not raise for the failure |
   | a new `Engine` | still raises `EngineExistsError`: the process is poisoned |
   | shared SDL and GPU reference counts | not dropped. A later acquire would hand a live device to a process that lost track of one (`design_patterns.md` §3) |
 

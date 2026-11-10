@@ -217,7 +217,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | resource failure | A lost GPU device or a failed memory commit in the terminal commit. Not a `Failed` path: the engine cleans up its child processes and the process exits with a nonzero status. | python_api §2 |
 | `LoadFailed` | Terminal state after a failed load or freeze. Nothing leaks; create a new `Engine`. | python_api §2 |
 | live `Engine` | An `Engine` from construction until `close()` reaches `Closed`, or a `Failed` one for good. One per process; a closed `Engine` object does not block the next. | python_api §2 |
-| disarm | Cleanup that deliberately releases nothing, because another thread may still use the resource. | patterns §4 |
+| disarm | Cleanup that deliberately releases nothing, because another thread may still use the resource. The engine's logging hold is the one exception. | patterns §4 |
 | detach | Disarm for one resource: an engine view block still referenced at `close()` is freed when its last array view drops. | python_api §7.2 |
 | async error | An error on the sim thread, stored once and re-raised on the owner thread at its next engine call. | python_api §8 |
 | rendezvous point | An owner-thread engine call where a stored async error is raised: a pump call, `stop_sim_async()` or `raise_if_failed()`. | python_api §8 |

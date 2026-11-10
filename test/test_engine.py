@@ -353,6 +353,7 @@ FAILED_PATH_SCRIPT = """
 import sys
 from sim_estab import Engine, EngineConfig, EngineExistsError
 from sim_estab import EngineFailedError, EngineState
+from sim_estab.upkeep import log as sim_log
 
 config = EngineConfig(headless=True, event_drain="sink", on_failed_stop={policy!r})
 engine = Engine(config)
@@ -362,8 +363,9 @@ try:
     engine.step(2)  # tick 1 waits for a take that never comes; the deadline passes
 except EngineFailedError:
     print("raised", engine.state.name)
-engine.close()  # a no-op in Failed
-print("closed", engine.state.name)
+print("held", sim_log.holder_count())
+engine.close()  # releases the logging hold and nothing else in Failed
+print("closed", engine.state.name, sim_log.holder_count())
 try:
     Engine(config)
 except EngineExistsError:
@@ -382,11 +384,20 @@ def run_failed_path(policy: str) -> subprocess.CompletedProcess:
 
 def test_on_failed_stop_raise_enters_failed_and_poisons():
     """``"raise"``: the call that hit the path raises ``EngineFailedError``; ``close()``
-    is a no-op, and a new ``Engine`` still raises ``EngineExistsError``
-    (``design_python_api.md`` §2, §3)."""
+    releases the engine's logging hold and nothing else, and a new ``Engine`` still
+    raises ``EngineExistsError`` (``design_python_api.md`` §2, §3)."""
     proc = run_failed_path("raise")
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.split() == ["raised", "Failed", "closed", "Failed", "poisoned"]
+    assert proc.stdout.split() == [
+        "raised",
+        "Failed",
+        "held",
+        "1",
+        "closed",
+        "Failed",
+        "0",
+        "poisoned",
+    ]
 
 
 def test_on_failed_stop_terminate_aborts_the_process():

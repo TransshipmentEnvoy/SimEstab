@@ -448,6 +448,11 @@ Implementation rules:
     later acquire hand a live device to a process that has lost track of one. As a result
     the process can never acquire that subsystem again, and that is intended: the process is
     poisoned and should stay so.
+  - **Logging is the one exception.** The engine's `close()` releases its logging hold on the
+    disarmed path too (`design_python_api.md` §2). The reason above does not apply: logging
+    hands out no device, and a record that a surviving thread emits after the last release
+    is dropped, which is safe (`design_logging.md` §1). So a poisoned process can acquire
+    logging again.
   - Disarming can apply to a single resource, where it is usually called **detaching**. One
     block of memory is handed to whoever still references it and freed on their schedule,
     while the rest of the context releases normally. An engine view's block detach at close
