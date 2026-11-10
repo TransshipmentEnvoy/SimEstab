@@ -60,10 +60,12 @@ class EngineLogHandler(logging.Handler):
             logging.FATAL: _if.log.severity_level.critical,  # Map FATAL to CRITICAL
         }
 
-        # Find closest severity level (find the first level that matches or exceeds)
-        level = min(
-            [py_log for py_log in severity_map.keys() if py_log >= record.levelno],
-            default=logging.INFO,
+        # The severity of the record's level (design_logging.md §2): a standard level
+        # maps to the severity of the same name, a level in between rounds down, a
+        # level below DEBUG is debug, and a level above CRITICAL is critical
+        level = max(
+            [py_log for py_log in severity_map.keys() if py_log <= record.levelno],
+            default=logging.DEBUG,
         )
         severity = severity_map[level]
 
