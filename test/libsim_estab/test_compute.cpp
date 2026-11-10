@@ -254,6 +254,56 @@ BOOST_AUTO_TEST_CASE(test_compute_buffer_size_past_4_gib_throws,
 }
 
 /**
+ * @brief A transfer at an offset lands at that offset, and touches nothing else
+ *
+ * The upload writes its data at the offset and leaves the rest of the buffer as it was,
+ * and the download reads from the offset. A round trip at one offset passes even when
+ * both transfers ignore it, so this case reads the whole buffer back.
+ */
+BOOST_AUTO_TEST_CASE(test_compute_buffer_transfer_lands_at_the_offset,
+                     *utf::description("Test that a GPU buffer transfer at an offset lands at that offset")) {
+    BOOST_TEST_MESSAGE("Testing that buffer transfers land at their offset");
+
+    ComputeContext ctx;
+
+    const size_t buffer_size = 1024;
+    const size_t offset      = 256;
+    const size_t patch_size  = 128;
+
+    auto buffer =
+        ctx.create_buffer(buffer_size, BufferUsage::Storage | BufferUsage::TransferDst | BufferUsage::TransferSrc);
+
+    // Fill the whole buffer, then patch a window in the middle with different bytes
+    std::vector<uint8_t> whole(buffer_size);
+    std::vector<uint8_t> patch(patch_size);
+    for (size_t i = 0; i < buffer_size; ++i) {
+        whole[i] = static_cast<uint8_t>(i);
+    }
+    for (size_t i = 0; i < patch_size; ++i) {
+        patch[i] = static_cast<uint8_t>(255 - i); // differs from whole[offset + i], which is i
+    }
+    ctx.upload_buffer(buffer, std::span<const uint8_t>(whole));
+    ctx.upload_buffer(buffer, std::span<const uint8_t>(patch), offset);
+
+    // The whole buffer: the patch at the offset, the old bytes elsewhere
+    std::vector<uint8_t> expected = whole;
+    std::copy(patch.begin(), patch.end(), expected.begin() + static_cast<std::ptrdiff_t>(offset));
+    auto download_whole = ctx.download_buffer(buffer, buffer_size);
+    BOOST_TEST(download_whole.size() == expected.size());
+    BOOST_TEST(std::equal(expected.begin(), expected.end(), download_whole.begin()));
+
+    // A download at the offset reads the patch, not the start of the buffer
+    auto download_patch = ctx.download_buffer(buffer, patch_size, offset);
+    BOOST_TEST(download_patch.size() == patch.size());
+    BOOST_TEST(std::equal(patch.begin(), patch.end(), download_patch.begin()));
+
+    // Cleanup
+    ctx.destroy_buffer(buffer);
+
+    BOOST_TEST_MESSAGE("Transfer at an offset test completed");
+}
+
+/**
  * @brief Test multiple ComputeContext instances
  */
 BOOST_AUTO_TEST_CASE(test_compute_multiple_contexts,
