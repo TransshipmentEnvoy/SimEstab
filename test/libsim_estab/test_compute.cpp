@@ -187,6 +187,73 @@ BOOST_AUTO_TEST_CASE(test_compute_buffer_partial_transfer,
 }
 
 /**
+ * @brief An offset at 4 GiB or past it throws, and the buffer keeps its data
+ *
+ * An SDL GPU buffer region has a 32-bit offset, so no buffer has a byte at 4 GiB or past
+ * it. The call validates its arguments up front and throws for such an offset
+ * (design_patterns.md §6). It must not cut the offset to 32 bits and use the wrapped
+ * offset, here 0.
+ */
+BOOST_AUTO_TEST_CASE(test_compute_buffer_offset_past_4_gib_throws,
+                     *utf::description("Test that a GPU buffer offset at 4 GiB or past it throws")) {
+    BOOST_TEST_MESSAGE("Testing buffer transfers at an offset past 4 GiB");
+
+    ComputeContext ctx;
+
+    const size_t data_size = 256;
+    const size_t past      = size_t{1} << 32; // 0 when cut to 32 bits
+
+    auto buffer =
+        ctx.create_buffer(data_size, BufferUsage::Storage | BufferUsage::TransferDst | BufferUsage::TransferSrc);
+
+    std::vector<uint8_t> kept(data_size);
+    std::vector<uint8_t> other(data_size);
+    for (size_t i = 0; i < data_size; ++i) {
+        kept[i]  = static_cast<uint8_t>(i);
+        other[i] = static_cast<uint8_t>(255 - i);
+    }
+    ctx.upload_buffer(buffer, std::span<const uint8_t>(kept));
+
+    BOOST_CHECK_THROW(ctx.upload_buffer(buffer, std::span<const uint8_t>(other), past), gpu_error);
+    BOOST_CHECK_THROW((void)ctx.download_buffer(buffer, data_size, past), gpu_error);
+
+    // The refused upload wrote nothing
+    auto download_data = ctx.download_buffer(buffer, data_size);
+    BOOST_TEST(download_data.size() == kept.size());
+    BOOST_TEST(std::equal(kept.begin(), kept.end(), download_data.begin()));
+
+    // Cleanup
+    ctx.destroy_buffer(buffer);
+
+    BOOST_TEST_MESSAGE("Offset past 4 GiB test completed");
+}
+
+/**
+ * @brief A buffer size at 4 GiB or past it throws
+ *
+ * An SDL GPU buffer has a 32-bit size, so no buffer holds 4 GiB or more. The call
+ * validates its arguments up front and throws for such a size (design_patterns.md §6).
+ * It must not cut the size to 32 bits and create a buffer of the wrapped size, here 16
+ * bytes.
+ */
+BOOST_AUTO_TEST_CASE(test_compute_buffer_size_past_4_gib_throws,
+                     *utf::description("Test that a GPU buffer size at 4 GiB or past it throws")) {
+    BOOST_TEST_MESSAGE("Testing buffer creation with a size past 4 GiB");
+
+    ComputeContext ctx;
+
+    const size_t past = (size_t{1} << 32) + 16; // 16 when cut to 32 bits
+
+    ComputeBufferHandle created = nullptr;
+    BOOST_CHECK_THROW(created = ctx.create_buffer(past, BufferUsage::Storage), gpu_error);
+    if (created) {
+        ctx.destroy_buffer(created); // the wrapped buffer a failing implementation made
+    }
+
+    BOOST_TEST_MESSAGE("Buffer size past 4 GiB test completed");
+}
+
+/**
  * @brief Test multiple ComputeContext instances
  */
 BOOST_AUTO_TEST_CASE(test_compute_multiple_contexts,
