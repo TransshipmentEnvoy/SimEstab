@@ -2,6 +2,9 @@
 
 """Tests for the reference headless loop (``design_python_api.md`` §4.2)."""
 
+import signal
+import threading
+
 import pytest
 
 from sim_estab import (
@@ -73,3 +76,31 @@ def test_run_headless_rejects_a_negative_count():
         engine.start_session()
         with pytest.raises(ValueError, match="not be negative"):
             run_headless(engine, -1)
+
+
+def test_run_headless_drains_once_more_on_a_keyboard_interrupt():
+    """A ``KeyboardInterrupt`` ends the step at a tick boundary and propagates
+    (``design_python_api.md`` §4.3). Under an owner drain the loop still drains once
+    more before it lets the interrupt go on, so no event waits in the ring."""
+    batches = []
+    with Engine(EngineConfig(headless=True, event_drain="owner")) as engine:
+        # A paced reader that never takes again parks the step at the gate for tick 2,
+        # where the signal check finds the SIGINT (as in test_engine_bindings.py).
+        engine.register_engine_view(
+            "recorder", paced=True, deadline_ms=20_000, on_expiry="continue_without"
+        )
+        engine.start_session()
+        assert engine.view("recorder").take()
+        timer = threading.Timer(0.3, signal.raise_signal, [signal.SIGINT])
+        timer.start()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                run_headless(engine, 10, on_events=batches.append)
+        finally:
+            timer.cancel()
+        assert engine.state == EngineState.Running
+        assert engine.snapshot() == Tick(1)  # whole ticks only
+        assert engine.drain_events() == []  # the loop drained before it let go
+    assert [e.type for batch in batches for e in batch] == [
+        EngineEventType.SessionStarted
+    ]
