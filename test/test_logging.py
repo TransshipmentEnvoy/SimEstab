@@ -3,7 +3,8 @@
 """Tests for the refcounted holder in ``sim_estab.upkeep.log`` (``design_logging.md``
 §2, §3): the first holder initializes, the last tears down, the first holder's config
 wins, the count is one step from any thread, and the first holder's level, session file
-and ``file_list`` entries are applied.
+and ``file_list`` entries are applied. The bridge forwards each Python record at its
+severity.
 """
 
 import logging
@@ -111,6 +112,37 @@ def test_file_list_entries_open_with_their_bands(tmp_path):
     assert "a debug record" in all_text
     assert "an info record" in all_text
     assert "an error record" in all_text
+
+
+@pytest.mark.parametrize(
+    "levelno, severity",
+    [
+        (logging.DEBUG, "DEBUG"),
+        (logging.INFO, "INFO"),
+        (logging.WARNING, "WARNING"),
+        (logging.ERROR, "ERROR"),
+        (logging.CRITICAL, "CRITICAL"),
+        (logging.CRITICAL + 10, "CRITICAL"),
+        (logging.INFO + 5, "INFO"),
+        (logging.DEBUG - 5, "DEBUG"),
+    ],
+)
+def test_the_bridge_keeps_the_severity(tmp_path, levelno, severity):
+    """The bridge forwards every Python record at the severity of its level
+    (``design_logging.md`` §2): a standard level at the severity of the same name, a
+    level between two standard levels at the lower one, a level below ``DEBUG`` as
+    ``debug``, and a level above ``CRITICAL`` as ``critical``."""
+    everything = tmp_path / "all.log"
+    logger = logging.getLogger("test.bridge")
+    logger.setLevel(1)  # the logger itself drops nothing, not even a level below DEBUG
+    sim_log.acquire(LogConfig(console=False, file_list=[LogFile(everything)]))
+    try:
+        logger.log(levelno, "a bridged record")
+    finally:
+        sim_log.release()
+        logger.setLevel(logging.NOTSET)
+
+    assert f"[{severity}][test.bridge] a bridged record" in everything.read_text()
 
 
 def test_rotation_at_acquire(tmp_path):

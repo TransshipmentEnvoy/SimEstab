@@ -122,6 +122,12 @@ C++ triad does not change; the ordering lives above it, in `sim_estab/upkeep/log
   `log_deinit` keeps the application's level and warns with a `RuntimeWarning` that it
   did not restore the saved one. The bridge is one way: a C++ record never reaches a
   Python handler.
+
+  A record arrives at the severity of its level: a standard level at the severity of the
+  same name (§1), a level between two standard levels at the lower one, a level below
+  `DEBUG` as `debug`, and a level above `CRITICAL` as `critical`. Rounding down keeps a
+  C++ filter at a severity in step with a Python filter at the level of the same name:
+  neither passes a record that the other drops.
 - **The first caller's configuration wins**, with a warning. A later `acquire` with a
   different `LogConfig` does not reconfigure the sinks, following "immutable creation
   options, first caller wins" (`design_patterns.md` §3). `LogConfig` has four fields
