@@ -8,6 +8,7 @@ module;
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -373,12 +374,31 @@ bool ComputeContext::has_device() const noexcept {
     return impl_->gpu_device != nullptr;
 }
 
+namespace {
+
+// An SDL GPU buffer and a buffer region have 32-bit sizes and offsets, so no buffer has
+// a byte at 4 GiB or past it. The checks run up front (design_patterns.md §6), because
+// the casts to Uint32 below would wrap a larger value in silence
+constexpr size_t gpu_bytes_max = std::numeric_limits<Uint32>::max();
+
+void check_region(const char *action, size_t offset, size_t size) {
+    if (offset > gpu_bytes_max || size > gpu_bytes_max - offset) {
+        throw gpu_error(std::string("Cannot ") + action + " past 4 GiB: offset " + std::to_string(offset) + ", size " +
+                        std::to_string(size));
+    }
+}
+
+} // namespace
+
 // Buffer operations
 ComputeBufferHandle ComputeContext::create_buffer(size_t size, BufferUsage usage) {
     check_impl();
 
     if (size == 0) {
         throw gpu_error("Cannot create buffer with size 0");
+    }
+    if (size > gpu_bytes_max) {
+        throw gpu_error("Cannot create buffer past 4 GiB: size " + std::to_string(size));
     }
 
     SDL_GPUBufferCreateInfo create_info{};
@@ -419,6 +439,7 @@ void ComputeContext::upload_buffer(ComputeBufferHandle buffer, std::span<const u
     if (!buffer) {
         throw gpu_error("Cannot upload to null buffer");
     }
+    check_region("upload", offset, data.size());
 
     if (data.empty()) {
         return; // Nothing to upload
@@ -485,6 +506,7 @@ std::vector<uint8_t> ComputeContext::download_buffer(ComputeBufferHandle buffer,
     if (!buffer) {
         throw gpu_error("Cannot download from null buffer");
     }
+    check_region("download", offset, size);
 
     if (size == 0) {
         return {};
