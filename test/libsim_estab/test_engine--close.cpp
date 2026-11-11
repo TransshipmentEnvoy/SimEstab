@@ -200,7 +200,8 @@ BOOST_AUTO_TEST_CASE(test_a_close_that_times_out_fails_and_poisons, *boost::unit
         BOOST_CHECK_THROW((void)engine.step(1), engine_failed_error);
         BOOST_CHECK_THROW((void)ui.take(), engine_failed_error);
         BOOST_CHECK_THROW(engine.pause(), engine_failed_error);
-        BOOST_TEST(engine.stop_requested()); // the query never throws; no tick runs again
+        // the query never throws; no tick runs again
+        BOOST_TEST(engine.stop_requested());
         engine.close(); // a no-op in Failed
         BOOST_TEST((engine.state() == EngineState::Failed));
         control.leave();
