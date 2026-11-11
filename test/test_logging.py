@@ -41,9 +41,15 @@ def test_the_first_holder_initializes_and_the_last_tears_down():
     assert sim_log.holder_count() == 0
 
 
-def test_release_without_acquire_raises():
-    with pytest.raises(RuntimeError, match="without a matching acquire"):
-        sim_log.release()
+def test_release_without_acquire_does_nothing():
+    """``design_patterns.md`` §3: ``release`` at count 0 is a safe no-op."""
+    sim_log.release()
+    assert sim_log.holder_count() == 0
+    assert not if_module.log.log_is_init()
+    # the count did not go below 0: the next acquire is the first holder
+    sim_log.acquire(LogConfig())
+    assert sim_log.holder_count() == 1
+    assert if_module.log.log_is_init()
 
 
 def test_the_first_holders_config_wins():
