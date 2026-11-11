@@ -394,7 +394,8 @@ BOOST_AUTO_TEST_CASE(test_a_stop_ends_the_step_and_the_session) {
 
     BOOST_CHECK_THROW((void)engine.step(1), engine_state_error);
     BOOST_TEST((engine.snapshot() == Tick{2})); // reads still work
-    BOOST_TEST(engine.submit(marked(1)).has_value());
+    // no tick is left to run a command, so none is admitted (design_python_api.md §2)
+    BOOST_CHECK_THROW((void)engine.submit(marked(1)), engine_state_error);
     BOOST_TEST((drained(engine) ==
                 std::vector<EngineEvent>{{1, EngineEventType::SessionStarted}, {3, EngineEventType::SessionStopped}}));
     engine.stop_sim_async(); // already stopped: nothing to do

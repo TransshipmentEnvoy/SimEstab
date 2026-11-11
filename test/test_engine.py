@@ -104,6 +104,10 @@ def test_the_states_through_a_session(engine):
     assert engine.state == EngineState.Stopped
     with pytest.raises(EngineStateError):
         engine.step(1)
+    with pytest.raises(EngineStateError):  # no tick is left to run a command
+        engine.submit(noop())
+    with pytest.raises(EngineStateError):
+        engine.submit_batch([noop()])
     assert engine.snapshot() == Tick(3)  # reads still work
 
     engine.close()

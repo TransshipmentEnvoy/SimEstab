@@ -319,7 +319,8 @@ created ─(ctor ok)─► Configuring ─(start_session ok)─► Running ─(r
 
 - **`Stopped` ends ticking, not the engine.** `stop_sim_async()` enters it, whether or not a
   sim thread ran. No tick runs again in the session, so `step()` and `run_sim_async()` raise
-  `EngineStateError` (§8). Reads still work: `snapshot()`, `checksum()`, `drain_events()` and
+  `EngineStateError` (§8). `submit()` raises it too: no tick is left to run a command, so
+  none is admitted. Reads still work: `snapshot()`, `checksum()`, `drain_events()` and
   `outcome()`. `close()` releases as usual. To inspect a live session without ending it,
   pause and step instead (§4.3).
 
@@ -1877,7 +1878,7 @@ Rules:
   | `step()` under an owner drain when the event backlog reaches `high_water` (§4.3, §7.3) | `EventBacklogError` | yes: drain with `drain_events()`, then step again. The error names the tick reached |
   | Any lifecycle or pump call off the owner thread, `close()` and `snapshot()` included (§2, §6) | `EngineThreadError` | yes: make the call from the owner thread. Nothing was touched |
   | A second `Engine` construction in one process (§2) | `EngineExistsError` | no; the resources are per-process singletons |
-  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()` or `run_sim_async()` once the session has stopped (§2, §4.3); `checksum()` or `snapshot()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `Configuring`, or a `Configuring` call (including `register_engine_view`) while `Running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
+  | `step()` while the sim thread runs and is not paused, or with another `step()` in flight; `resume()` with a `step()` in flight; `drain_events()` or `mods.start()` under a sink drain (§3); `step()`, `run_sim_async()` or `submit()` once the session has stopped (§2, §4.3); `checksum()` or `snapshot()` while the sim thread is not quiescent (§6); any tick, command or snapshot call while `Configuring`, or a `Configuring` call (including `register_engine_view`) while `Running` (§2) | `EngineStateError` | yes: pause first, start the session first, or use `step()` in a headless session. A stopped session stays stopped |
   | `snap.column(...)` for a column outside the caller's capabilities (`design_modding.md` §4.1) | `ColumnNotGrantedError` | no; capabilities are fixed at load |
   | `load_mods` failing: a mod fails discovery, verification, handshake or column registration. Or `start_session` failing at the freeze's `on_session_start` (`design_modding.md` §6) | `ModLoadError` | only before the engine is touched. A policy-stage failure leaves the engine `Configuring`, and `load_mods` may be retried. From `register_hosts` on, the engine is `LoadFailed`, and recovery is a new `Engine` |
   | A paced producer's `outcome(h)` for a tick it has not yet released (§7.1) | `CommandOrderError` | yes: release the tick first. It reports the deadlock rule at the call site instead of letting it become a hang. The host's `outcome(h)` never raises it: it returns `Pending` |
