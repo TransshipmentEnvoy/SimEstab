@@ -38,6 +38,7 @@ def test_run_headless_under_an_owner_drain_hands_the_events_over():
     ]
 
 
+# implementation-defined: open_question.md Q96
 def test_run_headless_drains_at_the_backlog_mark(monkeypatch):
     """A step that raises ``EventBacklogError`` is followed by a drain, and the loop
     steps on from the tick reached. The M1 engine raises no event inside a tick, so the
@@ -68,9 +69,11 @@ def test_run_headless_ends_early_at_a_stop():
         engine.start_session()
         engine.request_stop()
         assert run_headless(engine, 5) == Tick(0)
+        # implementation-defined: open_question.md Q88
         assert engine.state == EngineState.Stopped
 
 
+# implementation-defined: open_question.md Q96
 def test_run_headless_rejects_a_negative_count():
     with Engine(EngineConfig(headless=True, event_drain="sink")) as engine:
         engine.start_session()

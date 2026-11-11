@@ -141,6 +141,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_gpu_info,
     auto info = ctx.device_info();
 
     // Should have a valid backend (Vulkan or D3D12 on most systems)
+    // implementation-defined: open_question.md Q94
     BOOST_TEST((info.backend == GPUBackend::Vulkan || info.backend == GPUBackend::D3D12 ||
                 info.backend == GPUBackend::Unknown));
 }
@@ -228,6 +229,7 @@ BOOST_AUTO_TEST_CASE(test_viz_context_gpu_info_sequential,
         auto info = ctx.device_info();
 
         // Should report a valid GPU backend
+        // implementation-defined: open_question.md Q94
         BOOST_TEST((info.backend == GPUBackend::Vulkan || info.backend == GPUBackend::D3D12 ||
                     info.backend == GPUBackend::Unknown));
 

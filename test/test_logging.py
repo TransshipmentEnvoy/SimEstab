@@ -275,6 +275,7 @@ class _Terminal:
         return True
 
 
+# implementation-defined: open_question.md Q92
 def test_ask_for_confirm_confirms_when_nobody_can_answer(monkeypatch):
     """No console held, or stdin not a terminal: it confirms without asking."""
     monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail("asked"))
@@ -288,6 +289,7 @@ def test_ask_for_confirm_confirms_when_nobody_can_answer(monkeypatch):
     assert sim_log.ask_for_confirm() is True  # no stdin
 
 
+# implementation-defined: open_question.md Q92
 def test_ask_for_confirm_asks_on_a_terminal(monkeypatch):
     answers = iter(["maybe", "n", "y"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))

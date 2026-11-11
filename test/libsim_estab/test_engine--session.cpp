@@ -390,6 +390,7 @@ BOOST_AUTO_TEST_CASE(test_a_stop_ends_the_step_and_the_session) {
     const StepResult result = engine.step(10);
     BOOST_TEST((result.end == StepEnd::Stopped));
     BOOST_TEST((result.tick_reached == Tick{2}));
+    // implementation-defined: open_question.md Q88
     BOOST_TEST((engine.state() == EngineState::Stopped));
 
     BOOST_CHECK_THROW((void)engine.step(1), engine_state_error);
@@ -454,6 +455,7 @@ BOOST_AUTO_TEST_CASE(test_the_event_backlog_mark_raises_from_a_step) {
 /**
  * @brief Step callbacks run in key order, once per slice, with the tick reached; the first
  *        that returns true ends the step and names itself
+ * @note implementation-defined: open_question.md Q89, for the order
  */
 BOOST_AUTO_TEST_CASE(test_step_callbacks_run_in_key_order_and_end_the_step) {
     std::vector<std::string> order;
@@ -510,6 +512,7 @@ BOOST_AUTO_TEST_CASE(test_a_throwing_step_callback_propagates_and_the_engine_goe
 
 /**
  * @brief A control call made while Configuring applies at the freeze
+ * @note implementation-defined: open_question.md Q90, and Q88 for the Stopped state
  */
 BOOST_AUTO_TEST_CASE(test_control_calls_before_the_freeze_apply_at_it) {
     {

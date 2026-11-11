@@ -46,6 +46,7 @@ BOOST_AUTO_TEST_CASE(test_compute_context_creation,
     BOOST_TEST_MESSAGE("GPU Driver: " << info.driver_name);
 
     // Should have a valid backend (Vulkan or D3D12 on most systems)
+    // implementation-defined: open_question.md Q94
     BOOST_TEST((info.backend == GPUBackend::Vulkan || info.backend == GPUBackend::D3D12 ||
                 info.backend == GPUBackend::Unknown));
 }
@@ -149,6 +150,7 @@ BOOST_AUTO_TEST_CASE(test_compute_buffer_transfer, *utf::description("Test GPU b
 
 /**
  * @brief Test ComputeContext buffer partial upload/download
+ * @note implementation-defined: open_question.md Q93, for the offset
  */
 BOOST_AUTO_TEST_CASE(test_compute_buffer_partial_transfer,
                      *utf::description("Test GPU buffer partial data transfer with offsets")) {
@@ -259,6 +261,7 @@ BOOST_AUTO_TEST_CASE(test_compute_buffer_size_past_4_gib_throws,
  * The upload writes its data at the offset and leaves the rest of the buffer as it was,
  * and the download reads from the offset. A round trip at one offset passes even when
  * both transfers ignore it, so this case reads the whole buffer back.
+ * @note implementation-defined: open_question.md Q93
  */
 BOOST_AUTO_TEST_CASE(test_compute_buffer_transfer_lands_at_the_offset,
                      *utf::description("Test that a GPU buffer transfer at an offset lands at that offset")) {

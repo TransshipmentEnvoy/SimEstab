@@ -159,6 +159,7 @@ def test_on_failed_stop_is_a_closed_set():
         EngineConfig(on_failed_stop="ignore")
 
 
+# implementation-defined: open_question.md Q91
 def test_seed_may_be_absent_but_not_negative():
     assert EngineConfig(seed=None).seed is None
     assert EngineConfig(seed=0).seed == 0

@@ -405,6 +405,7 @@ BOOST_AUTO_TEST_CASE(test_a_step_that_does_not_fit_is_refused) {
 
 /**
  * @brief A tick that throws still ends the step: the gate is left at rest
+ * @note implementation-defined: open_question.md Q95
  */
 BOOST_AUTO_TEST_CASE(test_a_tick_that_throws_ends_the_step) {
     EventRing events = roomy_ring();

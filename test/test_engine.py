@@ -148,6 +148,7 @@ def test_the_error_names_are_the_bound_types():
     assert issubclass(sim_estab.SimEstabError, RuntimeError)
 
 
+# implementation-defined: open_question.md Q97
 def test_a_windowed_session_is_not_built_yet():
     held = sim_log.holder_count()
     with pytest.raises(NotImplementedError, match="headless=True"):
@@ -155,6 +156,7 @@ def test_a_windowed_session_is_not_built_yet():
     assert sim_log.holder_count() == held  # refused before anything was touched
 
 
+# implementation-defined: open_question.md Q97
 def test_config_must_be_an_engine_config():
     with pytest.raises(TypeError):
         Engine({"headless": True})  # type: ignore[arg-type]

@@ -478,3 +478,106 @@ layout, one directory per run or one shared directory, and who owns it, which `l
 §3 leaves to the Python side; whether the identity belongs in a file name or in the
 directory once the identity hash exists (M2); and whether `enable_file` should refuse a
 path that another process has open, since rotation protects sequential runs only.
+
+## Implementation-defined behaviour
+
+Each entry here is a behaviour that the code has and a test fixes, but that no design doc
+states. The behaviour is implementation-defined until its entry is answered. The answer
+goes into the design doc, and the test then takes its expected value from the doc. Each
+test that depends on an entry names it in a comment. No entry here blocks a milestone.
+
+### Q88. Which state does a step leave when it meets a stop?
+
+`python_api` §2 says `stop_sim_async()` enters `Stopped`, and §7.3 says the executor raises
+`session.stopped` when it meets the stop at the gate. No doc gives the engine state after a
+`step(n)` that met a stop. Today the step returns `StepEnd::Stopped` and the engine is
+`Stopped`, with no call to `stop_sim_async()`. Fixed by `test_engine--session.cpp`
+(`test_a_stop_ends_the_step_and_the_session`,
+`test_control_calls_before_the_freeze_apply_at_it`), `test_engine_bindings.py`
+(`test_a_session_through_the_mirror`) and `test_loop.py`
+(`test_run_headless_ends_early_at_a_stop`).
+
+### Q89. In what order do step callbacks run?
+
+`python_api` §4.3 and the glossary say `step(n)` calls each step callback at most once per
+slice, and one that returns true ends the step. No doc gives the order of several
+callbacks. Today they run in the order of their names, and a callback that comes after the
+one that ended the step does not run in that slice. Fixed by `test_engine--session.cpp`
+(`test_step_callbacks_run_in_key_order_and_end_the_step`).
+
+### Q90. What does a control call do before the freeze?
+
+`python_api` §2 lists the control calls as legal in `Configuring`. No doc says what they
+do there. Today the engine keeps the call and applies it at the freeze: after
+`request_stop()` the first step ends at tick 0 with the engine `Stopped`; `resume()`
+cancels a kept `pause()`; and a step still runs its ticks after a kept `pause()`. Fixed by
+`test_engine--session.cpp` (`test_control_calls_before_the_freeze_apply_at_it`).
+
+### Q91. What is the range of `seed`?
+
+`python_api` §3 declares `seed: int | None` and gives no range. Today `EngineConfig`
+refuses a negative seed with `ValueError`. A seed of 2⁶⁴ or more passes `EngineConfig` and
+fails later, in the binding, with `TypeError`. The width belongs with the PRNG
+([Q26](#q26-the-prng)). Fixed by `test_config.py`
+(`test_seed_may_be_absent_but_not_negative`).
+
+### Q92. What does `ask_for_confirm()` do, and who calls it?
+
+`sim_estab.upkeep.log.ask_for_confirm()` exists, but no doc names it and no code calls it.
+Today it confirms without asking when no console sink is held or stdin is not a terminal.
+On a terminal it asks until the answer is `y` or `n`. Open: whether the function stays,
+and what it answers when nobody can answer. Fixed by `test_logging.py`
+(`test_ask_for_confirm_confirms_when_nobody_can_answer`,
+`test_ask_for_confirm_asks_on_a_terminal`).
+
+### Q93. What does the offset of a GPU buffer transfer mean?
+
+`data_container` §5 caps upload offsets and sizes at 32 bits. No doc says what `offset`
+means in `upload_buffer` and `download_buffer`. Today it is a byte offset into the GPU
+buffer, and a transfer touches only the bytes from `offset` to `offset + size`. Fixed by
+`test_compute.cpp` (`test_compute_buffer_partial_transfer`,
+`test_compute_buffer_transfer_lands_at_the_offset`).
+
+### Q94. Which GPU backend may a context report?
+
+The backend scope is Vulkan only (`engine_core` §5). Today device creation also advertises
+DXIL, and the tests accept `Vulkan`, `D3D12` or `Unknown` as the backend of a context.
+`TODO.md` M5 holds the change to SPIR-V only. Open: whether a context on another backend
+must fail at creation, so that the tests accept `Vulkan` alone. Fixed by `test_compute.cpp`
+(`test_compute_context_creation`) and `test_viz.cpp` (`test_viz_context_gpu_info`,
+`test_viz_context_gpu_info_sequential`).
+
+### Q95. What happens when a tick throws?
+
+No doc says what `step(n)` does when the tick it runs throws. Today the exception
+propagates from the step, the gate is left at rest, and `first_unexecuted` stays at the
+tick that threw, so the next step runs that tick again. Open: whether a tick may throw at
+all once systems exist (M4), and what state the world is in if it does. Fixed by
+`test_engine.cpp` (`test_a_tick_that_throws_ends_the_step`).
+
+### Q96. What is the contract of `run_headless`?
+
+`python_api` §4.2 shows the headless loop as pseudo-code and names no function.
+`sim_estab.run_headless(engine, ticks, on_events=...)` exists in `loop.py`, and only its
+docstring states what it does. Today a negative count raises `ValueError`, and under an
+owner drain the loop drains at the backlog mark and steps on from the tick reached. Open:
+whether the function is public API, and which of its behaviours the doc states. Fixed by
+`test_loop.py` (`test_run_headless_rejects_a_negative_count`,
+`test_run_headless_drains_at_the_backlog_mark`).
+
+### Q97. What does the `Engine` constructor raise for a config it cannot use?
+
+`python_api` §3 says to validate before native code and raise `ValueError`. Two refusals of
+the constructor have another type, and no doc states either. Today a config with
+`headless=False` raises `NotImplementedError`, because the windowed session arrives in M6,
+and an object that is not an `EngineConfig` raises `TypeError`. Fixed by `test_engine.py`
+(`test_a_windowed_session_is_not_built_yet`, `test_config_must_be_an_engine_config`).
+
+### Q98. Is the text of an error message part of the contract?
+
+`python_api` §8 lets a caller tell errors apart by type, "without matching on message
+text". Many Python cases still match the text with `match=`, so a new wording fails a test
+while the behaviour stays the same. Open: whether a test may fix message text, or checks
+the type and the error's fields only. The cases are in `test_config.py`, `test_logging.py`,
+`test_engine.py`, `test_loop.py` and `test_engine_bindings.py`; they carry no comment for
+this entry.

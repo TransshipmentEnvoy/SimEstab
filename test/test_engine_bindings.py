@@ -212,6 +212,7 @@ def test_a_session_through_the_mirror(engine):
     engine.request_stop()
     result = engine.step(5)
     assert result.end == engine_module.StepEnd.Stopped
+    # implementation-defined: open_question.md Q88
     assert engine.state() == engine_module.EngineState.Stopped
 
     engine.close()
