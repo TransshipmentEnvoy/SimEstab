@@ -399,8 +399,10 @@ public:
      */
     [[nodiscard]] StepResult step(std::uint64_t tick_count);
 
-    /// Running or Stopped: submit a command on the host endpoint. Never waits: a full ring
-    /// is QueueFull (design_engine_core.md §5.1).
+    /// Running: submit a command on the host endpoint. Never waits: a full ring is
+    /// QueueFull (design_engine_core.md §5.1).
+    /// @throws engine_state_error unless Running: in Stopped no tick is left to run a
+    ///         command (design_python_api.md §2)
     [[nodiscard]] std::expected<CommandHandle, Rejection> submit(const Command& command);
 
     /// Running or Stopped: a host command's outcome. Never waits.

@@ -708,7 +708,8 @@ StepResult Engine::step(std::uint64_t tick_count) {
 std::expected<CommandHandle, Rejection> Engine::submit(const Command& command) {
     check_impl();
     const lease::LeaseGuard guard = impl_->enter("submit()");
-    return impl_->session_for("submit()", true).host.submit(command);
+    // Stopped refuses: no tick is left to run a command (design_python_api.md §2)
+    return impl_->session_for("submit()", false).host.submit(command);
 }
 
 CommandOutcome Engine::outcome(const CommandHandle& handle) const {

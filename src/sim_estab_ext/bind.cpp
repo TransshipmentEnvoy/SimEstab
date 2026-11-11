@@ -473,7 +473,7 @@ void bind_engine_classes(nb::module_& engine_module) {
                 return result ? nb::cast(*result) : nb::cast(result.error());
             },
             nb::arg("command"),
-            "Running or Stopped: submit a command on the host endpoint. Never waits: returns the "
+            "Running: submit a command on the host endpoint. Never waits: returns the "
             "CommandHandle, or the Rejection (design_python_api.md §7.1).")
         .def(
             "submit_batch",
@@ -488,7 +488,7 @@ void bind_engine_classes(nb::module_& engine_module) {
                 return results;
             },
             nb::arg("commands"),
-            "Running or Stopped: submit commands on the host endpoint, in order; one CommandHandle "
+            "Running: submit commands on the host endpoint, in order; one CommandHandle "
             "or Rejection per command")
         .def("outcome", &engine::Engine::outcome, nb::arg("handle"),
              "Running or Stopped: a host command's outcome. Never waits.")

@@ -357,15 +357,17 @@ class Engine:
         return self._failed_path("step()", self._native_engine().step, tick_count)
 
     def submit(self, command: _if.engine.Command):
-        """Running or Stopped: submit a command on the host endpoint. Never waits:
-        returns the ``CommandHandle``, or the ``Rejection`` (``design_python_api.md``
-        §7.1)."""
+        """Running: submit a command on the host endpoint. Never waits: returns the
+        ``CommandHandle``, or the ``Rejection`` (``design_python_api.md`` §7.1).
+        Raises ``EngineStateError`` in ``Stopped``, where no tick is left to run a
+        command (§2)."""
         self._owner_only("submit()")
         return self._native_engine().submit(command)
 
     def submit_batch(self, commands: Iterable[_if.engine.Command]) -> list:
-        """Running or Stopped: submit commands in order, in one crossing. One
-        ``CommandHandle`` or ``Rejection`` per command, in array order."""
+        """Running: submit commands in order, in one crossing. One ``CommandHandle``
+        or ``Rejection`` per command, in array order. Raises ``EngineStateError`` in
+        ``Stopped``, as ``submit()`` does."""
         self._owner_only("submit_batch()")
         return self._native_engine().submit_batch(list(commands))
 
