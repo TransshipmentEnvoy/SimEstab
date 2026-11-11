@@ -426,7 +426,9 @@ class Engine:
         self._native_engine().request_stop()
 
     def stop_requested(self) -> bool:
-        """Any thread: whether a stop was requested."""
+        """Any thread: whether a stop was requested. A query: it never raises. Once
+        closing has started, and in ``Failed``, it is ``True``
+        (``design_python_api.md`` §2)."""
         return self._native_engine().stop_requested()
 
     def set_log_level(self, level: str) -> None:

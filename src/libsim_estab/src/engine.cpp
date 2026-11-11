@@ -815,7 +815,9 @@ bool Engine::stop_requested() const noexcept {
     }
     Impl& impl = *impl_;
     if (!impl.control->try_enter()) {
-        return false; // a query degrades: a closed engine has nothing left to stop
+        // closing, closed or Failed: no tick runs again, and close() requested the stop
+        // (design_python_api.md §2)
+        return true;
     }
     const lease::LeaseGuard guard{*impl.control};
     std::lock_guard lk(impl.control_m);

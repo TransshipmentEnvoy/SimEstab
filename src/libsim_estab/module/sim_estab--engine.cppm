@@ -437,7 +437,8 @@ public:
     /// applies at the freeze.
     void request_stop();
 
-    /// Any thread: whether a stop was requested
+    /// Any thread: whether a stop was requested. A query: it never throws. Once closing
+    /// has started, and in Failed, it is true (design_python_api.md §2).
     [[nodiscard]] bool stop_requested() const noexcept;
 
     /// Any thread: the user's severity level, forwarded to log::set_severity
