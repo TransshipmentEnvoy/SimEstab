@@ -14,7 +14,8 @@
  * tick drains the host endpoint, executes nothing, and publishes its tick and zero bytes
  * into every engine view due by cadence. snapshot() returns the tick alone.
  *
- * Threads. Construction, the freeze, step(), submit(), outcome(), view(), drain_events(),
+ * Threads. Construction, the freeze, step(), submit(), submit_batch(), outcome(), view(),
+ * drain_events(),
  * sink_digest(), snapshot() and stop_sim_async() belong to the owner thread, the thread that
  * constructed the Engine; the Python layer checks it (design_python_api.md §6). The control
  * calls pause(), resume(), request_stop(), stop_requested() and set_log_level() may come from
@@ -47,6 +48,7 @@ module;
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -404,6 +406,14 @@ public:
     /// @throws engine_state_error unless Running: in Stopped no tick is left to run a
     ///         command (design_python_api.md §2)
     [[nodiscard]] std::expected<CommandHandle, Rejection> submit(const Command& command);
+
+    /// Running: submit `commands` on the host endpoint, in array order. One answer per
+    /// command: the batch is admitted as far as it fits, with QueueFull for the rest
+    /// (design_python_api.md §7.1). The engine enters its operation lease and checks its
+    /// state once for the batch; the endpoint sees one submit per command
+    /// (design_engine_core.md §5.1). Never waits.
+    /// @throws engine_state_error unless Running, as submit() does; nothing is admitted
+    [[nodiscard]] std::vector<std::expected<CommandHandle, Rejection>> submit_batch(std::span<const Command> commands);
 
     /// Running or Stopped: a host command's outcome. Never waits.
     /// @throws engine_error for a handle the host endpoint did not issue

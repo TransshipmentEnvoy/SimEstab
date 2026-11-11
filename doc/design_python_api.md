@@ -1454,7 +1454,9 @@ Rules:
 - **`submit_batch` is atomic and consecutively sequenced, at no extra cost.** An endpoint is
   single-producer, so `k` submits from it are always contiguous in its ring. They never
   interleave with another thread's commands from the same source. Ordering the array orders
-  the commands.
+  the commands. The engine enters its operation lease (§6) and checks its state once for
+  the batch, not once per command; the endpoint still sees `k` submits
+  (`design_engine_core.md` §5.1).
 
   A batch larger than the endpoint's per-tick capacity cannot succeed whole. The size bound
   is derived from capacity, not picked. A batch that exceeds it is admitted as far as it

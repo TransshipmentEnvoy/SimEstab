@@ -290,6 +290,55 @@ BOOST_AUTO_TEST_CASE(test_a_host_command_runs_at_the_first_tick_that_drains_it) 
 }
 
 /**
+ * @brief A batch is one submit per command, in array order: consecutive positions, admitted
+ *        as far as it fits, and QueueFull for the rest (design_engine_core.md §5.1,
+ *        design_python_api.md §7.1)
+ */
+BOOST_AUTO_TEST_CASE(test_a_batch_is_submitted_in_order_as_far_as_it_fits) {
+    EngineConfig config           = owner_config();
+    config.host_endpoint_capacity = 3;
+    Engine engine{config};
+    engine.start_session();
+
+    const std::vector<Command> two{marked(1), marked(2)};
+    const auto first = engine.submit_batch(two);
+    BOOST_REQUIRE(first.size() == 2u);
+    BOOST_REQUIRE(first[0].has_value());
+    BOOST_REQUIRE(first[1].has_value());
+    BOOST_TEST(first[1]->position == first[0]->position + 1); // consecutive in the ring
+
+    // one slot is left: the batch is admitted as far as it fits
+    const std::vector<Command> three{marked(3), marked(4), marked(5)};
+    const auto second = engine.submit_batch(three);
+    BOOST_REQUIRE(second.size() == 3u);
+    BOOST_REQUIRE(second[0].has_value());
+    BOOST_TEST(second[0]->position == first[1]->position + 1);
+    BOOST_TEST((second[1] == std::unexpected(Rejection::QueueFull)));
+    BOOST_TEST((second[2] == std::unexpected(Rejection::QueueFull)));
+
+    BOOST_TEST((engine.step(1).tick_reached == Tick{1}));
+    BOOST_TEST((engine.outcome(*first[0]) == applied(Tick{1})));
+    BOOST_TEST((engine.outcome(*first[1]) == applied(Tick{1})));
+    BOOST_TEST((engine.outcome(*second[0]) == applied(Tick{1})));
+}
+
+/**
+ * @brief A batch is refused as a whole in Stopped, as submit() is: nothing is admitted
+ *        (design_python_api.md §2)
+ */
+BOOST_AUTO_TEST_CASE(test_a_batch_is_refused_in_stopped) {
+    Engine engine{owner_config()};
+    engine.start_session();
+    const auto before = engine.submit(marked(1));
+    BOOST_REQUIRE(before.has_value());
+    engine.stop_sim_async();
+
+    const std::vector<Command> batch{marked(2), marked(3)};
+    BOOST_CHECK_THROW((void)engine.submit_batch(batch), engine_state_error);
+    BOOST_TEST((engine.outcome(*before) == pending(Tick{0}))); // reads still work
+}
+
+/**
  * @brief A stepped tick publishes exactly the engine views due by cadence, and a reader
  *        that falls behind sees the newest publish
  */

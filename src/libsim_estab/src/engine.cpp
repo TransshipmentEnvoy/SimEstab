@@ -712,6 +712,20 @@ std::expected<CommandHandle, Rejection> Engine::submit(const Command& command) {
     return impl_->session_for("submit()", false).host.submit(command);
 }
 
+std::vector<std::expected<CommandHandle, Rejection>> Engine::submit_batch(std::span<const Command> commands) {
+    check_impl();
+    // One lease entry and one state check for the batch. The endpoint sees one submit per
+    // command, so the commands are contiguous in its ring (design_engine_core.md §5.1).
+    const lease::LeaseGuard guard = impl_->enter("submit_batch()");
+    endpoint::Endpoint& host      = impl_->session_for("submit_batch()", false).host;
+    std::vector<std::expected<CommandHandle, Rejection>> answers;
+    answers.reserve(commands.size());
+    for (const Command& command : commands) {
+        answers.push_back(host.submit(command));
+    }
+    return answers;
+}
+
 CommandOutcome Engine::outcome(const CommandHandle& handle) const {
     check_impl();
     const lease::LeaseGuard guard = impl_->enter("outcome()");

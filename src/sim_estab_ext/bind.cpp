@@ -481,8 +481,7 @@ void bind_engine_classes(nb::module_& engine_module) {
                 // One crossing per batch (design_python_api.md §5 rule 1); one answer per
                 // command, in array order
                 nb::list results;
-                for (const engine::Command& command : commands) {
-                    const auto result = self.submit(command);
+                for (const auto& result : self.submit_batch(commands)) {
                     results.append(result ? nb::cast(*result) : nb::cast(result.error()));
                 }
                 return results;

@@ -106,8 +106,6 @@ def test_the_states_through_a_session(engine):
         engine.step(1)
     with pytest.raises(EngineStateError):  # no tick is left to run a command
         engine.submit(noop())
-    with pytest.raises(EngineStateError):
-        engine.submit_batch([noop()])
     assert engine.snapshot() == Tick(3)  # reads still work
 
     engine.close()
@@ -262,6 +260,15 @@ def test_commands_get_two_answers(engine):
     ] * 3
     engine.step(1)
     assert {o.tick for o in engine.outcomes(handles)} == {Tick(2)}
+
+
+def test_submit_batch_is_refused_in_stopped(engine):
+    """The engine checks its state once for the batch and refuses it as a whole: no
+    tick is left to run a command (``design_python_api.md`` §2, §7.1)."""
+    engine.start_session()
+    engine.stop_sim_async()
+    with pytest.raises(EngineStateError):
+        engine.submit_batch([noop(), noop()])
 
 
 def test_a_full_host_endpoint_returns_queue_full(engine):

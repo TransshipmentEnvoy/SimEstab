@@ -51,6 +51,8 @@ EngineViewSpec unpaced_spec(std::string name) {
 void check_every_call_is_refused_as_closed(Engine& engine, EngineViewHandle *handle) {
     BOOST_CHECK_THROW((void)engine.step(1), engine_closed_error);
     BOOST_CHECK_THROW((void)engine.submit(Command{}), engine_closed_error);
+    const std::vector<Command> batch{Command{}};
+    BOOST_CHECK_THROW((void)engine.submit_batch(batch), engine_closed_error);
     BOOST_CHECK_THROW((void)engine.outcome(CommandHandle{}), engine_closed_error);
     BOOST_CHECK_THROW((void)engine.view("ui"), engine_closed_error);
     std::vector<EngineEvent> out;

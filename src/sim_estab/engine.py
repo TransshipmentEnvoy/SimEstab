@@ -366,8 +366,9 @@ class Engine:
 
     def submit_batch(self, commands: Iterable[_if.engine.Command]) -> list:
         """Running: submit commands in order, in one crossing. One ``CommandHandle``
-        or ``Rejection`` per command, in array order. Raises ``EngineStateError`` in
-        ``Stopped``, as ``submit()`` does."""
+        or ``Rejection`` per command, in array order. The engine checks its state once
+        for the batch: it raises ``EngineStateError`` in ``Stopped``, as ``submit()``
+        does, and admits nothing."""
         self._owner_only("submit_batch()")
         return self._native_engine().submit_batch(list(commands))
 
