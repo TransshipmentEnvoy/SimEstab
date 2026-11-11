@@ -35,7 +35,7 @@ Doc names are shortened: `engine_core` is `design_engine_core.md`, `python_api` 
 | rolling checksum | The level-2 checksum, taken in multiplayer and while recording: each tick hashes one slice of the chunks, so the whole world is covered every N ticks. | engine_core §2.3 |
 | full checksum | The level-3 checksum: the whole world every tick, plus one hash per system. Used by CI golden replays, certification and desync bisecting. | engine_core §2.3 |
 | determinism | The same session identity and the same command stream always produce the same checksums. Re-running live producers may produce a different command stream; that is not promised to repeat. | engine_core §2 |
-| M0 … M7 | Build milestones. M0: decided limits in code (done). M1: session, engine views, command ring, gate. M2: fixed-point, PRNG, checksum, replay. M3: world container. M4: phase scheduler. M5: engine view projection, row predicate, GPU upload. M6: first system, renderer, sim thread. M7: mod tiers. | `TODO.md` |
+| M0 … M7 | Build milestones. M0: decided limits in code (done). M1: session, engine views, command ring, gate (done). M2: fixed-point, PRNG, checksum, replay. M3: world container. M4: phase scheduler. M5: engine view projection, row predicate, GPU upload. M6: first system, renderer, sim thread. M7: mod tiers. | `TODO.md` |
 
 ## Threads and waiting
 

@@ -7,7 +7,7 @@ the design each item implements is in `doc/`. Unresolved design questions are in
 **Where things stand.** Built: the `error`, `log`, `gpu`, `viz`, `util` and `limits` modules.
 That covers the root of the exception family, SDL3 compute and viz contexts, logging, the SDL
 main-thread init guard, and the decided limits (M0). The toolchain the designs assume is in
-place: GCC 16, C++26 with `-freflection`, and `-march=x86-64-v3`. M1 is under way: the engine
+place: GCC 16, C++26 with `-freflection`, and `-march=x86-64-v3`. M1 is done: the engine
 view protocol, the gate, the tick loop, the event ring, the command endpoints, the `Engine`
 (the session lifecycle, the freeze, `step(n)`, the operation lease and `close()`) and the
 Python surface over them are written and tested, and so is the logging remainder (the file
@@ -25,7 +25,7 @@ written.
       `doc/design_logging.md` §1)
 + [x] **M0: decided limits in code.** Every value in `doc/design_limits.md` is in
       `sim_estab:limits` or `src/sim_estab/config.py`, with tests in `test/test_config.py`
-+ [ ] **M1: session, engine views, command ring, gate.** No simulation content yet: a block
++ [x] **M1: session, engine views, command ring, gate.** No simulation content yet: a block
       and a command ring entry carry a tick and opaque bytes. M1 runs headless: `step(n)`
       runs ticks on the calling thread (`doc/design_engine_core.md` §7 step 1). No open
       question blocks it
