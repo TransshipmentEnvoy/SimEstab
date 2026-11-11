@@ -80,6 +80,15 @@ def test_set_log_level_on_a_closed_engine_raises():
         closed.set_log_level("trace")
 
 
+def test_stop_requested_on_a_closed_engine_is_true():
+    """The query never raises: ``close()`` requested the stop, and the request is
+    sticky (``design_python_api.md`` §2)."""
+    closed = Engine(sink_config())
+    assert not closed.stop_requested()
+    closed.close()
+    assert closed.stop_requested()
+
+
 def test_the_states_through_a_session(engine):
     assert engine.state == EngineState.Configuring
     engine.start_session()

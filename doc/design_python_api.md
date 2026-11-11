@@ -283,6 +283,11 @@ Rules:
   that would re-enter the engine. The read-only array memory it already handed out stays
   valid (§7.2).
 
+  `stop_requested` is the one exception. It is a query, so it never raises. Once closing
+  has started it returns `True`: `close()` requested the stop, and the request is sticky
+  (§4.3). In `Failed` it returns `True` too, because no tick runs again. A loop on another
+  thread that polls it then ends.
+
 Engine states are explicit and can be queried. The diagram shows only three of the `Failed`
 entry paths; the list below it has all of them.
 

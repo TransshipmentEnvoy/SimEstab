@@ -65,7 +65,9 @@ void check_every_call_is_refused_as_closed(Engine& engine, EngineViewHandle *han
     BOOST_CHECK_THROW(engine.request_stop(), engine_closed_error);
     BOOST_CHECK_THROW(engine.stop_sim_async(), engine_closed_error);
     BOOST_CHECK_THROW(engine.set_log_level(sim_estab::core::log::severity_level::trace), engine_closed_error);
-    BOOST_TEST(!engine.stop_requested()); // a query degrades
+    // the query never throws: close() requested the stop, and the request is sticky
+    // (design_python_api.md §2)
+    BOOST_TEST(engine.stop_requested());
     if (handle != nullptr) {
         BOOST_CHECK_THROW((void)handle->take(), engine_closed_error);
         BOOST_CHECK_THROW((void)handle->held(), engine_closed_error);
@@ -198,6 +200,7 @@ BOOST_AUTO_TEST_CASE(test_a_close_that_times_out_fails_and_poisons, *boost::unit
         BOOST_CHECK_THROW((void)engine.step(1), engine_failed_error);
         BOOST_CHECK_THROW((void)ui.take(), engine_failed_error);
         BOOST_CHECK_THROW(engine.pause(), engine_failed_error);
+        BOOST_TEST(engine.stop_requested()); // the query never throws; no tick runs again
         engine.close(); // a no-op in Failed
         BOOST_TEST((engine.state() == EngineState::Failed));
         control.leave();
