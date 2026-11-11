@@ -1791,9 +1791,11 @@ Rules:
   not in the replay artifact, which carries commands only. A replayed tick re-derives its
   events by running the commands (`design_engine_core.md` §2.3, `design_modding.md` §4.3).
   So a new event type leaves the replay format alone.
-- **The M1 events.** These exist from the first build, except `sim.behind`, which comes
-  with the sim thread and its catch-up clamp in M6. Each names its class and the thread that
-  raises it:
+- **The M1 events.** These exist from the first build, except those that wait for their
+  source. `engine_view.bandwidth_over` comes with projection in M5. `sim.behind` comes with
+  the sim thread and its catch-up clamp in M6. `participant.suspended`,
+  `participant.resumed` and `participant.left` come with mod hosts in M7. Each names its
+  class and the thread that raises it:
 
   | Event | Class | Raised by | Means |
   |---|---|---|---|
@@ -1801,10 +1803,11 @@ Rules:
   | `session.stopped` | reliable | the executor | the executor met the stop at the gate; no tick runs again (§2) |
   | `sim.backlog_paused`, `sim.backlog_resumed` | coalescible | the executor | the gate paused at `high_water`, or passed again below it |
   | `sim.behind` | coalescible | the sim thread, from M6 | a wake hit the catch-up clamp (§4.3) |
-  | `participant.expired`, `participant.suspended`, `participant.resumed` | reliable | the executor | a participant's deadline expired; it left the conjunction under `Suspend`; it came back (`design_engine_core.md` §3.3) |
-  | `participant.left` | reliable | the owner thread or a mod host thread | a mod host stopped, and its participant left the gate (`design_engine_core.md` §3.3) |
+  | `participant.expired` | reliable | the executor | a participant's deadline expired (`design_engine_core.md` §3.3) |
+  | `participant.suspended`, `participant.resumed` | reliable | the executor, from M7 | a participant left the conjunction under `Suspend`; it came back (`design_engine_core.md` §3.3) |
+  | `participant.left` | reliable | the owner thread or a mod host thread, from M7 | a mod host stopped, and its participant left the gate (`design_engine_core.md` §3.3) |
   | `command.protocol_error` | reliable | the executor, at the drain | an endpoint held entries for a tick already past (`design_engine_core.md` §5.1 (S3)). One report per endpoint per tick, with the count |
-  | `engine_view.bandwidth_over` | coalescible | the executor | an engine view crossed `projection_warn_bytes_per_second` (`design_limits.md` §5) |
+  | `engine_view.bandwidth_over` | coalescible | the executor, from M5 | an engine view crossed `projection_warn_bytes_per_second` (`design_limits.md` §5) |
 
   Later milestones add the cap refusal (M3), the checksum mismatch (M2) and the mod
   suspension (M7). An event the executor raises adds its per-tick worst case to `E` in the

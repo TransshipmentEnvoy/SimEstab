@@ -57,11 +57,9 @@ written.
         (`doc/design_engine_core.md` §3.1, §3.2). A stepped tick publishes only the engine views
         due by cadence. The multi-reader `SHARED` mode is specified but not built (Appendix
         A)
-  + [ ] the on-demand snapshot: `snapshot()` on the owner thread, while no tick can run,
-        refills the one snapshot buffer with every `[[=viz]]` column and `id` in one pass;
-        a call while array views of the previous result are alive raises `EngineViewBusyError`
-        (`doc/design_engine_core.md` §3.1). Built so far: the M1 snapshot, the tick alone
-        (`doc/design_engine_core.md` §7 step 1); the buffer arrives with projection (M5)
+  + [x] the M1 snapshot: `snapshot()` on the owner thread, while no tick can run, returns
+        the tick alone (`doc/design_engine_core.md` §7 step 1). The snapshot buffer arrives
+        with projection (M5)
   + [x] the return header: a fixed `ret[3]` next to the blocks, written by the reader and
         read by the publisher, carrying predicate parameters, `last_consumed_tick` and a
         cadence hint. It needs no new atomic: the take exchange already publishes it. The
@@ -86,13 +84,11 @@ written.
         `EngineConfig.event_drain`: the owner drain and the native sink; and
         `EventBacklogError` from a step that reaches the mark under an owner drain
         (`doc/design_engine_core.md` §5.2)
-  + [ ] the M1 events: `session.*`, `sim.backlog_*`, `participant.*`,
-        `command.protocol_error` and `engine_view.bandwidth_over`
-        (`doc/design_python_api.md` §7.3). Built: `session.started`, `session.stopped`,
-        `sim.backlog_paused`, `sim.backlog_resumed`, `participant.expired` and
-        `command.protocol_error`. Left: `participant.suspended`, `participant.resumed` and
-        `participant.left`, which arrive with mod hosts, and `engine_view.bandwidth_over`,
-        which arrives with projection
+  + [x] the M1 events: `session.started`, `session.stopped`, `sim.backlog_paused`,
+        `sim.backlog_resumed`, `participant.expired` and `command.protocol_error`
+        (`doc/design_python_api.md` §7.3). The other events of that list arrive with their
+        source: `engine_view.bandwidth_over` (M5), `sim.behind` (M6) and the three mod
+        host events (M7)
   + [x] operation leases around every native call that can overlap `close()`:
         `OPEN → CLOSING` rejects new calls, running calls drain under the shutdown
         deadline, and a timeout enters `Failed` and disarms rather than freeing native
@@ -163,6 +159,12 @@ written.
         evaluated to a mask and reusing the publish scan and gather. Coarse in the engine core,
         exact in the reader; a filtered engine view carries the id column. Added when publish
         bandwidth calls for it (`doc/design_engine_core.md` §3.4)
+  + [ ] the snapshot buffer: `snapshot()` refills the one snapshot buffer with every
+        `[[=viz]]` column and `id` in one pass; a call while array views of the previous
+        result are alive raises `EngineViewBusyError` (`doc/design_engine_core.md` §3.1)
+  + [ ] `engine_view.bandwidth_over`, raised when an engine view crosses
+        `projection_warn_bytes_per_second` (`doc/design_python_api.md` §7.3,
+        `doc/design_limits.md` §5)
   + [ ] advertise SPIR-V only at device creation. The scope is Vulkan only; today DXIL is
         advertised while `create_pipeline` hard-codes SPIR-V, so selecting D3D12 fails later,
         at pipeline creation
@@ -192,3 +194,7 @@ written.
 + [ ] **M7: mod tiers** (`doc/design_modding.md`); process hosts ship without snapshots.
       How a mod host thread gets a snapshot on request is open
       ([Q84](doc/open_question.md#q84-how-are-snapshot-and-checksum-opened-to-other-threads))
+  + [ ] the mod host events: `participant.suspended` and `participant.resumed`, raised
+        when a participant leaves the conjunction under `Suspend` and when it comes back,
+        and `participant.left`, raised when a mod host stops
+        (`doc/design_engine_core.md` §3.3, `doc/design_python_api.md` §7.3)
