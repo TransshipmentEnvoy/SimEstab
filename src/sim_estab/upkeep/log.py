@@ -226,12 +226,12 @@ def acquire(config: LogConfig | None = None) -> None:
 
 def release() -> None:
     """Let go of the logging subsystem: shut it down for the last holder, count for the
-    rest. Raises ``RuntimeError`` without a matching ``acquire()``."""
+    rest. With no holder it does nothing (``design_patterns.md`` §3)."""
     global _holders, _held_config
 
     with _lock:
         if _holders == 0:
-            raise RuntimeError("release() without a matching acquire()")
+            return
         _holders -= 1
         if _holders == 0:
             _held_config = None
