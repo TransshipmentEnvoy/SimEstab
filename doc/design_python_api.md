@@ -5,8 +5,8 @@ stops, how options are set, and how the main loop runs.
 
 Status: the M1 surface is built. `src/sim_estab/config.py` holds the option objects of §3;
 `engine.py` holds the `Engine` of §2 with the headless `step(n)` of §4.2 and §4.3, the host
-endpoint's commands (§7.1), the engine view handle, the event drains (§7.3) and the error
-family (§8); `loop.py` holds the headless loop; `upkeep/log.py` holds the refcounted
+endpoint's commands (§7.1), the engine view handle, the event drains (§7.3) and the M1 part
+of the error family (§8); `loop.py` holds the headless loop; `upkeep/log.py` holds the refcounted
 logging holder of §2, and the file sinks, the session file and the severity filter behind
 `LogConfig` (`design_logging.md` §3). They stand over the `_if.engine`, `_if.limits` and
 `_if.log` bindings. Not built: the windowed loop and the sim thread (§4.1, §4.3), snapshots

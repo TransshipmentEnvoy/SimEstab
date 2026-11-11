@@ -5,9 +5,13 @@ kernel** that uses only integer and fixed-point arithmetic. Around it sit **peri
 systems** that may use floats: rendering, data viz, AI and GPU compute. Peripherals affect
 the engine core only by submitting commands. Both sides must be able to run in parallel.
 
-Status: designed, not implemented. The built modules are `log`, `gpu`, `viz`, `util` and
-`limits`. The `limits` module holds the decided values of `design_limits.md`, so the numbers
-quoted here are real. Nothing in §3 to §6 exists yet.
+Status: the M1 parts are built, in the `engine` module: the session lifecycle (§2.4), the
+engine view with the `All` predicate (§3.1, §3.2), the gate (§3.3), the return header
+(§3.5), the command ring (§5.1) and the event ring (§5.2). They carry opaque bytes until the
+world exists (§7 step 1). The other built modules are `error`, `log`, `gpu`, `viz`, `util`
+and `limits`. The `limits` module holds the decided values of `design_limits.md`, so the
+numbers quoted here are real. The rest is designed, not implemented: the determinism tools
+of §2, the row predicate types beyond `All` (§3.4), and §4 and §6.
 
 Sections §3.2, §3.3, §3.4, §3.5, §5.1 and §5.2 are **normative**: an implementation may be
 faster, but must not order operations differently.

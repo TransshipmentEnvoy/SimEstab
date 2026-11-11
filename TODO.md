@@ -94,9 +94,9 @@ written.
         deadline, and a timeout enters `Failed` and disarms rather than freeing native
         resources under a caller. It uses the endpoint lease's protocol, and the two share
         one building block, `Lease` in `sim_estab:engine.lease`. `on_failed_stop` covers
-        every `Failed` path from Python. Left: a lost GPU device or a failed page commit
-        exits the process, which arrives with the device and the world container
-        (`doc/design_python_api.md` §2, §6)
+        every `Failed` path from Python (`doc/design_python_api.md` §2, §6). The two
+        resource failures arrive with their source: a failed page commit (M3) and a lost
+        GPU device (M5)
   + [x] the Python surface: `engine.py`, `command.py`, `event.py`, `loop.py`, with the
         headless loop of `doc/design_python_api.md` §4.2. `WindowConfig`, `LogConfig` and
         `event_drain` are in `config.py` (`doc/design_python_api.md` §1, §3). `_if.engine`
@@ -146,6 +146,9 @@ written.
   + [ ] `[[=append_only]]` and `[[=derived]]` (`doc/design_data_container.md` §2.1)
   + [ ] save and load of the layout: extent, live and retired bitmaps, and generations, so
         a loaded session continues exactly as one that never saved
+  + [ ] the resource failure of a failed page commit: not a `Failed` path. The engine
+        cleans up its child processes, and the process exits with a nonzero status
+        (`doc/design_python_api.md` §2, §3)
 + [ ] **M4: the phase scheduler** (`doc/design_engine_core.md` §4.1)
   + [ ] the phase cut: per-column access declarations, the phase invariant check, and the
         greedy cut over the fixed system order
@@ -174,6 +177,9 @@ written.
         destination advanced when its fence signals (`doc/design_data_container.md` §5).
         GPU buffers are sized per engine view from its maximum rows; how an engine view declares that
         maximum is open ([Q39](doc/open_question.md#q39-the-gpu-allocator-for-growing-worlds))
+  + [ ] the resource failure of a lost GPU device: logged at `critical`, then the same
+        cleanup and process exit as a failed page commit (`doc/design_data_container.md`
+        §5, `doc/design_python_api.md` §2)
   + [ ] port the std430 spike into `libsim_estab_viz_test` as a regression test; a silent
         stride change would corrupt every frame with no error
 + [ ] **M6: first system, renderer, sim-thread mode** (`doc/design_engine_core.md` §7 step 5,
