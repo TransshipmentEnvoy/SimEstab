@@ -11,6 +11,7 @@ GIL, and the signal check ends a step at a tick boundary (``design_python_api.md
 
 import datetime
 import signal
+import sys
 import threading
 import time
 
@@ -269,8 +270,16 @@ def test_step_releases_the_gil(engine):
         result = engine.step(10**9)
     finally:
         timer.cancel()
+    elapsed = time.monotonic() - started
+    # On a free-threaded build the case cannot fail, so it shows what it saw
+    gil_enabled = getattr(sys, "_is_gil_enabled", lambda: True)()
+    print(
+        f"\nGIL enabled: {gil_enabled}; the stop ended the step after "
+        f"{elapsed:.3f} s at tick {result.tick_reached.value}",
+        flush=True,
+    )
     assert result.end == engine_module.StepEnd.Stopped
-    assert time.monotonic() - started < 10.0
+    assert elapsed < 10.0
 
 
 def test_a_keyboard_interrupt_ends_the_step_at_a_tick_boundary(engine):

@@ -314,8 +314,10 @@ BOOST_AUTO_TEST_CASE(test_logging_when_not_initialized) {
     BOOST_CHECK(!log_is_init());
 
     // These should not crash, just silently fail
+    BOOST_TEST_MESSAGE("Expect no record between this line and the next message");
     SIM_ESTAB_LOG("test.channel", info, "This should not appear");
     SIM_ESTAB_LOG_CRITICAL("test.channel", "This should also not appear");
+    BOOST_TEST_MESSAGE("End of the part without records");
 
     // Reinitialize for other tests
     log_init();

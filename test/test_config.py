@@ -84,6 +84,7 @@ def test_capacity_is_the_only_number_an_endpoint_declares():
     """There is no drain quota: a tick executes everything stamped for it, because
     pacing closes the set before the drain runs (``design_engine_core.md`` §5.1)."""
     policy = CommandPolicy()
+    print("\nCommandPolicy fields:", [f.name for f in dataclasses.fields(policy)])
     assert not hasattr(policy, "source_quota")
     assert not hasattr(policy, "host_source_quota")
 

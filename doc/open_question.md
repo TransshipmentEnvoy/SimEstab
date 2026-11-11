@@ -479,6 +479,31 @@ layout, one directory per run or one shared directory, and who owns it, which `l
 directory once the identity hash exists (M2); and whether `enable_file` should refuse a
 path that another process has open, since rotation protects sequential runs only.
 
+### Q99. How are the observation-only test cases automated?
+
+Some test cases check nothing about behaviour, or only that a call returns. Until they are
+automated, each one shows its result to a person: records on the console, a line at the
+Boost.Test `message` level, a `print`, or a window. A person sees them with
+`libsim_estab_test --log_level=message`, with `libsim_estab_viz_test` on a display, and
+with `pytest -s`. Open: how each case becomes a check that can fail. The file-sink cases of
+`test_log.cpp` already capture the console and read files back, which is one way for the
+logging cases. The cases:
+
+- `test_log.cpp`: the eight cases of `logging_macro_tests`, `test_concurrent_logging`,
+  `test_concurrent_init_deinit`, `test_graceful_exception_handling` and
+  `test_logging_performance`.
+- `test_compute.cpp`: `test_compute_context_prefer_performance`,
+  `test_compute_context_prefer_low_power`, `test_compute_context_mixed_device_preferences`,
+  `test_compute_buffer_lifecycle`, `test_compute_multiple_contexts`,
+  `test_compute_buffer_usage_flags` and `test_compute_wait_idle`.
+- `test_viz.cpp`: the cases that show a window for a person to watch.
+- `test_logging_bindings.py`: `test_console_functions` and `test_log_deinit`.
+  `test_logging_integration.py`: its one case.
+- `test_config.py`: `test_capacity_is_the_only_number_an_endpoint_declares`.
+- `test_engine_bindings.py`: `test_step_releases_the_gil`, which cannot fail on a
+  free-threaded build.
+- `test_main.cpp`: `test_environment_setup`.
+
 ## Implementation-defined behaviour
 
 Each entry here is a behaviour that the code has and a test fixes, but that no design doc

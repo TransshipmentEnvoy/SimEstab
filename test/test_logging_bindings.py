@@ -48,15 +48,22 @@ def test_log_init_and_is_init():
 
 
 def test_console_functions():
-    """Test console enable/disable functions."""
+    """Test console enable/disable functions. Nothing checks the console: run with
+    ``pytest -s`` and read the output."""
     # Make sure logging is initialized first
     if_module.log.log_init()
+    info = if_module.log.severity_level.info
 
     # Test enable_console - should not raise exception
     if_module.log.enable_console()
+    print("\n--- expect one record below: 'the console is on' ---", flush=True)
+    if_module.log.log("test.console", info, "the console is on")
 
     # Test disable_console - should not raise exception
     if_module.log.disable_console()
+    print("--- expect no record below ---", flush=True)
+    if_module.log.log("test.console", info, "the console is off: must not appear")
+    print("--- end ---", flush=True)
 
 
 def test_log_deinit():
@@ -72,6 +79,10 @@ def test_log_deinit():
     # Note: This behavior depends on the actual implementation
     # Some implementations might keep initialized state after deinit
     assert isinstance(if_module.log.log_is_init(), bool)
+    print(
+        f"\nlog_is_init() after log_deinit(): {if_module.log.log_is_init()}",
+        flush=True,
+    )
 
 
 def test_all_logging_apis_exist():

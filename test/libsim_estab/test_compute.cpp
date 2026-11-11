@@ -61,6 +61,7 @@ BOOST_AUTO_TEST_CASE(test_compute_context_prefer_performance,
     ComputeContext ctx(false);
 
     BOOST_TEST(ctx.has_device());
+    BOOST_TEST_MESSAGE("Selected GPU driver: " << ctx.device_info().driver_name);
 }
 
 /**
@@ -73,6 +74,7 @@ BOOST_AUTO_TEST_CASE(test_compute_context_prefer_low_power,
     ComputeContext ctx(true);
 
     BOOST_TEST(ctx.has_device());
+    BOOST_TEST_MESSAGE("Selected GPU driver: " << ctx.device_info().driver_name);
 }
 
 /**
@@ -90,6 +92,8 @@ BOOST_AUTO_TEST_CASE(test_compute_context_mixed_device_preferences,
 
     auto info1 = ctx1.device_info();
     auto info2 = ctx2.device_info();
+    BOOST_TEST_MESSAGE("Performance preference: driver " << info1.driver_name << "; low-power preference: driver "
+                                                         << info2.driver_name);
     BOOST_TEST(static_cast<int>(info1.backend) == static_cast<int>(info2.backend));
 }
 
@@ -107,6 +111,8 @@ BOOST_AUTO_TEST_CASE(test_compute_buffer_lifecycle, *utf::description("Test GPU 
         ctx.create_buffer(buffer_size, BufferUsage::Storage | BufferUsage::TransferDst | BufferUsage::TransferSrc);
 
     BOOST_TEST(buffer != nullptr);
+    BOOST_TEST_MESSAGE("Created a buffer of " << buffer_size
+                                              << " bytes: " << (buffer != nullptr ? "valid handle" : "null handle"));
 
     // Destroy the buffer
     ctx.destroy_buffer(buffer);
@@ -324,6 +330,7 @@ BOOST_AUTO_TEST_CASE(test_compute_multiple_contexts,
     BOOST_TEST(ctx2.has_device());
 
     auto info2 = ctx2.device_info();
+    BOOST_TEST_MESSAGE("Context 1 driver: " << info1.driver_name << "; context 2 driver: " << info2.driver_name);
 
     // Both contexts should share the same device (same backend)
     BOOST_TEST(static_cast<int>(info1.backend) == static_cast<int>(info2.backend));
@@ -361,6 +368,7 @@ BOOST_AUTO_TEST_CASE(test_compute_buffer_usage_flags,
 
         auto buffer = ctx.create_buffer(256, test_case.usage);
         BOOST_TEST(buffer != nullptr);
+        BOOST_TEST_MESSAGE("    -> " << (buffer != nullptr ? "created" : "not created"));
         ctx.destroy_buffer(buffer);
     }
 
@@ -388,6 +396,8 @@ BOOST_AUTO_TEST_CASE(test_compute_wait_idle, *utf::description("Test GPU synchro
     // Should be safe to download now
     auto download_data = ctx.download_buffer(buffer, data.size());
     BOOST_TEST(download_data.size() == data.size());
+    BOOST_TEST_MESSAGE("Downloaded " << download_data.size() << " bytes after wait_idle; first byte: "
+                                     << (download_data.empty() ? -1 : static_cast<int>(download_data.front())));
 
     ctx.destroy_buffer(buffer);
 
